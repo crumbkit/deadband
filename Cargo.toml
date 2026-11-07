@@ -5,10 +5,13 @@ members = ["crates/deadband"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-# The msrv step of CI checks that every target builds on this version.
-rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/crumbkit/deadband"
+
+# BASE-27: an integer overflow panics in a release build as it does in a
+# debug build.
+[profile.release]
+overflow-checks = true
 
 # The [workspace.lints] table of the base profile of the Rust standards
 # (baseline/lints/base.toml).

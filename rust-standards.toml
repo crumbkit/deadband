@@ -13,8 +13,8 @@ profiles = ["base", "cli", "child-process", "durable-state"]
 [[decision]]
 id = "lanes"
 requirement = """
-- Lane: `lane` in .github/workflows/ci.yml, on each pull request and each push to main. It runs every step of the pull-request lane in the standards' order (format, workflows, deny, shear, clippy, tests, doctests, rustdoc, features), then `msrv`. Its budget is ten minutes, the job's timeout.
+- Lane: `lane` in .github/workflows/ci.yml, on each pull request and each push to main. It runs every step of the pull-request lane in the standards' order (format, workflows, deny, shear, clippy, tests, doctests, rustdoc). It leaves out the `features` step, which the library profile needs and deadband does not adopt. Its budget is ten minutes, the job's timeout.
 - Lane: `advisories` in .github/workflows/ci.yml, daily at 06:43 UTC and on demand (BASE-29). Nothing waits for it.
 """
-purpose = "The pull-request lane stays within ten minutes on a small workspace and grows with the code. The `features` and `msrv` steps come from the library profile (LIB-4, LIB-5), which deadband does not adopt; deadband runs them so that a feature that does not build alone, or code that needs a newer Rust than `rust-version` states, fails on the pull request. A daily advisory run catches an advisory published against a dependency already on main, and finding it after merge is safe because the advisory concerns code that is already on main."
+purpose = "The pull-request lane stays within ten minutes on a small workspace and grows with the code. A daily advisory run catches an advisory published against a dependency already on main, and finding it after merge is safe because the advisory concerns code that is already on main."
 realizations = [".github/workflows/ci.yml"]

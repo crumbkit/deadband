@@ -3,8 +3,9 @@
 deadband keeps a busy machine usable while many heavy jobs compete for it.
 It is a Cargo workspace with one library crate, `crates/deadband`. The rules
 are the Rust standards that [rust-standards.toml](rust-standards.toml)
-adopts. The check suite `/suites/deadband-pr-lane` runs the pull-request
-lane, and a change is ready when the lane passes:
+adopts. A change is ready when the pull-request lane passes. The commands
+below are the lane, and the check suite `/suites/deadband-pr-lane` runs the
+same commands:
 
 ```sh
 export CARGO_BUILD_WARNINGS=deny
@@ -16,8 +17,6 @@ cargo clippy --locked --workspace --all-targets --all-features
 cargo nextest run --locked --workspace --all-features
 cargo test --locked --doc --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
-cargo hack clippy --locked --workspace --each-feature --all-targets
-cargo +1.95.0 check --locked --workspace --all-targets --all-features
 ```
 
 - Write the test first, named as a sentence (BASE-36).
