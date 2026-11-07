@@ -1,0 +1,6 @@
+# The exact Rust version that builds and checks the project (BASE-26).
+# Dependabot proposes each new version.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
