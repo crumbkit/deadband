@@ -3,7 +3,8 @@
 deadband keeps a busy machine usable while many heavy jobs, such as cargo
 builds and test runs, compete for it. A fixed-slot gate cannot learn what a
 job costs, cannot slow a job that is already running, and cannot cap how many
-compiler processes one build starts. deadband does all three.
+compiler processes one build starts. deadband learns each job's cost, slows
+running jobs, and caps compiler processes through a shared jobserver.
 
 ## Overview
 
@@ -41,7 +42,7 @@ jobserver's environment, and reports the job's exit status.
 
 | Module | Owns |
 | --- | --- |
-| probe | Reads CPU load, memory pressure and swap from the operating system every second, behind a trait. |
+| probe | Reads CPU load, memory pressure and swap from macOS every second, behind a trait so a Linux probe can be added later. |
 | ledger | Stores each finished job's label, metadata, duration and measured CPU and memory in SQLite, and gives a learned cost per label. |
 | admit | Decides whether a waiting job starts now: live headroom must cover the label's learned cost. Holds the queue and the priority lanes. |
 | jobserver | Runs one shared jobserver pipe, so all cargo processes together start at most a set number of compiler processes. admit raises and lowers the ceiling. |
@@ -49,12 +50,6 @@ jobserver's environment, and reports the job's exit status.
 | sink | The `HistorySink` trait that receives a record of each finished job. The first sink writes records to a board with `board put`. |
 | cli | The commands `deadband run`, `status`, `top` and `daemon`, built on crumbkit. |
 | tui | `deadband top`: live load, the queue, running jobs and their learned costs, drawn with ratatui. |
-
-## Platform
-
-deadband supports macOS first. The probe module sits behind a trait, so a
-Linux probe can be added later without changing admit, throttle or the other
-modules.
 
 ## Rules that shape the code
 
@@ -94,5 +89,4 @@ command = ["example-workspace-tool", "reclaim", "--json"]
 
 For disk, `--need disk=20G` asks the reclaimer to delete the build output of
 idle workspaces. Reclaim runs only under pressure, and an age-based stop is
-opt-in. The reclaimer chooses what to stop, and deadband itself never stops
-anything.
+opt-in. The reclaimer chooses what to stop.
