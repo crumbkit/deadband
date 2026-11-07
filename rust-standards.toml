@@ -1,0 +1,20 @@
+# deadband's adoption map of the Rust standards (adoption.md of
+# https://github.com/crumbkit/rust-standards). The standards have no released
+# version yet, so the map names the draft and the commit it was reviewed
+# against.
+
+schema = "rust-standards/adoption/v1"
+standards = { version = "draft", commit = "107f4eb72a8c26ed377329f70debdbc9f91540dc" }
+
+# deadband will be a command and a per-user daemon that starts and pauses
+# job processes and keeps a ledger of job costs on disk.
+profiles = ["base", "cli", "child-process", "durable-state"]
+
+[[decision]]
+id = "lanes"
+requirement = """
+- Lane: `lane` in .github/workflows/ci.yml, on each pull request and each push to main. It runs every step of the pull-request lane in the standards' order (format, workflows, deny, shear, clippy, tests, doctests, rustdoc). It leaves out the `features` step, which the library profile needs and deadband does not adopt. Its budget is ten minutes, the job's timeout.
+- Lane: `advisories` in .github/workflows/ci.yml, daily at 06:43 UTC and on demand (BASE-29). Nothing waits for it.
+"""
+purpose = "The pull-request lane stays within ten minutes on a small workspace and grows with the code. A daily advisory run catches an advisory published against a dependency already on main, and finding it after merge is safe because the advisory concerns code that is already on main."
+realizations = [".github/workflows/ci.yml"]

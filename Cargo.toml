@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+members = ["crates/deadband"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/crumbkit/deadband"
+
+# BASE-27: an integer overflow panics in a release build as it does in a
+# debug build.
+[profile.release]
+overflow-checks = true
+
+# The [workspace.lints] table of the base profile of the Rust standards
+# (baseline/lints/base.toml).
+
+[workspace.lints.rust]
+unsafe_code = "forbid"                 # BASE-3
+unreachable_pub = "warn"               # BASE-8
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+allow_attributes = "deny"                # BASE-2
+allow_attributes_without_reason = "deny" # BASE-2
+unwrap_used = "deny"                     # BASE-4
+expect_used = "deny"                     # BASE-4
+panic = "deny"                           # BASE-4
+todo = "deny"                            # BASE-4
+unimplemented = "deny"                   # BASE-4
+dbg_macro = "deny"                       # BASE-4
+unreachable = "deny"                     # BASE-4
+indexing_slicing = "deny"                # BASE-4
+cast_possible_truncation = "deny"        # BASE-12
+cast_sign_loss = "deny"                  # BASE-12
+cast_possible_wrap = "deny"              # BASE-12
+cast_precision_loss = "deny"             # BASE-12
+cast_lossless = "deny"                   # BASE-12
+disallowed_methods = "deny"              # BASE-5, BASE-6, BASE-7, BASE-11
+disallowed_types = "deny"                # BASE-5
+disallowed_macros = "deny"               # BASE-7
+print_stdout = "deny"                    # BASE-5
+print_stderr = "deny"                    # BASE-5
+mod_module_files = "deny"                # BASE-9
+too_many_lines = "deny"                  # BASE-10
+wildcard_imports = "deny"                # BASE-13
+enum_glob_use = "deny"                   # BASE-13
+ref_option = "deny"                      # BASE-14
+needless_for_each = "deny"               # BASE-15
+fn_params_excessive_bools = "deny"       # BASE-16

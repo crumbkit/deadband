@@ -1,0 +1,90 @@
+# The pull-request lane and the scheduled advisory check of the Rust
+# standards, copied from templates/ci.yml of crumbkit/rust-standards.
+# rust-standards.toml records the lanes in its `lanes` decision (BASE-25).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "43 6 * * *"
+  workflow_dispatch:
+
+# Each job grants only the permissions it needs.
+permissions: {}
+
+# A new push cancels the run for the previous push, because the newer run
+# checks the same changes and more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Any compiler or Clippy warning fails the build (BASE-1).
+  CARGO_BUILD_WARNINGS: deny
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lane:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    # The pull-request lane's time budget (BASE-25).
+    timeout-minutes: 10
+    permissions:
+      contents: read # actions/checkout reads the repository.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # rustup installs the version and components that rust-toolchain.toml
+      # names (BASE-26).
+      - run: rustup toolchain install
+      # install-action runs before rust-cache, so the cache leaves out the
+      # tool binaries that install-action downloads on every run.
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.140,cargo-deny@0.20.2,cargo-shear@1.14.0,zizmor@1.30.1
+          fallback: none
+      # The steps that read only the source run first, so a pull request
+      # that fails one of them fails in seconds.
+      - name: format
+        run: cargo fmt --check
+      - name: workflows
+        run: zizmor .
+      # Only a run on main saves the cache.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: deny
+        run: cargo deny --locked check bans licenses sources
+      - name: shear
+        run: cargo shear
+      - name: clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features
+      - name: tests
+        run: cargo nextest run --locked --workspace --all-features
+      - name: doctests
+        run: cargo test --locked --doc --workspace --all-features
+      - name: rustdoc
+        run: cargo doc --locked --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  advisories:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # actions/checkout reads the repository.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-deny@0.20.2
+          fallback: none
+      - name: advisories
+        run: cargo deny --locked check advisories

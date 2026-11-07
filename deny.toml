@@ -1,0 +1,45 @@
+# The cargo-deny configuration that every project starts from (BASE-18). A
+# project that needs another licence adds an exception for the one crate
+# version that uses it, and leaves the allow list unchanged.
+
+[graph]
+all-features = true
+
+# BASE-29: each ignored advisory names its ID, why it does not apply and the
+# date by which it is reviewed again, such as
+# { id = "RUSTSEC-2024-0000", reason = "the project never calls the affected function; review by 2027-01-31" }.
+[advisories]
+ignore = []
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.93
+# A small dependency tree uses only some of the allowed licences.
+unused-allowed-license = "allow"
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# SVC-12: a service whose workspace has several crates bans each store's SDK
+# crate outside the crate that owns the store, such as
+# { crate = "aws-sdk-dynamodb", wrappers = ["ticket-store"], reason = "SVC-12: only ticket-store uses DynamoDB" }.
+# A third-party crate that depends on the SDK crate is listed in `wrappers` too.
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
