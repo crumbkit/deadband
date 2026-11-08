@@ -124,6 +124,8 @@ fn the_system_probe_says_why_it_cannot_read_a_missing_directory() {
     use super::{Probe, System};
 
     let missing = std::env::temp_dir().join("deadband-test-no-such-directory");
-    let error = System.disk(&missing).expect_err("a missing directory has no disk");
+    let error = System
+        .disk(&missing)
+        .expect_err("a missing directory has no disk");
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
 }

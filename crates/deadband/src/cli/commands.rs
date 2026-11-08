@@ -9,11 +9,14 @@ use std::path::Path;
 use crumbkit::{Code, Failure, Output, Recovery, Sink};
 
 use super::{DaemonArgs, Machine, RunArgs};
+use crate::admit::{Hold, Lane};
 use crate::client::{self, ANSWER_WITHIN, Admission};
 use crate::daemon::{self, Settings, Unbound, note};
 use crate::job;
+use crate::priority;
 use crate::probe::Probe;
 use crate::protocol::Job;
+use crate::throttle::{self, NORMAL_NICE};
 
 /// The code of a program given to `run` that was found but could not start.
 pub const JOB_NOT_STARTED: Code = Code::new("deadband", "job", "not_started");
@@ -60,11 +63,59 @@ impl Failure for NotStarted {
     }
 }
 
-/// Runs `deadband run`: asks the daemon to admit the job, runs it, tells
-/// the daemon it ended, and returns its exit code.
+/// Returns the line that says why a job waits behind `ahead` jobs.
+fn waits(ahead: usize, held: Option<Hold>) -> String {
+    let why = held.map_or_else(
+        || "for headroom".to_owned(),
+        |hold| format!("because {hold}"),
+    );
+    match ahead {
+        0 => format!("the job waits {why}, and no other job waits ahead of it"),
+        1 => format!("the job waits {why}, and 1 job waits ahead of it"),
+        n => format!("the job waits {why}, and {n} jobs wait ahead of it"),
+    }
+}
+
+/// Returns the lane of the job labelled `label`: the one `--lane` named,
+/// or the fast lane when the priority file matches the job. A priority
+/// file that cannot be read matches nothing, and the log says why.
+fn lane_of<P>(machine: &Machine<P>, asked: Option<Lane>, label: &str) -> Lane {
+    if let Some(lane) = asked {
+        return lane;
+    }
+    let environment = &machine.environment;
+    let Some(file) = environment.priority_file() else {
+        return Lane::Normal;
+    };
+    let words = match std::fs::read_to_string(&file) {
+        Ok(words) => words,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Lane::Normal,
+        Err(error) => {
+            note(
+                &machine.log,
+                format_args!(
+                    "deadband could not read {}: {error}, so the job waits in the normal lane",
+                    file.display()
+                ),
+            );
+            return Lane::Normal;
+        }
+    };
+    priority::lane(
+        &words,
+        label,
+        environment.cwd.as_deref(),
+        environment.home.as_deref(),
+    )
+}
+
+/// Runs `deadband run`: asks the daemon to admit the job, runs it with its
+/// threads in the parallelism variables, tells the daemon it ended, and
+/// returns its exit code. A normal-lane job runs at nice 5.
 ///
 /// When the daemon cannot be asked, the job starts at once and the log
-/// says why in one line.
+/// says why in one line. A job inside a granted job, or one that asks to
+/// bypass, starts at once without asking.
 pub(super) fn run<O: Write, W: Write, P>(
     sink: &mut Sink<O, W>,
     output: &mut Output,
@@ -72,6 +123,9 @@ pub(super) fn run<O: Write, W: Write, P>(
     args: RunArgs,
 ) -> u8 {
     let program = args.command.first().cloned().unwrap_or_default();
+    if machine.environment.held || machine.environment.bypass {
+        return finish(sink, output, program, job::run(&args.command, &[]));
+    }
     let label = args.label.unwrap_or_else(|| {
         Path::new(&program)
             .file_name()
@@ -84,18 +138,15 @@ pub(super) fn run<O: Write, W: Write, P>(
         .iter()
         .map(|word| word.to_string_lossy())
         .collect();
+    let lane = lane_of(machine, args.lane, &label);
     let asked = Job {
         label,
         pid: std::process::id(),
         command: words.join(" "),
+        lane,
     };
-    let queued = |ahead: usize| {
-        let line = match ahead {
-            0 => "the job waits for headroom, and no other job waits ahead of it".to_owned(),
-            1 => "the job waits for headroom, and 1 job waits ahead of it".to_owned(),
-            n => format!("the job waits for headroom, and {n} jobs wait ahead of it"),
-        };
-        note(&machine.log, format_args!("{line}"));
+    let queued = |ahead: usize, held: Option<Hold>| {
+        note(&machine.log, format_args!("{}", waits(ahead, held)));
     };
     let lease = match client::ask(&machine.socket, &asked, ANSWER_WITHIN, queued) {
         Admission::Granted(lease) => Some(lease),
@@ -107,11 +158,36 @@ pub(super) fn run<O: Write, W: Write, P>(
             None
         }
     };
-    let ended = job::run(&args.command);
+    let variables = lease
+        .as_ref()
+        .map(|lease| machine.environment.job_variables(lease.jobs()))
+        .unwrap_or_default();
+    if lane == Lane::Normal
+        && let Err(error) = throttle::lower_own_priority(NORMAL_NICE)
+    {
+        note(
+            &machine.log,
+            format_args!(
+                "deadband could not lower the job's priority: {error}, so the job runs at its caller's priority"
+            ),
+        );
+    }
+    let ended = job::run(&args.command, &variables);
     let exit_code = ended.as_ref().ok().and_then(|status| status.code());
     if let Some(lease) = lease {
         lease.end(exit_code);
     }
+    finish(sink, output, program, ended)
+}
+
+/// Returns the exit code of a job that `ended`, or prints why `program`
+/// could not start and returns that failure's exit code.
+fn finish<O: Write, W: Write>(
+    sink: &mut Sink<O, W>,
+    output: &mut Output,
+    program: OsString,
+    ended: io::Result<std::process::ExitStatus>,
+) -> u8 {
     match ended {
         Ok(status) => job::exit_code(status),
         Err(error) => {
@@ -143,10 +219,11 @@ pub(super) fn daemon<O: Write, W: Write, P: Probe + Clone + Send + 'static>(
                     machine.socket.display()
                 ),
             );
+            let settings = Settings::new(max_jobs, machine.cores, machine.environment.home.clone());
             let error = daemon::serve(
                 &bound.listener,
                 machine.probe.clone(),
-                Settings::new(max_jobs),
+                settings,
                 &machine.log,
             );
             Unbound::Socket {

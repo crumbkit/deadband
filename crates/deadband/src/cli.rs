@@ -13,8 +13,10 @@ use crumbkit::{Document, Prose, Sink, ViewFlags};
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::admit::Lane;
 use crate::client::{self, ANSWER_WITHIN};
 use crate::daemon::{DAEMON_RUNNING, Log, SOCKET_UNUSABLE};
+use crate::environment::Environment;
 use crate::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Probe, Sample, Unreadable};
 use crate::protocol::Jobs;
 
@@ -62,6 +64,13 @@ pub struct RunArgs {
     #[arg(long)]
     pub label: Option<String>,
 
+    /// The lane the job waits in. Waiting fast jobs start first and get
+    /// one more thread, and normal jobs run at nice 5. The default is the
+    /// fast lane when the priority file matches the job, and the normal
+    /// lane otherwise.
+    #[arg(long, value_enum)]
+    pub lane: Option<Lane>,
+
     /// The command to run, after `--`.
     #[arg(last = true, required = true, value_name = "COMMAND")]
     pub command: Vec<OsString>,
@@ -77,7 +86,7 @@ pub struct DaemonArgs {
 }
 
 /// What the commands run against: the probe, the daemon's socket, the log
-/// on standard error and the number of logical cores.
+/// on standard error, the number of logical cores and the environment.
 pub struct Machine<P> {
     /// The probe that reads the machine.
     pub probe: P,
@@ -87,6 +96,8 @@ pub struct Machine<P> {
     pub log: Log,
     /// The number of logical cores, or `None` when it is unknown.
     pub cores: Option<NonZeroUsize>,
+    /// What deadband read from the environment.
+    pub environment: Environment,
 }
 
 impl<P: fmt::Debug> fmt::Debug for Machine<P> {
@@ -95,6 +106,7 @@ impl<P: fmt::Debug> fmt::Debug for Machine<P> {
             .field("probe", &self.probe)
             .field("socket", &self.socket)
             .field("cores", &self.cores)
+            .field("environment", &self.environment)
             .finish_non_exhaustive()
     }
 }

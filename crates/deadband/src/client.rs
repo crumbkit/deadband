@@ -11,6 +11,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::admit::Hold;
 use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
 
 #[cfg(test)]
@@ -35,9 +36,17 @@ pub enum Admission {
 pub struct Lease {
     /// The connection the job holds while it runs.
     stream: UnixStream,
+    /// The threads the daemon gave the job.
+    jobs: usize,
 }
 
 impl Lease {
+    /// Returns the threads the daemon gave the job.
+    #[must_use]
+    pub const fn jobs(&self) -> usize {
+        self.jobs
+    }
+
     /// Tells the daemon that the job ended with `exit_code` and closes the
     /// connection. A daemon that cannot be told sees the connection close,
     /// which frees the job's place as well.
@@ -130,14 +139,14 @@ fn reply(reader: &mut BufReader<UnixStream>, waited: Duration) -> Result<Reply, 
 /// Asks the daemon at `path` to start `job`, and waits until it does.
 ///
 /// The daemon's first answer must arrive within `answer_within`. When the
-/// job waits, `queued` receives how many jobs wait in front of it, and the
-/// client then waits for the grant as long as the daemon keeps the
-/// connection open.
+/// job waits, `queued` receives how many jobs start before it and why the
+/// first of them waits, and the client then waits for the grant as long as
+/// the daemon keeps the connection open.
 pub fn ask(
     path: &Path,
     job: &Job,
     answer_within: Duration,
-    queued: impl FnOnce(usize),
+    queued: impl FnOnce(usize, Option<Hold>),
 ) -> Admission {
     match try_ask(path, job, answer_within, queued) {
         Ok(lease) => Admission::Granted(lease),
@@ -150,7 +159,7 @@ fn try_ask(
     path: &Path,
     job: &Job,
     answer_within: Duration,
-    queued: impl FnOnce(usize),
+    queued: impl FnOnce(usize, Option<Hold>),
 ) -> Result<Lease, Unasked> {
     let mut stream = connect(path)?;
     let garbled = |error| Unasked::Garbled { error };
@@ -160,13 +169,13 @@ fn try_ask(
     write_line(&mut stream, &Request::Ask(job.clone())).map_err(|_| Unasked::Closed)?;
     let mut reader = BufReader::new(stream.try_clone().map_err(garbled)?);
     match reply(&mut reader, answer_within)? {
-        Reply::Granted => return Ok(Lease { stream }),
-        Reply::Queued { ahead } => queued(ahead),
+        Reply::Granted { jobs } => return Ok(Lease { stream, jobs }),
+        Reply::Queued { ahead, held } => queued(ahead, held),
         Reply::Jobs(_) => return Err(garbled(ErrorKind::InvalidData.into())),
     }
     stream.set_read_timeout(None).map_err(garbled)?;
     match reply(&mut reader, answer_within)? {
-        Reply::Granted => Ok(Lease { stream }),
+        Reply::Granted { jobs } => Ok(Lease { stream, jobs }),
         Reply::Queued { .. } | Reply::Jobs(_) => Err(garbled(ErrorKind::InvalidData.into())),
     }
 }
@@ -186,6 +195,6 @@ pub fn jobs(path: &Path, answer_within: Duration) -> Result<Jobs, Unasked> {
     let mut reader = BufReader::new(stream);
     match reply(&mut reader, answer_within)? {
         Reply::Jobs(jobs) => Ok(jobs),
-        Reply::Granted | Reply::Queued { .. } => Err(garbled(ErrorKind::InvalidData.into())),
+        Reply::Granted { .. } | Reply::Queued { .. } => Err(garbled(ErrorKind::InvalidData.into())),
     }
 }

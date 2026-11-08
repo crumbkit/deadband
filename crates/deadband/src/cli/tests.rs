@@ -275,8 +275,7 @@ impl Config {
     fn with(words: &str) -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, Ordering::SeqCst);
-        let directory =
-            std::env::temp_dir().join(format!("db-config-{}-{n}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("db-config-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("the directory is made");
         #[expect(
             clippy::disallowed_methods,

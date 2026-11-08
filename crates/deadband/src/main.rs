@@ -17,6 +17,14 @@ fn main() -> ExitCode {
     let socket = deadband::socket::path(|name| std::env::var_os(name));
     #[expect(
         clippy::disallowed_methods,
+        reason = "the entry point reads the environment and the working directory once, for the variables that deadband::environment::VARIABLES lists"
+    )]
+    let environment = deadband::environment::Environment::read(
+        |name| std::env::var_os(name),
+        std::env::current_dir().ok(),
+    );
+    #[expect(
+        clippy::disallowed_methods,
         reason = "the daemon's log and the line that says why `run` starts a job at once go to standard error, which crumbkit's Sink does not lend out"
     )]
     let stderr = std::io::stderr();
@@ -25,5 +33,6 @@ fn main() -> ExitCode {
         socket,
         log: Arc::new(Mutex::new(stderr)),
         cores: thread::available_parallelism().ok(),
+        environment,
     })
 }

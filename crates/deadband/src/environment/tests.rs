@@ -75,7 +75,10 @@ fn the_priority_file_is_in_the_home_config_directory_otherwise() {
         Some(PathBuf::from("/home/me/.config/deadband/priority"))
     );
     assert_eq!(read.home.as_deref(), Some(Path::new("/home/me")));
-    assert_eq!(Environment::read(environment(&[]), None).priority_file(), None);
+    assert_eq!(
+        Environment::read(environment(&[]), None).priority_file(),
+        None
+    );
 }
 
 #[test]

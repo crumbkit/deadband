@@ -78,7 +78,11 @@ impl Probe for Dial {
     }
 
     fn disk(&self, _path: &Path) -> std::io::Result<Disk> {
-        let free = if self.1.load(Ordering::SeqCst) { 5 } else { 500 };
+        let free = if self.1.load(Ordering::SeqCst) {
+            5
+        } else {
+            500
+        };
         Ok(Disk {
             free_bytes: free * GIB,
             total_bytes: 1000 * GIB,
@@ -132,10 +136,7 @@ impl Client {
 
     fn ask_in(path: &Path, label: &str, lane: Lane) -> Self {
         let mut client = Self::connect(path);
-        client.send(&Request::Ask(Job {
-            lane,
-            ..job(label)
-        }));
+        client.send(&Request::Ask(Job { lane, ..job(label) }));
         client
     }
 

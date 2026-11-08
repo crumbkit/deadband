@@ -7,12 +7,20 @@ use crate::admit::Lane;
 
 /// The lane of a job labelled `label` in `cwd`, with `/home/me` as home.
 fn of(words: &str, label: &str, cwd: &str) -> Lane {
-    lane(words, label, Some(Path::new(cwd)), Some(Path::new("/home/me")))
+    lane(
+        words,
+        label,
+        Some(Path::new(cwd)),
+        Some(Path::new("/home/me")),
+    )
 }
 
 #[test]
 fn a_job_runs_in_the_normal_lane_when_no_word_matches() {
-    assert_eq!(of("urgent\n/work/hot\n", "tests", "/work/cold"), Lane::Normal);
+    assert_eq!(
+        of("urgent\n/work/hot\n", "tests", "/work/cold"),
+        Lane::Normal
+    );
 }
 
 #[test]

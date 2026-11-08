@@ -1,5 +1,7 @@
 //! Finds the path of the per-user Unix socket that the daemon listens on,
-//! and lists the environment variables deadband reads (BASE-28).
+//! and lists the environment variables it reads for it (BASE-28).
+//! [`environment`](crate::environment) lists the other variables deadband
+//! reads.
 //!
 //! The entry point reads the environment and passes a reader to [`path`],
 //! so this module reads no variable itself (BASE-6).

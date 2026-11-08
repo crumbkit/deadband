@@ -9,7 +9,9 @@
 //!   as its caller does.
 //! - Arguments: the remaining words, each passed as a separate value. No
 //!   shell reads them.
-//! - Environment: the job inherits deadband's whole environment.
+//! - Environment: the job inherits deadband's whole environment, with the
+//!   variables that its caller passes added: `DEADBAND_HELD` and the
+//!   parallelism variables of a granted job.
 //! - Streams and deadline: the job inherits deadband's standard input,
 //!   output and error, deadband captures nothing, and there is no deadline.
 //! - End: deadband waits for the job and reaps it, and reads its exit
@@ -30,15 +32,15 @@ mod tests;
 /// plus the signal's number.
 const SIGNAL_BASE: i32 = 128;
 
-/// Runs `command`, whose first word is the program, waits for it, and
-/// returns its exit status.
+/// Runs `command`, whose first word is the program, with `variables` added
+/// to its environment, waits for it, and returns its exit status.
 ///
 /// # Errors
 ///
 /// Returns [`io::ErrorKind::InvalidInput`] for an empty command, and the
 /// error of a program that could not start, such as
 /// [`io::ErrorKind::NotFound`].
-pub fn run(command: &[OsString]) -> io::Result<ExitStatus> {
+pub fn run(command: &[OsString], variables: &[(&str, String)]) -> io::Result<ExitStatus> {
     let Some((program, args)) = command.split_first() else {
         return Err(io::ErrorKind::InvalidInput.into());
     };
@@ -46,7 +48,10 @@ pub fn run(command: &[OsString]) -> io::Result<ExitStatus> {
         clippy::disallowed_methods,
         reason = "crates/deadband/src/job.rs is the module that starts processes, and the job is the command its caller names"
     )]
-    let status = Command::new(program).args(args).status();
+    let status = Command::new(program)
+        .args(args)
+        .envs(variables.iter().map(|(name, value)| (name, value)))
+        .status();
     status
 }
 

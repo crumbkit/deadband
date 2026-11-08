@@ -44,14 +44,16 @@ jobserver's environment, and reports the job's exit status.
 | --- | --- |
 | probe | Reads CPU load, memory pressure and swap from macOS every second, behind a trait so a Linux probe can be added later. |
 | ledger | Stores each finished job's label, metadata, duration and measured CPU and memory in SQLite, and gives a learned cost per label. |
-| admit | Decides whether a waiting job starts now, and holds the queue. The first rule admits a job when nothing runs, when the probe fails, or when memory pressure is normal and fewer than `--max-jobs` jobs run. Later, live headroom must cover the label's learned cost, and the queue gains priority lanes. |
+| admit | Decides whether a waiting job starts now and how many threads it gets, and holds the queue with its fast and normal lanes. The rule admits a job when nothing runs or the probe fails, and otherwise holds it on the job count, critically low disk, memory pressure or the load. Later, live headroom must cover the label's learned cost. |
 | daemon | Listens on the socket, samples the probe once a second, and grants waiting jobs as admit allows. |
 | client | Asks the daemon to admit a job or to list its jobs, and gives the reason to start at once when the daemon cannot be asked. |
 | protocol | The messages over the socket, one JSON object per line. |
 | socket | Finds the socket's path from the environment, and lists the variables deadband reads. |
 | job | The only module that starts a process: the job that `deadband run` was given. |
+| environment | Reads the variables that `deadband run` uses, and gives a granted job its parallelism variables. |
+| priority | Chooses a job's lane from the priority file. |
 | jobserver | Runs one shared jobserver pipe, so all cargo processes together start at most a set number of compiler processes. admit raises and lowers the ceiling. |
-| throttle | The only module that pauses, resumes or lowers the priority of a job. Pausing is off by default. |
+| throttle | The only module that pauses, resumes or lowers the priority of a job. It lowers a normal-lane job to nice 5 now. Pausing comes later and is off by default. |
 | sink | The `HistorySink` trait that receives a record of each finished job. The first sink writes records to a board with `board put`. |
 | cli | The commands `deadband run`, `status`, `top` and `daemon`, built on crumbkit. [running.md](running.md) says how to install and run them. |
 | tui | `deadband top`: live load, the queue, running jobs and their learned costs, drawn with ratatui. |

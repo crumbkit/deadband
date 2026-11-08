@@ -120,7 +120,10 @@ fn a_granted_job_on_a_daemon_of_two_jobs_gets_half_the_cores_as_its_build_jobs()
     assert!(run.status.success(), "{run:?}");
     let cores = std::thread::available_parallelism().expect("the cores read");
     let half = (cores.get() / 2).max(1);
-    assert_eq!(String::from_utf8(run.stdout).expect("UTF-8"), format!("{half}\n"));
+    assert_eq!(
+        String::from_utf8(run.stdout).expect("UTF-8"),
+        format!("{half}\n")
+    );
 }
 
 #[test]

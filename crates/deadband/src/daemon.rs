@@ -1,5 +1,6 @@
-//! The per-user daemon: it listens on the socket, samples the probe, and
-//! starts waiting jobs as [`admit`](crate::admit) allows.
+//! The per-user daemon: it listens on the socket, samples the probe and the
+//! disk that holds the home directory, and starts waiting jobs as
+//! [`admit`](crate::admit) allows.
 //!
 //! The daemon runs one thread that samples the probe every
 //! [`SAMPLE_EVERY`] and one thread per connection. Each thread that changes
@@ -12,18 +13,21 @@ use std::fmt;
 use std::io::{self, BufReader, Write};
 use std::num::NonZeroUsize;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustix::io::Errno;
 
-use crate::admit::{JobId, Queue};
-use crate::probe::{Pressure, Probe};
+use self::reading::read_machine;
+use crate::admit::{JobId, Limits, Queue, Reading};
+use crate::probe::Probe;
 use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
 
 mod bind;
+mod reading;
 #[cfg(test)]
 mod tests;
 
@@ -51,10 +55,15 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 pub type Log = Arc<Mutex<dyn Write + Send>>;
 
 /// How the daemon admits jobs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Settings {
     /// The most jobs that run at once.
     pub max_jobs: NonZeroUsize,
+    /// The number of logical cores, or `None` when it is unknown.
+    pub cores: Option<NonZeroUsize>,
+    /// The home directory, whose disk the daemon reads, or `None` when it
+    /// is unknown and the disk holds no job.
+    pub home: Option<PathBuf>,
     /// How often the daemon samples the probe.
     pub sample_every: Duration,
     /// How long the daemon waits for a new connection's first line.
@@ -62,13 +71,19 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Returns the settings with `max_jobs`, the default sampling
-    /// interval, [`SAMPLE_EVERY`], and the default wait for a first line,
-    /// [`FIRST_LINE_WITHIN`].
+    /// Returns the settings with `max_jobs`, `cores` and `home`, the
+    /// default sampling interval, [`SAMPLE_EVERY`], and the default wait for
+    /// a first line, [`FIRST_LINE_WITHIN`].
     #[must_use]
-    pub const fn new(max_jobs: NonZeroUsize) -> Self {
+    pub const fn new(
+        max_jobs: NonZeroUsize,
+        cores: Option<NonZeroUsize>,
+        home: Option<PathBuf>,
+    ) -> Self {
         Self {
             max_jobs,
+            cores,
+            home,
             sample_every: SAMPLE_EVERY,
             first_line_within: FIRST_LINE_WITHIN,
         }
@@ -96,8 +111,8 @@ struct Waiter {
 struct State {
     /// The waiting and running jobs.
     queue: Queue<Waiter>,
-    /// The latest memory pressure, or `None` when the probe failed.
-    pressure: Option<Pressure>,
+    /// The latest reading of the machine, or `None` when the probe failed.
+    reading: Option<Reading>,
     /// How the daemon admits jobs.
     settings: Settings,
 }
@@ -107,16 +122,23 @@ impl State {
     /// writes the grant to each one's client. A client that cannot take
     /// the grant is gone, so its job leaves the queue and frees its place.
     fn grant(&mut self) {
+        let limits = Limits {
+            max_jobs: self.settings.max_jobs,
+            cores: self.settings.cores,
+        };
         loop {
-            let started = self.queue.admit(self.pressure, self.settings.max_jobs);
+            let started = self
+                .queue
+                .admit(self.reading.as_ref(), &limits, Instant::now());
             if started.is_empty() {
                 return;
             }
-            for id in started {
+            for (id, jobs) in started {
+                let granted = Reply::Granted { jobs };
                 let delivered = self
                     .queue
                     .running_job(id)
-                    .is_some_and(|waiter| write_line(&mut &waiter.stream, &Reply::Granted).is_ok());
+                    .is_some_and(|waiter| write_line(&mut &waiter.stream, &granted).is_ok());
                 if !delivered {
                     self.queue.remove(id);
                 }
@@ -164,9 +186,10 @@ pub fn serve<P: Probe + Send + 'static>(
     settings: Settings,
     log: &Log,
 ) -> io::Error {
+    let reading = read_machine(&probe, &settings, log, None);
     let shared: Shared = Arc::new(Mutex::new(State {
         queue: Queue::default(),
-        pressure: read_pressure(&probe, log, None),
+        reading,
         settings,
     }));
     // The sampler stops when `serve` returns and drops `_stop`.
@@ -211,45 +234,21 @@ fn passing(error: &io::Error) -> bool {
     .contains(&Errno::from_io_error(error).unwrap_or(Errno::INVAL))
 }
 
-/// Reads the pressure with `probe`. It writes a log line when the probe
-/// starts failing or reads again, judged against `before`, the previous
-/// reading.
-fn read_pressure(
-    probe: &impl Probe,
-    log: &Log,
-    before: Option<Option<Pressure>>,
-) -> Option<Pressure> {
-    match probe.sample() {
-        Ok(sample) => {
-            if before == Some(None) {
-                note(log, format_args!("the probe reads the machine again"));
-            }
-            Some(sample.memory_pressure)
-        }
-        Err(error) => {
-            if before.is_none_or(|before| before.is_some()) {
-                note(
-                    log,
-                    format_args!("{error}, so every job starts at once until it reads again"),
-                );
-            }
-            None
-        }
-    }
-}
-
 /// Samples `probe` every `sample_every` and starts the jobs that the new
-/// pressure admits, until `stopped` receives or disconnects.
+/// reading admits, until `stopped` receives or disconnects.
 ///
 /// The probe has no event to wait on, so the sampler polls it. The wait
 /// is a timed receive on the daemon's stop channel.
 fn sample(shared: &Shared, probe: &impl Probe, stopped: &mpsc::Receiver<()>, log: &Log) {
     let every = lock(shared).settings.sample_every;
     while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(every) {
-        let before = lock(shared).pressure;
-        let pressure = read_pressure(probe, log, Some(before));
+        let (before, settings) = {
+            let state = lock(shared);
+            (state.reading, state.settings.clone())
+        };
+        let reading = read_machine(probe, &settings, log, Some(before));
         let mut state = lock(shared);
-        state.pressure = pressure;
+        state.reading = reading;
         state.grant();
     }
 }
@@ -293,15 +292,20 @@ fn ask(shared: &Shared, stream: UnixStream, reader: &mut BufReader<UnixStream>, 
     };
     let id: JobId = {
         let mut state = lock(shared);
-        let id = state.queue.push(Waiter {
-            job,
-            stream: grant_stream,
-        });
+        let lane = job.lane;
+        let id = state.queue.push(
+            Waiter {
+                job,
+                stream: grant_stream,
+            },
+            lane,
+        );
         state.grant();
         if let Some(ahead) = state.queue.ahead_of(id) {
+            let held = state.queue.held();
             // A client that cannot take this reply also closes its
             // connection, which the read below sees.
-            let _ = write_line(&mut &stream, &Reply::Queued { ahead });
+            let _ = write_line(&mut &stream, &Reply::Queued { ahead, held });
         }
         id
     };
