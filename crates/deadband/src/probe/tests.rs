@@ -1,6 +1,7 @@
 //! Tests of the probe's parsing of each sysctl value.
 
-use super::{Pressure, Swap, Unreadable, parse_pressure, parse_swap};
+use super::sysctl::{Swap, parse_pressure, parse_swap};
+use super::{Pressure, Unreadable};
 
 /// The bytes that `vm.swapusage` returns: total, available and used bytes,
 /// the page size and whether swap is encrypted.

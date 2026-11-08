@@ -7,10 +7,10 @@
 
 use std::ffi::CStr;
 
-use super::{
-    PRESSURE_BYTES, PRESSURE_SYSCTL, SWAP_SYSCTL, SWAP_USAGE_BYTES, Sample, Unreadable,
-    parse_pressure, parse_swap,
+use super::sysctl::{
+    PRESSURE_BYTES, PRESSURE_SYSCTL, SWAP_SYSCTL, SWAP_USAGE_BYTES, parse_pressure, parse_swap,
 };
+use super::{Sample, Unreadable};
 
 // The parser reads `vm.swapusage` at the length of macOS's `xsw_usage`.
 const _: () = assert!(size_of::<libc::xsw_usage>() == SWAP_USAGE_BYTES);

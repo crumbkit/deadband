@@ -1,11 +1,11 @@
 //! Reads the machine's 1-minute load average, memory pressure level and swap
 //! use.
 //!
-//! [`Probe`] is the seam: the command and, later, the daemon take any probe,
-//! and tests pass a fake one. [`System`] reads the machine deadband runs on.
+//! The command and, later, the daemon take any [`Probe`], and tests pass a
+//! fake one. [`System`] reads the machine deadband runs on.
 //! On macOS it calls `getloadavg` and `sysctlbyname` in the `macos` module,
-//! which is the only module with unsafe code. The parsing of each sysctl
-//! value lives here, in safe code that runs on every platform.
+//! which is the only module with unsafe code. The `sysctl` module
+//! parses each sysctl value in safe code that runs on every platform.
 
 use std::ffi::CStr;
 use std::fmt;
@@ -20,6 +20,16 @@ use serde::Serialize;
     reason = "crates/deadband/src/probe/macos.rs calls getloadavg and sysctlbyname; rust-standards.toml's unsafe decision states its invariant"
 )]
 mod macos;
+// The parsing of the sysctl values runs on every platform, so the tests
+// check it everywhere, but only the macOS reader calls it.
+#[cfg_attr(
+    all(not(target_os = "macos"), not(test)),
+    expect(
+        dead_code,
+        reason = "only the macOS reader of the probe reads sysctl values"
+    )
+)]
+mod sysctl;
 #[cfg(test)]
 mod tests;
 
@@ -30,21 +40,6 @@ pub const MACHINE_UNREADABLE: Code = Code::new("deadband", "machine", "unreadabl
 /// The code of a failure to read the machine on a platform that deadband
 /// does not read yet.
 pub const MACHINE_UNSUPPORTED: Code = Code::new("deadband", "machine", "unsupported");
-
-/// The sysctl that holds the kernel's memory pressure level.
-pub(crate) const PRESSURE_SYSCTL: &CStr = c"kern.memorystatus_vm_pressure_level";
-
-/// The sysctl that holds the swap in use and the swap the machine has.
-pub(crate) const SWAP_SYSCTL: &CStr = c"vm.swapusage";
-
-/// The length of the value of `vm.swapusage`, the C struct `xsw_usage`:
-/// three 64-bit counts of bytes (total, available and used), the page size
-/// and whether swap is encrypted.
-pub(crate) const SWAP_USAGE_BYTES: usize = 32;
-
-/// The length of the value of `kern.memorystatus_vm_pressure_level`, a C
-/// `int`.
-pub(crate) const PRESSURE_BYTES: usize = 4;
 
 /// Something that takes one sample of the machine.
 pub trait Probe {
@@ -113,16 +108,6 @@ impl fmt::Display for Pressure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
-}
-
-/// The swap in use and the swap the machine has, in bytes, as
-/// `vm.swapusage` gives them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Swap {
-    /// The bytes of swap in use.
-    pub(crate) used_bytes: u64,
-    /// The bytes of swap the machine has.
-    pub(crate) total_bytes: u64,
 }
 
 /// The probe of the machine deadband runs on. It reads macOS, and on any
@@ -205,59 +190,4 @@ impl Failure for Unreadable {
             Self::Load | Self::Sysctl { .. } => Recovery::Retry,
         }
     }
-}
-
-/// Reads the value of `kern.memorystatus_vm_pressure_level`: 1 is normal, 2
-/// is warn and 4 is critical.
-///
-/// # Errors
-///
-/// Returns [`Unreadable::Value`] for a value of the wrong length or an
-/// unknown level.
-pub(crate) fn parse_pressure(bytes: &[u8]) -> Result<Pressure, Unreadable> {
-    let level: [u8; PRESSURE_BYTES] = bytes.try_into().map_err(|_| Unreadable::Value {
-        name: PRESSURE_SYSCTL,
-        problem: format!(
-            "the value is {} bytes long, not {PRESSURE_BYTES}",
-            bytes.len()
-        ),
-    })?;
-    match i32::from_ne_bytes(level) {
-        1 => Ok(Pressure::Normal),
-        2 => Ok(Pressure::Warn),
-        4 => Ok(Pressure::Critical),
-        other => Err(Unreadable::Value {
-            name: PRESSURE_SYSCTL,
-            problem: format!("the level {other} is none of 1, 2 or 4"),
-        }),
-    }
-}
-
-/// Reads the value of `vm.swapusage`, the C struct `xsw_usage`, whose total
-/// bytes start at offset 0 and used bytes at offset 16.
-///
-/// # Errors
-///
-/// Returns [`Unreadable::Value`] for a value of the wrong length.
-pub(crate) fn parse_swap(bytes: &[u8]) -> Result<Swap, Unreadable> {
-    let value: [u8; SWAP_USAGE_BYTES] = bytes.try_into().map_err(|_| Unreadable::Value {
-        name: SWAP_SYSCTL,
-        problem: format!(
-            "the value is {} bytes long, not {SWAP_USAGE_BYTES}",
-            bytes.len()
-        ),
-    })?;
-    // The total, the available and the used bytes are the first three
-    // 8-byte words. The page size and the encryption flag follow.
-    #[rustfmt::skip]
-    let [
-        t0, t1, t2, t3, t4, t5, t6, t7,
-        _, _, _, _, _, _, _, _,
-        u0, u1, u2, u3, u4, u5, u6, u7,
-        ..
-    ] = value;
-    Ok(Swap {
-        used_bytes: u64::from_ne_bytes([u0, u1, u2, u3, u4, u5, u6, u7]),
-        total_bytes: u64::from_ne_bytes([t0, t1, t2, t3, t4, t5, t6, t7]),
-    })
 }
