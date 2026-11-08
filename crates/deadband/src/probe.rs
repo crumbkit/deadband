@@ -1,5 +1,5 @@
 //! Reads the machine's 1-minute load average, memory pressure level and swap
-//! use.
+//! use, and the free space of a disk.
 //!
 //! The command and, later, the daemon take any [`Probe`], and tests pass a
 //! fake one. [`System`] reads the machine deadband runs on.
@@ -9,10 +9,12 @@
 
 use std::ffi::CStr;
 use std::fmt;
+use std::io;
+use std::path::Path;
 
 use crumbkit::{Code, Failure, Recovery};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
 #[expect(
@@ -49,6 +51,22 @@ pub trait Probe {
     ///
     /// Returns [`Unreadable`] when a value cannot be read.
     fn sample(&self) -> Result<Sample, Unreadable>;
+
+    /// Reads the free and total space of the disk that holds `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of a reading that failed, such as a missing path.
+    fn disk(&self, path: &Path) -> io::Result<Disk>;
+}
+
+/// The space of one disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Disk {
+    /// The bytes that a user without special privileges may still write.
+    pub free_bytes: u64,
+    /// The bytes the disk holds in all.
+    pub total_bytes: u64,
 }
 
 /// One sample of the machine.
@@ -81,7 +99,7 @@ impl fmt::Display for Sample {
 }
 
 /// The kernel's memory pressure level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Pressure {
     /// Memory is plentiful.
@@ -125,6 +143,14 @@ impl Probe for System {
     fn sample(&self) -> Result<Sample, Unreadable> {
         Err(Unreadable::Unsupported)
     }
+
+    fn disk(&self, path: &Path) -> io::Result<Disk> {
+        let disk = rustix::fs::statvfs(path)?;
+        Ok(Disk {
+            free_bytes: disk.f_bavail.saturating_mul(disk.f_frsize),
+            total_bytes: disk.f_blocks.saturating_mul(disk.f_frsize),
+        })
+    }
 }
 
 /// A reading of the machine that failed.
@@ -139,7 +165,7 @@ pub enum Unreadable {
         /// The sysctl's name.
         name: &'static CStr,
         /// The error the call set.
-        error: std::io::Error,
+        error: io::Error,
     },
     /// A sysctl value had a form the probe does not know.
     Value {

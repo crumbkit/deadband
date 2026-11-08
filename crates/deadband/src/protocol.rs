@@ -3,7 +3,7 @@
 //!
 //! A client opens one connection per request. `run` sends [`Request::Ask`],
 //! reads [`Reply::Granted`] or [`Reply::Queued`] and then, if it waited,
-//! [`Reply::Granted`], keeps the connection open while its job runs, and
+//! [`Reply::Granted`], which carries the job's threads, keeps the connection open while its job runs, and
 //! sends [`Request::Done`] when the job ends. The daemon counts the job as
 //! running until that line arrives or the connection closes. `status` sends
 //! [`Request::Status`] and reads [`Reply::Jobs`].
@@ -13,6 +13,8 @@ use std::io::{self, BufRead, Read, Write};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+
+use crate::admit::{Hold, Lane};
 
 #[cfg(test)]
 mod tests;
@@ -31,6 +33,10 @@ pub struct Job {
     pub pid: u32,
     /// The job's command line, with its words joined by spaces.
     pub command: String,
+    /// The lane the job waits in. A client that names none asks for the
+    /// normal lane.
+    #[serde(default)]
+    pub lane: Lane,
 }
 
 /// What a client asks the daemon.
@@ -50,15 +56,22 @@ pub enum Request {
 }
 
 /// What the daemon answers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reply {
-    /// The job may start now.
-    Granted,
-    /// The job waits, and `ahead` jobs wait in front of it.
+    /// The job may start now, with `jobs` threads.
+    Granted {
+        /// The threads the job may use, which `run` gives the job in its
+        /// parallelism variables.
+        jobs: usize,
+    },
+    /// The job waits, and `ahead` jobs start before it.
     Queued {
-        /// How many jobs wait in front of this one.
+        /// How many jobs start before this one.
         ahead: usize,
+        /// Why the first waiting job does not start yet, or `None` when the
+        /// daemon does not know.
+        held: Option<Hold>,
     },
     /// The running and waiting jobs.
     Jobs(Jobs),

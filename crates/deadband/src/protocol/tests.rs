@@ -3,6 +3,7 @@
 use std::io::{BufReader, ErrorKind};
 
 use super::{Job, Jobs, MAX_LINE, Reply, Request, read_line, write_line};
+use crate::admit::{Hold, Lane};
 
 /// A job that the tests send.
 fn job() -> Job {
@@ -10,6 +11,7 @@ fn job() -> Job {
         label: "tests".to_owned(),
         pid: 42,
         command: "cargo nextest run".to_owned(),
+        lane: Lane::Fast,
     }
 }
 
@@ -24,7 +26,7 @@ fn line<T: serde::Serialize>(message: &T) -> String {
 fn each_request_is_one_json_line() {
     assert_eq!(
         line(&Request::Ask(job())),
-        "{\"ask\":{\"label\":\"tests\",\"pid\":42,\"command\":\"cargo nextest run\"}}\n"
+        "{\"ask\":{\"label\":\"tests\",\"pid\":42,\"command\":\"cargo nextest run\",\"lane\":\"fast\"}}\n"
     );
     assert_eq!(line(&Request::Status), "\"status\"\n");
     assert_eq!(
@@ -35,10 +37,16 @@ fn each_request_is_one_json_line() {
 
 #[test]
 fn each_reply_is_one_json_line() {
-    assert_eq!(line(&Reply::Granted), "\"granted\"\n");
     assert_eq!(
-        line(&Reply::Queued { ahead: 2 }),
-        "{\"queued\":{\"ahead\":2}}\n"
+        line(&Reply::Granted { jobs: 3 }),
+        "{\"granted\":{\"jobs\":3}}\n"
+    );
+    assert_eq!(
+        line(&Reply::Queued {
+            ahead: 2,
+            held: Some(Hold::Full { max_jobs: 1 })
+        }),
+        "{\"queued\":{\"ahead\":2,\"held\":{\"hold\":\"full\",\"max_jobs\":1}}}\n"
     );
     let jobs = Reply::Jobs(Jobs {
         max_jobs: 1,
@@ -96,4 +104,14 @@ fn read_line_accepts_a_line_of_exactly_the_limit() {
         read_line::<String>(&mut reader).expect("the line reads"),
         Some(text)
     );
+}
+
+#[test]
+fn a_job_without_a_lane_waits_in_the_normal_lane() {
+    let line = "{\"ask\":{\"label\":\"a\",\"pid\":1,\"command\":\"a\"}}\n";
+    let mut reader = BufReader::new(line.as_bytes());
+    let Some(Request::Ask(job)) = read_line::<Request>(&mut reader).expect("the line reads") else {
+        panic!("the line is an ask");
+    };
+    assert_eq!(job.lane, Lane::Normal);
 }

@@ -408,6 +408,11 @@
           "description": "The label that `--label` gave, or the program's name.",
           "type": "string"
         },
+        "lane": {
+          "description": "The lane the job waits in. A client that names none asks for the\nnormal lane.",
+          "$ref": "#/$defs/Lane",
+          "default": "normal"
+        },
         "pid": {
           "description": "The process ID of the `deadband run` that asked for the job.",
           "type": "integer",
@@ -418,7 +423,8 @@
       "required": [
         "label",
         "pid",
-        "command"
+        "command",
+        "lane"
       ]
     },
     "Jobs": {
@@ -450,6 +456,21 @@
         "max_jobs",
         "running",
         "waiting"
+      ]
+    },
+    "Lane": {
+      "description": "The lane a job waits in. Waiting fast jobs start before waiting normal\nones, and get one more thread.",
+      "oneOf": [
+        {
+          "description": "Priority work.",
+          "type": "string",
+          "const": "fast"
+        },
+        {
+          "description": "Every other job.",
+          "type": "string",
+          "const": "normal"
+        }
       ]
     },
     "Pressure": {
