@@ -521,6 +521,10 @@ fn each_hold_says_why_in_one_line() {
         "the daemon already runs 1 job, its most at once"
     );
     assert_eq!(
+        Hold::Lane { places: 1 }.to_string(),
+        "the job's lane already runs 1 job, and the last place stays open for the other lane"
+    );
+    assert_eq!(
         Hold::Lane { places: 3 }.to_string(),
         "the job's lane already runs 3 jobs, and the last place stays open for the other lane"
     );

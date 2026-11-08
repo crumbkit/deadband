@@ -142,7 +142,8 @@ daemon admits each job as soon as a place is free, and its log says why.
 
 `deadband status` prints the load, memory pressure and swap, followed by the
 running and waiting jobs and the last reclaim, or `daemon: not running`
-when no daemon answers.
+when no daemon answers. When jobs wait, it also prints a line that names the
+first waiting job and says why it does not start yet.
 
 ## Reclaiming memory and disk
 

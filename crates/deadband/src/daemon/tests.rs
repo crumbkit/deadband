@@ -228,6 +228,7 @@ fn status_lists_the_running_and_the_waiting_jobs() {
             max_jobs: 1,
             running: vec![job("a")],
             waiting: vec![job("b")],
+            held: Some(Hold::Full { max_jobs: 1 }),
             reclaim: None,
         }
     );
@@ -246,6 +247,36 @@ fn a_job_waits_under_warn_pressure_and_starts_when_pressure_falls_to_normal() {
     assert_eq!(second.reply(), Reply::Queued { ahead: 0, held });
     dial.set(Pressure::Normal);
     assert_eq!(second.reply(), granted(2));
+}
+
+#[test]
+fn status_reports_the_hold_that_follows_the_machine_and_none_once_the_queue_drains() {
+    let dial = Dial::new(Pressure::Warn);
+    let (path, _) = start(2, &dial);
+    let mut first = Client::ask(&path, "a");
+    assert_eq!(first.reply(), granted(2));
+    let mut second = Client::ask(&path, "b");
+    let memory = Hold::Memory {
+        pressure: Pressure::Warn,
+    };
+    assert_eq!(
+        second.reply(),
+        Reply::Queued {
+            ahead: 0,
+            held: Some(memory)
+        }
+    );
+    assert_eq!(jobs(&path).held, Some(memory));
+    dial.set(Pressure::Normal);
+    assert_eq!(second.reply(), granted(2));
+    let mut third = Client::ask(&path, "c");
+    assert_eq!(third.reply(), queued(0, 2));
+    assert_eq!(jobs(&path).held, Some(Hold::Full { max_jobs: 2 }));
+    first.send(&Request::Done { exit_code: Some(0) });
+    assert_eq!(third.reply(), granted(2));
+    let drained = jobs(&path);
+    assert_eq!(drained.held, None);
+    assert!(drained.waiting.is_empty(), "{drained:?}");
 }
 
 #[test]

@@ -396,6 +396,122 @@
     "failures"
   ],
   "$defs": {
+    "Hold": {
+      "description": "Why a waiting job does not start yet.",
+      "oneOf": [
+        {
+          "description": "The most jobs run already.",
+          "type": "object",
+          "properties": {
+            "hold": {
+              "type": "string",
+              "const": "full"
+            },
+            "max_jobs": {
+              "description": "The most jobs that run at once.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "hold",
+            "max_jobs"
+          ]
+        },
+        {
+          "description": "The job's lane runs all but one place, which stays open for the\nother lane.",
+          "type": "object",
+          "properties": {
+            "hold": {
+              "type": "string",
+              "const": "lane"
+            },
+            "places": {
+              "description": "The most jobs that one lane runs.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "hold",
+            "places"
+          ]
+        },
+        {
+          "description": "The disk is critically short of free space.",
+          "type": "object",
+          "properties": {
+            "free_bytes": {
+              "description": "The disk's free bytes.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "hold": {
+              "type": "string",
+              "const": "disk"
+            },
+            "total_bytes": {
+              "description": "The disk's total bytes.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "hold",
+            "free_bytes",
+            "total_bytes"
+          ]
+        },
+        {
+          "description": "Memory pressure is above normal.",
+          "type": "object",
+          "properties": {
+            "hold": {
+              "type": "string",
+              "const": "memory"
+            },
+            "pressure": {
+              "description": "The memory pressure level.",
+              "$ref": "#/$defs/Pressure"
+            }
+          },
+          "required": [
+            "hold",
+            "pressure"
+          ]
+        },
+        {
+          "description": "The load, with the threads of the jobs started in the last minute,\nexceeds the cores.",
+          "type": "object",
+          "properties": {
+            "cores": {
+              "description": "The number of logical cores.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "hold": {
+              "type": "string",
+              "const": "load"
+            },
+            "projected": {
+              "description": "The 1-minute load plus those threads.",
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "hold",
+            "projected",
+            "cores"
+          ]
+        }
+      ]
+    },
     "Job": {
       "description": "A job, as a client describes it and `status` shows it.",
       "type": "object",
@@ -431,6 +547,18 @@
       "description": "The daemon's running and waiting jobs.",
       "type": "object",
       "properties": {
+        "held": {
+          "description": "Why the first waiting job does not start yet, or `null` when no job\nwaits or the daemon does not know.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hold"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "max_jobs": {
           "description": "The most jobs that the daemon lets run at once.",
           "type": "integer",
@@ -468,6 +596,7 @@
         "max_jobs",
         "running",
         "waiting",
+        "held",
         "reclaim"
       ]
     },

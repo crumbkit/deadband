@@ -149,6 +149,7 @@ fn ask_starts_the_job_when_the_daemon_answers_with_a_reply_the_client_does_not_e
         max_jobs: 1,
         running: Vec::new(),
         waiting: Vec::new(),
+        held: None,
         reclaim: None,
     };
     let (path, _received) = scripted(vec![Reply::Jobs(jobs)]);
@@ -165,6 +166,7 @@ fn jobs_returns_the_daemons_jobs() {
         max_jobs: 2,
         running: vec![job()],
         waiting: Vec::new(),
+        held: None,
         reclaim: None,
     };
     let (path, received) = scripted(vec![Reply::Jobs(listed.clone())]);
