@@ -22,6 +22,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 - Write the test first, named as a sentence (BASE-36).
 - Give each new dependency a reason in `Cargo.toml` (BASE-23).
 
+Read [docs/architecture.md](docs/architecture.md) for the modules and the rules
+that shape them.
+
 ## Writing
 
 Docs, comments and commit messages use plain declarative sentences with a
