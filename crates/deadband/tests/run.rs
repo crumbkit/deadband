@@ -151,13 +151,21 @@ fn a_normal_job_keeps_a_nice_value_above_5_that_its_caller_set() {
         reason = "the test runs the built binary under nice, as a person would"
     )]
     let mut command = Command::new("nice");
+    // The increment puts the job's caller at nice 6 or above, whatever the
+    // test runner's own nice value is.
+    let increment = (6 - caller).max(1);
     command
-        .args(["-n", "7", env!("CARGO_BIN_EXE_deadband"), "run", "--"])
+        .args(["-n", &increment.to_string()])
+        .args([env!("CARGO_BIN_EXE_deadband"), "run", "--"])
         .args(["sh", "-c", "ps -o nice= -p $$"])
         .env("DEADBAND_SOCKET", &socket.0);
     let run = output(command);
     let nice = String::from_utf8(run.stdout.clone()).expect("UTF-8");
-    assert_eq!(nice.trim().parse::<i32>().ok(), Some(caller + 7), "{run:?}");
+    assert_eq!(
+        nice.trim().parse::<i32>().ok(),
+        Some(caller + increment),
+        "{run:?}"
+    );
 }
 
 #[test]
