@@ -83,7 +83,7 @@ impl Drop for Daemon {
 }
 
 /// Runs `command` and returns its output.
-fn output(command: &mut Command) -> Output {
+fn output(mut command: Command) -> Output {
     #[expect(
         clippy::disallowed_methods,
         reason = "the test runs the built binary, as a person would"
