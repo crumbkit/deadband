@@ -15,6 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::admit::{Hold, Lane};
+use crate::reclaim::Reclaimed;
 
 #[cfg(test)]
 mod tests;
@@ -86,6 +87,9 @@ pub struct Jobs {
     pub running: Vec<Job>,
     /// The waiting jobs, the oldest first.
     pub waiting: Vec<Job>,
+    /// The last reclaim, or `null` when the daemon has run none.
+    #[serde(default)]
+    pub reclaim: Option<Reclaimed>,
 }
 
 /// Writes `message` to `writer` as one JSON line and flushes it.

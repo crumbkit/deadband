@@ -437,6 +437,18 @@
           "format": "uint",
           "minimum": 0
         },
+        "reclaim": {
+          "description": "The last reclaim, or `null` when the daemon has run none.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reclaimed"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "running": {
           "description": "The running jobs, in the order they started.",
           "type": "array",
@@ -455,7 +467,8 @@
       "required": [
         "max_jobs",
         "running",
-        "waiting"
+        "waiting",
+        "reclaim"
       ]
     },
     "Lane": {
@@ -491,6 +504,47 @@
           "type": "string",
           "const": "critical"
         }
+      ]
+    },
+    "Reclaimed": {
+      "description": "The last reclaim, as `deadband status` shows it.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "When the reclaim ended, in RFC 3339 form.",
+          "type": "string"
+        },
+        "failed": {
+          "description": "Why the reclaim failed, or `null` when it did not.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "freed_bytes": {
+          "description": "The bytes the reclaimer reported freeing, or `null` when it did not\nreport them.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "need": {
+          "description": "The `--need` that the daemon asked for, such as `memory=4G`.",
+          "type": "string"
+        },
+        "reclaimer": {
+          "description": "The reclaimer's name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "reclaimer",
+        "need",
+        "freed_bytes",
+        "failed"
       ]
     },
     "Status": {

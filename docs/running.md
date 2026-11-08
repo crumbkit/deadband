@@ -135,7 +135,106 @@ starts at once. When the probe cannot read the machine, the
 daemon admits each job as soon as a place is free, and its log says why.
 
 `deadband status` prints the load, memory pressure and swap, followed by the
-running and waiting jobs, or `daemon: not running` when no daemon answers.
+running and waiting jobs and the last reclaim, or `daemon: not running`
+when no daemon answers.
+
+## Reclaiming memory and disk
+
+A job that waits for memory or disk waits for something to free it. The
+daemon can ask a reclaimer, an external command that you name, to free
+memory or disk when the machine runs short. A reclaimer might stop the
+servers of idle workspaces, or delete build output that can be rebuilt.
+deadband never stops anything itself; the reclaimer decides what to stop.
+
+The daemon reads its config file once, when it starts. The file is
+`deadband/config.toml` in `$XDG_CONFIG_HOME`, or
+`~/.config/deadband/config.toml` when `XDG_CONFIG_HOME` is not set. Each
+`[[reclaim]]` table names one reclaimer:
+
+```toml
+# All four settings are optional; these are the defaults.
+reclaim_after = "60s"     # how long memory stays short before a reclaim, and the wait between reclaims; at least 10s
+reclaim_timeout = "5m"    # how long the daemon waits for one run of a reclaimer; more than 0
+reclaim_memory = "4G"     # the memory each reclaim asks for
+reclaim_disk = "20G"      # the disk each reclaim asks for
+
+[[reclaim]]
+name = "workspaces"
+command = ["/usr/local/bin/some-tool", "reclaim", "--json"]
+```
+
+The first word of `command` must be an absolute path. The daemon looks up
+a bare program name on its own `PATH`, and launchd starts the daemon with a
+short `PATH` that may not hold the program, so a bare name can fail to
+start. The other words are passed to the program as they are, with no
+shell.
+
+A size is a whole number with an optional `K`, `M`, `G` or `T`, each a
+power of 1024. An age is a number with a unit, such as `90s`, `5m` or
+`1h`. `reclaim_after` must be at least 10 seconds, and `reclaim_timeout`
+more than 0. Without the file, or without a `[[reclaim]]` table, the daemon
+never reclaims. A file that cannot be read, has an unknown key or breaks
+one of these limits turns reclaiming off, and the daemon's log says why in
+one line.
+
+The daemon reclaims memory once memory pressure has been above normal, or
+a job has waited for memory, for `reclaim_after` without a break. It
+reclaims disk as soon as free disk is critically low, under 20 GiB or 3%
+of the disk. For each reclaimer, in the order the file lists them, the
+daemon:
+
+1. Runs the command with `--need memory=4G --dry-run` added, or
+   `--need disk=20G --dry-run` for disk, and logs in one line what the
+   reclaimer would free.
+2. When the dry run plans to free any bytes, runs the same command without
+   `--dry-run`, and logs what the reclaimer freed.
+
+The daemon stops asking once the reclaimers have freed the need. It runs
+at most one reclaim at a time. After a reclaim of memory, memory must stay
+short for another `reclaim_after` before the next one. Memory and disk
+each keep their own wait, so a disk reclaim that frees nothing never holds
+back a memory reclaim, and the reverse. After a reclaim of a resource, the
+daemon waits `reclaim_after` before it reclaims that resource again. Each
+reclaim in a row that frees nothing doubles that wait, up to 30 minutes,
+and the log says that a reclaimer would free nothing only for the first of
+them. The wait returns to `reclaim_after` once a reclaim frees something
+or the resource is no longer short.
+
+The disk need is a fixed size, 20G unless `reclaim_disk` sets another. On
+a large disk, freeing 20G may leave free space under 3% of the disk, which
+still holds jobs. On a 2 TB disk, for example, 3% is about 60 GB. Set
+`reclaim_disk` to at least 3% of the disk to lift free space above the
+limit in one reclaim; otherwise the daemon asks again after its wait. A
+reclaim runs beside admission, so a job that the machine can take starts
+while a reclaimer runs.
+
+A reclaimer that cannot start, exits with a code other than 0, prints
+something other than its report, or runs past `reclaim_timeout` counts as
+failed. The daemon logs the failure in one line and moves on to the next
+reclaimer. A failed reclaimer holds no job. deadband never signals or
+stops a reclaimer. When one runs past its timeout, the daemon stops
+waiting for it and starts no other reclaim until it exits.
+
+The reclaimer reads nothing on standard input, and the daemon discards its
+standard error. It prints one JSON object on standard output. deadband
+reads only `data`, an array of objects, and two fields of each object:
+
+| Field | Meaning |
+| --- | --- |
+| `freed` | The bytes the item freed, or would free on a dry run, as a whole number. Required. |
+| `name` | The item's name, which the log shows when `freed` is above 0. Optional. |
+
+deadband adds up `freed` across `data` and ignores every other field. For
+example:
+
+```json
+{"data": [{"name": "idle-one", "freed": 5368709120}, {"name": "busy", "freed": 0}]}
+```
+
+`deadband status` shows the last reclaim: when it ended, which reclaimer
+ran, the need it asked for, the bytes it reported freeing and why it
+failed, if it did. `deadband status --json` gives the same in the daemon's
+`reclaim` field.
 
 ## Where the socket is
 
@@ -159,7 +258,10 @@ path, the daemon refuses to start and removes nothing.
 ## Running the daemon under launchd
 
 launchd starts a user agent with few environment variables, so the agent
-sets `TMPDIR` to the directory that a terminal's `TMPDIR` names. Print it
+sets `TMPDIR` to the directory that a terminal's `TMPDIR` names. It also
+sets `PATH`, with your home directory written out in full, because
+launchd does not expand `~` or `$HOME`. The jobs that `deadband run` starts
+inherit their caller's `PATH`, but reclaimers inherit the daemon's. Print it
 with:
 
 ```sh
@@ -186,6 +288,8 @@ examples:
   <dict>
     <key>TMPDIR</key>
     <string>/var/folders/ab/abcdefgh/T/</string>
+    <key>PATH</key>
+    <string>/Users/me/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

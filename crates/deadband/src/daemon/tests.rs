@@ -104,6 +104,7 @@ fn start(max_jobs: usize, dial: &Dial) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
         priority_file: None,
         sample_every: SAMPLE_EVERY,
         first_line_within: FIRST_LINE_WITHIN,
+        reclaim: crate::reclaim::Config::default(),
     };
     let probe = dial.clone();
     // The closure takes the whole `Bound`, so its lock lives as long as the
@@ -227,6 +228,7 @@ fn status_lists_the_running_and_the_waiting_jobs() {
             max_jobs: 1,
             running: vec![job("a")],
             waiting: vec![job("b")],
+            reclaim: None,
         }
     );
 }

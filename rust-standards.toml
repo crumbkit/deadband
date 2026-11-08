@@ -110,9 +110,9 @@ correction = "a later deadband pull request turns it on"
 
 [[exception]]
 rule = "PROC-1"
-paths = ["crates/deadband/src/job.rs"]
+paths = ["crates/deadband/src/job.rs", "crates/deadband/src/job/reclaimer.rs"]
 owner = "Luke"
-reason = "`deadband run` exists to run the command its caller names, so job.rs's one operation takes an arbitrary program and arguments. The caller could run the same command without deadband, so deadband adds no privilege. job.rs states PROC-2's five items for the operation."
+reason = "`deadband run` exists to run the command its caller names, so job.rs's one operation takes an arbitrary program and arguments. The caller could run the same command without deadband, so deadband adds no privilege. job.rs states PROC-2's five items for the operation. job/reclaimer.rs runs the reclaimer command that the daemon's config file names, which the person who runs the daemon writes and could run as themselves; it states PROC-2's five items for its operation."
 correction = "a change to the child-process profile that covers a wrapper which runs its caller's command, or a decision that records this one"
 
 [[exception]]

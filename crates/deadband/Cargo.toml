@@ -34,6 +34,14 @@ serde_json = { version = "1.0.154", default-features = false, features = ["std"]
 # unsafe code. crumbkit already depends on it on Unix.
 rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process"] }
 
+# basic-toml reads the daemon's config file. A measured comparison chose it
+# over the toml crate: it adds one crate, which depends only on serde, and
+# its refusals read as one line.
+basic-toml = "0.1.10"
+# humantime reads the ages in the config file, such as "60s", and writes
+# the time of the last reclaim. crumbkit already depends on it.
+humantime = { version = "2.4.0", default-features = false }
+
 # libc calls getloadavg and sysctlbyname, which read the load average, the
 # memory pressure level and swap use on macOS. A measured comparison chose
 # libc over the sysinfo crate, which has no memory pressure level.

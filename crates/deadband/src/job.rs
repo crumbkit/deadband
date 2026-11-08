@@ -1,5 +1,6 @@
-//! Starts the job that `deadband run` was given. It is the only module that
-//! starts a process (PROC-1).
+//! Starts the job that `deadband run` was given, and in [`reclaimer`] the
+//! reclaimers that the daemon's config file names. It is the only module
+//! that starts a process (PROC-1).
 //!
 //! The one operation, [`run`], states the five items of PROC-2:
 //!
@@ -25,6 +26,7 @@ use std::io;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, ExitStatus};
 
+pub mod reclaimer;
 #[cfg(test)]
 mod tests;
 

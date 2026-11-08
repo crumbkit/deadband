@@ -57,7 +57,7 @@ pub const VARIABLES: &[Variable] = &[
     },
     Variable {
         name: "XDG_CONFIG_HOME",
-        purpose: "the configuration directory, which holds `deadband/priority`",
+        purpose: "the configuration directory, which holds `deadband/priority` and `deadband/config.toml`",
         form: "a directory path",
         absent: "deadband uses ~/.config",
     },

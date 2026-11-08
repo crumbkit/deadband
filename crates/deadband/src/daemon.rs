@@ -22,9 +22,10 @@ use std::time::{Duration, Instant};
 use rustix::io::Errno;
 
 use self::reading::{priority_active, read_machine};
-use crate::admit::{JobId, Limits, Queue, Reading};
-use crate::probe::Probe;
+use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
+use crate::probe::{Pressure, Probe};
 use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
+use crate::reclaim::{self, Reclaimed, Resource, Watch};
 
 mod bind;
 mod reading;
@@ -71,15 +72,17 @@ pub struct Settings {
     pub sample_every: Duration,
     /// How long the daemon waits for a new connection's first line.
     pub first_line_within: Duration,
+    /// The reclaimers and when the daemon asks them.
+    pub reclaim: reclaim::Config,
 }
 
 impl Settings {
     /// Returns the settings with `max_jobs`, `cores`, `home` and
-    /// `priority_file`, the
-    /// default sampling interval, [`SAMPLE_EVERY`], and the default wait for
-    /// a first line, [`FIRST_LINE_WITHIN`].
+    /// `priority_file`, the default sampling interval, [`SAMPLE_EVERY`],
+    /// the default wait for a first line, [`FIRST_LINE_WITHIN`], and no
+    /// reclaimer.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         max_jobs: NonZeroUsize,
         cores: Option<NonZeroUsize>,
         home: Option<PathBuf>,
@@ -92,6 +95,7 @@ impl Settings {
             priority_file,
             sample_every: SAMPLE_EVERY,
             first_line_within: FIRST_LINE_WITHIN,
+            reclaim: reclaim::Config::default(),
         }
     }
 }
@@ -124,6 +128,10 @@ struct State {
     reserve_lanes: bool,
     /// How the daemon admits jobs.
     settings: Settings,
+    /// When the daemon last reclaimed and whether a reclaim runs.
+    watch: Watch,
+    /// The last reclaim, for `deadband status`.
+    reclaimed: Option<Reclaimed>,
 }
 
 impl State {
@@ -162,7 +170,26 @@ impl State {
             max_jobs: self.settings.max_jobs.get(),
             running: self.queue.running().map(|each| each.job.clone()).collect(),
             waiting: self.queue.waiting().map(|each| each.job.clone()).collect(),
+            reclaim: self.reclaimed.clone(),
         }
+    }
+
+    /// Feeds the latest reading and hold to the reclaim rule, and returns
+    /// what to reclaim now. Memory counts as short while pressure is above
+    /// normal or a job waits for memory.
+    fn reclaim_now(&mut self) -> Option<Resource> {
+        let reading = self.reading.as_ref();
+        let memory_short = reading.is_some_and(|reading| reading.pressure != Pressure::Normal)
+            || matches!(self.queue.held(), Some(Hold::Memory { .. }));
+        let disk_short = reading
+            .and_then(|reading| reading.disk)
+            .is_some_and(|disk| disk_critical(&disk));
+        self.watch.observe(
+            &self.settings.reclaim,
+            memory_short,
+            disk_short,
+            Instant::now(),
+        )
     }
 }
 
@@ -203,6 +230,8 @@ pub fn serve<P: Probe + Send + 'static>(
         reading,
         reserve_lanes,
         settings,
+        watch: Watch::default(),
+        reclaimed: None,
     }));
     // The sampler stops when `serve` returns and drops `_stop`.
     let (_stop, stopped) = mpsc::channel::<()>();
@@ -264,7 +293,34 @@ fn sample(shared: &Shared, probe: &impl Probe, stopped: &mpsc::Receiver<()>, log
         state.reading = reading;
         state.reserve_lanes = reserve_lanes;
         state.grant();
+        if let Some(resource) = state.reclaim_now() {
+            let config = state.settings.reclaim.clone();
+            let quiet = state.watch.quiet(resource);
+            drop(state);
+            start_reclaim(shared, config, resource, quiet, log);
+        }
     }
+}
+
+/// Runs the reclaimers of `config` for `resource` on a thread of their
+/// own, so admission never waits for them, and records each outcome for
+/// `deadband status`. `quiet` says the last reclaim of `resource` freed
+/// nothing.
+fn start_reclaim(
+    shared: &Shared,
+    config: reclaim::Config,
+    resource: Resource,
+    quiet: bool,
+    log: &Log,
+) {
+    let shared = Arc::clone(shared);
+    let log = Arc::clone(log);
+    thread::spawn(move || {
+        let freed = reclaim::reclaim(&config, resource, quiet, &log, &mut |reclaimed| {
+            lock(&shared).reclaimed = Some(reclaimed);
+        });
+        lock(&shared).watch.ended(freed, Instant::now());
+    });
 }
 
 /// Serves one client on `stream`. A client that sends no first line within

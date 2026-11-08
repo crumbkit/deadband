@@ -144,6 +144,9 @@ impl fmt::Display for Status {
                 job.label, job.pid, job.command
             )?;
         }
+        if let Some(reclaimed) = &jobs.reclaim {
+            write!(f, "\n{reclaimed}")?;
+        }
         Ok(())
     }
 }
