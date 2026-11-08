@@ -1,9 +1,8 @@
 //! Tests of `deadband run` and `deadband daemon` through the built binary,
 //! which are the plan's acceptance checks.
 
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::Command;
 
 /// A socket path in the temporary directory. Dropping it removes the
 /// socket and its lock file.
@@ -48,66 +47,83 @@ fn deadband(socket: &Path, args: &[&str]) -> Command {
     command
 }
 
-/// A daemon that the test started, which the test stops when it ends.
-struct Daemon(Child);
+/// The helpers of the tests that start a daemon.
+#[cfg(test)]
+mod support {
+    use std::io::{BufRead, BufReader};
+    use std::path::Path;
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the test holds the daemon it started, to stop it when it ends"
+    )]
+    use std::process::Child;
+    use std::process::{Command, Output, Stdio};
 
-impl Daemon {
-    /// Starts a daemon on `socket` that runs at most `max_jobs` jobs, and
-    /// waits until it listens.
-    fn start(socket: &Path, max_jobs: &str) -> Self {
+    use super::deadband;
+
+    /// A daemon that the test started, which the test stops when it ends.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the test holds the daemon it started, to stop it when it ends"
+    )]
+    pub(crate) struct Daemon(Child);
+
+    impl Daemon {
+        /// Starts a daemon on `socket` that runs at most `max_jobs` jobs, and
+        /// waits until it listens.
+        pub(crate) fn start(socket: &Path, max_jobs: &str) -> Self {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the test runs the built binary as a person would"
+            )]
+            let mut daemon = deadband(socket, &["daemon", "--max-jobs", max_jobs])
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("the daemon starts");
+            let err = daemon.stderr.take().expect("piped");
+            let mut first = String::new();
+            BufReader::new(err).read_line(&mut first).expect("reads");
+            assert!(first.contains("listens on"), "{first}");
+            Self(daemon)
+        }
+    }
+
+    impl Drop for Daemon {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// Runs `command` and returns its output.
+    pub(crate) fn output(mut command: Command) -> Output {
         #[expect(
             clippy::disallowed_methods,
-            reason = "the test runs the built binary as a person would"
+            reason = "the test runs the built binary, as a person would"
         )]
-        let mut daemon = deadband(socket, &["daemon", "--max-jobs", max_jobs])
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("the daemon starts");
-        let err = daemon.stderr.take().expect("piped");
-        let mut first = String::new();
-        BufReader::new(err).read_line(&mut first).expect("reads");
-        assert!(first.contains("listens on"), "{first}");
-        Self(daemon)
+        let output = command.output().expect("deadband runs");
+        output
+    }
+
+    /// Returns the nice value of the process `pid`, as `ps` prints it.
+    pub(crate) fn nice_of(pid: &str) -> i32 {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test reads a nice value with ps"
+        )]
+        let ps = Command::new("ps")
+            .args(["-o", "nice=", "-p", pid])
+            .output()
+            .expect("ps runs");
+        String::from_utf8(ps.stdout)
+            .expect("UTF-8")
+            .trim()
+            .parse()
+            .expect("ps prints a number")
     }
 }
 
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the test stops the daemon it started"
-        )]
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-/// Runs `command` and returns its output.
-fn output(mut command: Command) -> Output {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the test runs the built binary, as a person would"
-    )]
-    let output = command.output().expect("deadband runs");
-    output
-}
-
-/// Returns the nice value of the process `pid`, as `ps` prints it.
-fn nice_of(pid: &str) -> i32 {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the test reads a nice value with ps"
-    )]
-    let ps = Command::new("ps")
-        .args(["-o", "nice=", "-p", pid])
-        .output()
-        .expect("ps runs");
-    String::from_utf8(ps.stdout)
-        .expect("UTF-8")
-        .trim()
-        .parse()
-        .expect("ps prints a number")
-}
+use support::{Daemon, nice_of, output};
 
 #[test]
 fn a_granted_job_on_a_daemon_of_two_jobs_gets_half_the_cores_as_its_build_jobs() {
@@ -234,7 +250,7 @@ mod macos {
         let out = running.stdout.take().expect("piped");
         assert_eq!(line(out).expect("reads"), "started\n");
 
-        let mut queue = |lane: &str| {
+        let queue = |lane: &str| {
             let script = format!("echo {lane} >> {order_path}; sleep 1");
             let mut run = deadband(socket, &["run", "--lane", lane, "--", "sh", "-c", &script])
                 .stderr(Stdio::piped())
