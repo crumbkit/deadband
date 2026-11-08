@@ -84,14 +84,25 @@ fn pressure_names_read_as_the_kernel_levels() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn the_macos_probe_reads_a_known_pressure_level() {
+fn the_macos_probe_reads_the_machine() {
     use super::{Probe, System};
 
     let sample = System.sample().expect("the macOS probe reads the machine");
-    assert!(matches!(
-        sample.memory_pressure,
-        Pressure::Normal | Pressure::Warn | Pressure::Critical
-    ));
-    assert!(sample.swap.used_bytes <= sample.swap.total_bytes);
+    assert!(sample.swap_used_bytes <= sample.swap_total_bytes);
     assert!(sample.load_1m >= 0.0);
+}
+
+#[test]
+fn a_value_of_an_unknown_form_offers_no_retry() {
+    use crumbkit::{Failure, Recovery};
+
+    let failure = parse_pressure(&3_i32.to_ne_bytes()).expect_err("level 3 is unknown");
+    assert!(matches!(failure.recovery(), Recovery::None { .. }));
+}
+
+#[test]
+fn a_failed_load_reading_offers_a_retry() {
+    use crumbkit::{Failure, Recovery};
+
+    assert!(matches!(Unreadable::Load.recovery(), Recovery::Retry));
 }

@@ -4,10 +4,8 @@
 use clap::CommandFactory;
 use crumbkit::{Code, Sink};
 
-use super::{Cli, GUIDE, run_to};
-use crate::probe::{
-    MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Pressure, Probe, Sample, Swap, Unreadable,
-};
+use super::{Cli, EXIT_MACHINE, GUIDE, run_to};
+use crate::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Pressure, Probe, Sample, Unreadable};
 
 /// A probe that returns one fixed sample.
 struct Fixed;
@@ -17,10 +15,8 @@ impl Probe for Fixed {
         Ok(Sample {
             load_1m: 4.25,
             memory_pressure: Pressure::Warn,
-            swap: Swap {
-                used_bytes: 11_605 * 1_048_576,
-                total_bytes: 13_312 * 1_048_576,
-            },
+            swap_used_bytes: 11_605 * 1_048_576,
+            swap_total_bytes: 13_312 * 1_048_576,
         })
     }
 }
@@ -77,10 +73,14 @@ fn status_with_json_prints_the_sample_in_the_status_document() {
 #[test]
 fn status_says_in_one_line_why_the_probe_failed() {
     let (code, out, err) = run(&["status"], &Broken);
-    assert_eq!(code, 1);
+    assert_eq!(code, EXIT_MACHINE);
     assert_eq!(out, "");
     assert!(
         err.contains("deadband could not read the 1-minute load average"),
+        "{err}"
+    );
+    assert!(
+        err.contains("code:  deadband::machine::unreadable"),
         "{err}"
     );
 }
@@ -90,6 +90,16 @@ fn the_guide_gives_status_an_example_its_effects_and_its_document() {
     crumbkit_test::check_guide(&Cli::command(), &GUIDE, &[]);
     crumbkit_test::check_effects(&Cli::command(), &GUIDE, &[]);
     crumbkit_test::check_document_ids(&Cli::command(), &GUIDE, &[]);
+}
+
+#[test]
+fn every_document_schema_matches_its_golden_file() {
+    crumbkit_test::check_schema_goldens(&Cli::command(), &GUIDE, "tests/golden/schemas");
+}
+
+#[test]
+fn every_exit_code_is_declared_with_its_failures() {
+    crumbkit_test::check_exit_codes(&Cli::command(), &GUIDE, &[]);
 }
 
 #[test]

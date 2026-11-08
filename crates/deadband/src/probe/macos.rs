@@ -18,10 +18,12 @@ const _: () = assert!(size_of::<libc::c_int>() == PRESSURE_BYTES);
 
 /// Takes one sample of the machine.
 pub(super) fn sample() -> Result<Sample, Unreadable> {
+    let swap = parse_swap(&sysctl(SWAP_SYSCTL, SWAP_USAGE_BYTES)?)?;
     Ok(Sample {
         load_1m: load_1m()?,
         memory_pressure: parse_pressure(&sysctl(PRESSURE_SYSCTL, PRESSURE_BYTES)?)?,
-        swap: parse_swap(&sysctl(SWAP_SYSCTL, SWAP_USAGE_BYTES)?)?,
+        swap_used_bytes: swap.used_bytes,
+        swap_total_bytes: swap.total_bytes,
     })
 }
 

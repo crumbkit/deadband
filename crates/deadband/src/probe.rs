@@ -7,14 +7,12 @@
 //! which is the only module with unsafe code. The parsing of each sysctl
 //! value lives here, in safe code that runs on every platform.
 
-use std::borrow::Cow;
 use std::ffi::CStr;
 use std::fmt;
 
-use crumbkit::schemars::{self, JsonSchema, Schema, SchemaGenerator};
-use crumbkit::serde::ser::SerializeStruct;
-use crumbkit::serde::{Serialize, Serializer};
 use crumbkit::{Code, Failure, Recovery};
+use schemars::JsonSchema;
+use serde::Serialize;
 
 #[cfg(target_os = "macos")]
 #[expect(
@@ -34,19 +32,19 @@ pub const MACHINE_UNREADABLE: Code = Code::new("deadband", "machine", "unreadabl
 pub const MACHINE_UNSUPPORTED: Code = Code::new("deadband", "machine", "unsupported");
 
 /// The sysctl that holds the kernel's memory pressure level.
-pub const PRESSURE_SYSCTL: &CStr = c"kern.memorystatus_vm_pressure_level";
+pub(crate) const PRESSURE_SYSCTL: &CStr = c"kern.memorystatus_vm_pressure_level";
 
 /// The sysctl that holds the swap in use and the swap the machine has.
-pub const SWAP_SYSCTL: &CStr = c"vm.swapusage";
+pub(crate) const SWAP_SYSCTL: &CStr = c"vm.swapusage";
 
 /// The length of the value of `vm.swapusage`, the C struct `xsw_usage`:
 /// three 64-bit counts of bytes (total, available and used), the page size
 /// and whether swap is encrypted.
-pub const SWAP_USAGE_BYTES: usize = 32;
+pub(crate) const SWAP_USAGE_BYTES: usize = 32;
 
 /// The length of the value of `kern.memorystatus_vm_pressure_level`, a C
 /// `int`.
-pub const PRESSURE_BYTES: usize = 4;
+pub(crate) const PRESSURE_BYTES: usize = 4;
 
 /// Something that takes one sample of the machine.
 pub trait Probe {
@@ -59,14 +57,16 @@ pub trait Probe {
 }
 
 /// One sample of the machine.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
 pub struct Sample {
     /// The 1-minute load average.
     pub load_1m: f64,
     /// The kernel's memory pressure level.
     pub memory_pressure: Pressure,
-    /// The swap in use and the swap the machine has.
-    pub swap: Swap,
+    /// The bytes of swap in use.
+    pub swap_used_bytes: u64,
+    /// The bytes of swap the machine has.
+    pub swap_total_bytes: u64,
 }
 
 /// The number of bytes in a mebibyte, which the text output counts swap in.
@@ -79,69 +79,21 @@ impl fmt::Display for Sample {
         write!(
             f,
             "swap: {} MiB used of {} MiB",
-            self.swap.used_bytes / MEBIBYTE,
-            self.swap.total_bytes / MEBIBYTE
+            self.swap_used_bytes / MEBIBYTE,
+            self.swap_total_bytes / MEBIBYTE
         )
     }
 }
 
-/// The sample's JSON form, which `deadband status --json` prints under
-/// `data`.
-impl Serialize for Sample {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut fields = serializer.serialize_struct("Sample", 4)?;
-        fields.serialize_field("load_1m", &self.load_1m)?;
-        fields.serialize_field("memory_pressure", self.memory_pressure.name())?;
-        fields.serialize_field("swap_used_bytes", &self.swap.used_bytes)?;
-        fields.serialize_field("swap_total_bytes", &self.swap.total_bytes)?;
-        fields.end()
-    }
-}
-
-/// The JSON Schema of the sample's JSON form.
-impl JsonSchema for Sample {
-    fn schema_name() -> Cow<'static, str> {
-        Cow::Borrowed("Sample")
-    }
-
-    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-        schemars::json_schema!({
-            "description": "One sample of the machine.",
-            "type": "object",
-            "properties": {
-                "load_1m": {
-                    "description": "The 1-minute load average.",
-                    "type": "number",
-                },
-                "memory_pressure": {
-                    "description": "The kernel's memory pressure level.",
-                    "enum": ["normal", "warn", "critical"],
-                },
-                "swap_used_bytes": {
-                    "description": "The bytes of swap in use.",
-                    "type": "integer",
-                    "minimum": 0,
-                },
-                "swap_total_bytes": {
-                    "description": "The bytes of swap the machine has.",
-                    "type": "integer",
-                    "minimum": 0,
-                },
-            },
-            "required": ["load_1m", "memory_pressure", "swap_used_bytes", "swap_total_bytes"],
-            "additionalProperties": false,
-        })
-    }
-}
-
 /// The kernel's memory pressure level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum Pressure {
     /// Memory is plentiful.
     Normal,
     /// The kernel is asking processes to free memory.
     Warn,
-    /// The kernel has run out of memory to give and is ending processes.
+    /// The kernel's most severe pressure level.
     Critical,
 }
 
@@ -163,13 +115,14 @@ impl fmt::Display for Pressure {
     }
 }
 
-/// The swap in use and the swap the machine has, in bytes.
+/// The swap in use and the swap the machine has, in bytes, as
+/// `vm.swapusage` gives them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Swap {
+pub(crate) struct Swap {
     /// The bytes of swap in use.
-    pub used_bytes: u64,
+    pub(crate) used_bytes: u64,
     /// The bytes of swap the machine has.
-    pub total_bytes: u64,
+    pub(crate) total_bytes: u64,
 }
 
 /// The probe of the machine deadband runs on. It reads macOS, and on any
@@ -246,7 +199,10 @@ impl Failure for Unreadable {
             Self::Unsupported => Recovery::None {
                 reason: "deadband has no probe for this platform yet".to_owned(),
             },
-            Self::Load | Self::Sysctl { .. } | Self::Value { .. } => Recovery::Retry,
+            Self::Value { .. } => Recovery::None {
+                reason: "this macOS gives the value in a form deadband does not know, so a retry reads the same form".to_owned(),
+            },
+            Self::Load | Self::Sysctl { .. } => Recovery::Retry,
         }
     }
 }
@@ -258,7 +214,7 @@ impl Failure for Unreadable {
 ///
 /// Returns [`Unreadable::Value`] for a value of the wrong length or an
 /// unknown level.
-pub fn parse_pressure(bytes: &[u8]) -> Result<Pressure, Unreadable> {
+pub(crate) fn parse_pressure(bytes: &[u8]) -> Result<Pressure, Unreadable> {
     let level: [u8; PRESSURE_BYTES] = bytes.try_into().map_err(|_| Unreadable::Value {
         name: PRESSURE_SYSCTL,
         problem: format!(
@@ -283,30 +239,25 @@ pub fn parse_pressure(bytes: &[u8]) -> Result<Pressure, Unreadable> {
 /// # Errors
 ///
 /// Returns [`Unreadable::Value`] for a value of the wrong length.
-pub fn parse_swap(bytes: &[u8]) -> Result<Swap, Unreadable> {
-    let wrong_length = || Unreadable::Value {
+pub(crate) fn parse_swap(bytes: &[u8]) -> Result<Swap, Unreadable> {
+    let value: [u8; SWAP_USAGE_BYTES] = bytes.try_into().map_err(|_| Unreadable::Value {
         name: SWAP_SYSCTL,
         problem: format!(
             "the value is {} bytes long, not {SWAP_USAGE_BYTES}",
             bytes.len()
         ),
-    };
-    if bytes.len() != SWAP_USAGE_BYTES {
-        return Err(wrong_length());
-    }
-    match (u64_at(bytes, 0), u64_at(bytes, 16)) {
-        (Some(total_bytes), Some(used_bytes)) => Ok(Swap {
-            used_bytes,
-            total_bytes,
-        }),
-        _ => Err(wrong_length()),
-    }
-}
-
-/// Returns the native-endian `u64` at `offset` in `bytes`, or `None` when
-/// `bytes` ends first.
-fn u64_at(bytes: &[u8], offset: usize) -> Option<u64> {
-    let end = offset.checked_add(8)?;
-    let word: [u8; 8] = bytes.get(offset..end)?.try_into().ok()?;
-    Some(u64::from_ne_bytes(word))
+    })?;
+    // The total, the available and the used bytes are the first three
+    // 8-byte words. The page size and the encryption flag follow.
+    #[rustfmt::skip]
+    let [
+        t0, t1, t2, t3, t4, t5, t6, t7,
+        _, _, _, _, _, _, _, _,
+        u0, u1, u2, u3, u4, u5, u6, u7,
+        ..
+    ] = value;
+    Ok(Swap {
+        used_bytes: u64::from_ne_bytes([u0, u1, u2, u3, u4, u5, u6, u7]),
+        total_bytes: u64::from_ne_bytes([t0, t1, t2, t3, t4, t5, t6, t7]),
+    })
 }

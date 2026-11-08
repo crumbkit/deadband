@@ -5,10 +5,10 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use crumbkit::help::{Effects, Example, Guide, Leaf};
+use crumbkit::help::{Effects, Example, Exit, Guide, Leaf};
 use crumbkit::{Document, Prose, Sink, ViewFlags};
 
-use crate::probe::{Probe, Sample, Unreadable};
+use crate::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Probe, Sample, Unreadable};
 
 #[cfg(test)]
 mod tests;
@@ -41,14 +41,23 @@ pub const STATUS: Document<Prose<Sample>> = Document::new(
     "One sample of the machine's 1-minute load average, memory pressure and swap.",
 );
 
-/// deadband's guide: the examples, effects and document of each command.
-pub const GUIDE: Guide = Guide::new().leaves(&[Leaf::new(&["status"])
-    .examples(&[
-        Example::new(&[], "Print the machine's load, memory pressure and swap"),
-        Example::new(&["--json"], "Print the same sample as a JSON document"),
-    ])
-    .effects(Effects::read_only())
-    .document(STATUS)]);
+/// The exit code of a run that could not read the machine.
+pub const EXIT_MACHINE: u8 = 3;
+
+/// deadband's guide: the examples, effects and document of each command,
+/// and the exit codes with the failures that produce them.
+pub const GUIDE: Guide = Guide::new()
+    .leaves(&[Leaf::new(&["status"])
+        .examples(&[
+            Example::new(&[], "Print the machine's load, memory pressure and swap"),
+            Example::new(&["--json"], "Print the same sample as a JSON document"),
+        ])
+        .effects(Effects::read_only())
+        .document(STATUS)])
+    .exits(&[
+        Exit::new(EXIT_MACHINE, "deadband could not read the machine.")
+            .failures(&[&MACHINE_UNREADABLE, &MACHINE_UNSUPPORTED]),
+    ]);
 
 /// Parses the process's command line, runs the command against `probe` and
 /// prints the result to standard output and standard error.
