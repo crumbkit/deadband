@@ -44,9 +44,10 @@ when all of these hold:
   quarter of the logical cores, rounded up, and at least 1, so a machine
   with 14 cores runs 4 jobs at once.
 - When the priority file holds at least one entry and `--max-jobs` is more
-  than 1, the job's lane runs fewer than `--max-jobs` minus 1 jobs. Each
-  lane leaves the last place open for the other, so a fast job starts at
-  once on a machine full of normal jobs, and the reverse.
+  than 1, fewer than `--max-jobs` minus 1 jobs run in the job's lane, so a
+  lane runs at most `--max-jobs` minus 1 jobs. With `--max-jobs 4`, each lane
+  runs at most 3. Each lane leaves the last place open for the other, so a
+  fast job starts at once on a machine full of normal jobs, and the reverse.
 - The disk has at least 20 GiB free, and its free space is at least 3% of
   the disk.
 - Memory pressure is normal.
@@ -108,8 +109,10 @@ release
 An entry that starts with `/` or `~` matches a job whose working directory
 is that directory or under it. Any other word matches a job whose `--label`
 is that word, or whose working directory has a part named that word. The
-word `exclusive` matches nothing. deadband reads the file each time
-`deadband run` starts, so a change applies to the next job.
+word `exclusive` matches nothing. `deadband run` reads the file each time it
+starts, so a change applies to the next job. The daemon also reads the file
+every second to decide whether the lanes reserve a place, so emptying the
+file ends the reservation within a second.
 
 ## Jobs inside jobs
 
@@ -316,3 +319,8 @@ launchctl bootout gui/$(id -u)/io.github.crumbkit.deadband
 
 Stopping the daemon does not stop any job. Each running `deadband run`
 keeps running its job, and each waiting one starts its job at once.
+
+A daemon that launchd restarts starts with an empty queue and an empty list
+of running jobs. It admits up to `--max-jobs` more jobs while jobs that the
+earlier daemon granted may still be running, so the machine can briefly run
+more than `--max-jobs` jobs.

@@ -1,9 +1,11 @@
 # The union of the clippy.toml fragments of the base, cli, child-process and
 # durable-state profiles of the Rust standards. Each effect belongs to one
 # owning module, which suppresses the lint with #[expect] and a reason
-# (BASE-5). deadband has none of these modules yet, so each reason stays
-# generic until its owning module exists, and the change that adds the module
-# names its path in the reason.
+# (BASE-5). The environment, process, priority and entry-point effects have
+# owning modules now, and their reasons name them. The DUR-1 and DUR-2
+# entries have no owning module yet, because deadband writes no durable file
+# and takes no file lock. The change that adds one names its path in the
+# #[expect] reason.
 
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
