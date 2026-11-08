@@ -22,15 +22,26 @@ mod tests;
 /// The word that matches nothing.
 const EXCLUSIVE: &str = "exclusive";
 
+/// Returns the entries of the priority file's text `words`.
+fn entries(words: &str) -> impl Iterator<Item = &str> {
+    words
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or_default().trim())
+        .filter(|entry| !entry.is_empty() && *entry != EXCLUSIVE)
+}
+
+/// Reports whether the priority file's text `words` holds at least one
+/// entry, which makes each lane leave one place open for the other.
+#[must_use]
+pub fn active(words: &str) -> bool {
+    entries(words).next().is_some()
+}
+
 /// Returns the lane of a job labelled `label` in the working directory
 /// `cwd`, given the priority file's text `words` and the home directory.
 #[must_use]
 pub fn lane(words: &str, label: &str, cwd: Option<&Path>, home: Option<&Path>) -> Lane {
-    let entries = words
-        .lines()
-        .map(|line| line.split('#').next().unwrap_or_default().trim())
-        .filter(|entry| !entry.is_empty() && *entry != EXCLUSIVE);
-    for entry in entries {
+    for entry in entries(words) {
         if matches(entry, label, cwd, home) {
             return Lane::Fast;
         }

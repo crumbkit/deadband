@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use rustix::io::Errno;
 
-use self::reading::read_machine;
+use self::reading::{priority_active, read_machine};
 use crate::admit::{JobId, Limits, Queue, Reading};
 use crate::probe::Probe;
 use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
@@ -64,6 +64,9 @@ pub struct Settings {
     /// The home directory, whose disk the daemon reads, or `None` when it
     /// is unknown and the disk holds no job.
     pub home: Option<PathBuf>,
+    /// The priority file. While it holds an entry, each lane leaves one
+    /// place open for the other.
+    pub priority_file: Option<PathBuf>,
     /// How often the daemon samples the probe.
     pub sample_every: Duration,
     /// How long the daemon waits for a new connection's first line.
@@ -71,7 +74,8 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// Returns the settings with `max_jobs`, `cores` and `home`, the
+    /// Returns the settings with `max_jobs`, `cores`, `home` and
+    /// `priority_file`, the
     /// default sampling interval, [`SAMPLE_EVERY`], and the default wait for
     /// a first line, [`FIRST_LINE_WITHIN`].
     #[must_use]
@@ -79,23 +83,26 @@ impl Settings {
         max_jobs: NonZeroUsize,
         cores: Option<NonZeroUsize>,
         home: Option<PathBuf>,
+        priority_file: Option<PathBuf>,
     ) -> Self {
         Self {
             max_jobs,
             cores,
             home,
+            priority_file,
             sample_every: SAMPLE_EVERY,
             first_line_within: FIRST_LINE_WITHIN,
         }
     }
 }
 
-/// Returns the default maximum number of jobs: half the logical cores that
-/// `cores` gives, and at least 1.
+/// Returns the default maximum number of jobs: a quarter of the logical
+/// cores that `cores` gives, rounded up, and at least 1. With 14 cores it
+/// is 4 jobs of 3 threads each.
 #[must_use]
 pub fn default_max_jobs(cores: Option<NonZeroUsize>) -> NonZeroUsize {
-    let half = cores.map_or(1, |cores| cores.get() / 2);
-    NonZeroUsize::new(half).unwrap_or(NonZeroUsize::MIN)
+    let quarter = cores.map_or(1, |cores| cores.get().div_ceil(4));
+    NonZeroUsize::new(quarter).unwrap_or(NonZeroUsize::MIN)
 }
 
 /// A job that waits or runs, with the connection to its client.
@@ -113,6 +120,8 @@ struct State {
     queue: Queue<Waiter>,
     /// The latest reading of the machine, or `None` when the probe failed.
     reading: Option<Reading>,
+    /// Whether the priority file held an entry at the latest reading.
+    reserve_lanes: bool,
     /// How the daemon admits jobs.
     settings: Settings,
 }
@@ -125,6 +134,7 @@ impl State {
         let limits = Limits {
             max_jobs: self.settings.max_jobs,
             cores: self.settings.cores,
+            reserve_lanes: self.reserve_lanes,
         };
         loop {
             let started = self
@@ -187,9 +197,11 @@ pub fn serve<P: Probe + Send + 'static>(
     log: &Log,
 ) -> io::Error {
     let reading = read_machine(&probe, &settings, log, None);
+    let reserve_lanes = priority_active(settings.priority_file.as_deref());
     let shared: Shared = Arc::new(Mutex::new(State {
         queue: Queue::default(),
         reading,
+        reserve_lanes,
         settings,
     }));
     // The sampler stops when `serve` returns and drops `_stop`.
@@ -247,8 +259,10 @@ fn sample(shared: &Shared, probe: &impl Probe, stopped: &mpsc::Receiver<()>, log
             (state.reading, state.settings.clone())
         };
         let reading = read_machine(probe, &settings, log, Some(before));
+        let reserve_lanes = priority_active(settings.priority_file.as_deref());
         let mut state = lock(shared);
         state.reading = reading;
+        state.reserve_lanes = reserve_lanes;
         state.grant();
     }
 }

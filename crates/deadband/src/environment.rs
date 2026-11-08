@@ -146,12 +146,15 @@ impl Environment {
             .map(|config| config.join(PRIORITY_FILE))
     }
 
-    /// Returns the variables that a granted job with `jobs` threads gets:
-    /// `DEADBAND_HELD`, and each parallelism variable that the caller did
-    /// not set.
+    /// Returns the variables that a job with `jobs` threads gets: each
+    /// parallelism variable that the caller did not set, and
+    /// `DEADBAND_HELD` when the daemon `held` a place for the job.
     #[must_use]
-    pub fn job_variables(&self, jobs: usize) -> Vec<(&'static str, String)> {
-        let mut variables = vec![(HELD, "1".to_owned())];
+    pub fn job_variables(&self, jobs: usize, held: bool) -> Vec<(&'static str, String)> {
+        let mut variables = Vec::new();
+        if held {
+            variables.push((HELD, "1".to_owned()));
+        }
         for name in PARALLELISM {
             if self.preset.contains(&name) {
                 continue;

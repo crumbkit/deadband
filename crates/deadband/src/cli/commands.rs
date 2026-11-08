@@ -9,7 +9,7 @@ use std::path::Path;
 use crumbkit::{Code, Failure, Output, Recovery, Sink};
 
 use super::{DaemonArgs, Machine, RunArgs};
-use crate::admit::{Hold, Lane};
+use crate::admit::{Hold, Lane, Limits};
 use crate::client::{self, ANSWER_WITHIN, Admission};
 use crate::daemon::{self, Settings, Unbound, note};
 use crate::job;
@@ -158,10 +158,19 @@ pub(super) fn run<O: Write, W: Write, P>(
             None
         }
     };
-    let variables = lease
-        .as_ref()
-        .map(|lease| machine.environment.job_variables(lease.jobs()))
-        .unwrap_or_default();
+    // A job that starts without a grant still gets the default share of
+    // the cores, so it never runs with every core.
+    let fallback = Limits {
+        max_jobs: daemon::default_max_jobs(machine.cores),
+        cores: machine.cores,
+        reserve_lanes: false,
+    };
+    let variables = match &lease {
+        Some(lease) => machine.environment.job_variables(lease.jobs(), true),
+        None => machine
+            .environment
+            .job_variables(fallback.parallelism(lane), false),
+    };
     if lane == Lane::Normal
         && let Err(error) = throttle::lower_own_priority(NORMAL_NICE)
     {
@@ -219,7 +228,12 @@ pub(super) fn daemon<O: Write, W: Write, P: Probe + Clone + Send + 'static>(
                     machine.socket.display()
                 ),
             );
-            let settings = Settings::new(max_jobs, machine.cores, machine.environment.home.clone());
+            let settings = Settings::new(
+                max_jobs,
+                machine.cores,
+                machine.environment.home.clone(),
+                machine.environment.priority_file(),
+            );
             let error = daemon::serve(
                 &bound.listener,
                 machine.probe.clone(),

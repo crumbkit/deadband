@@ -7,7 +7,6 @@
 //! case directly.
 
 use std::collections::VecDeque;
-use std::fmt;
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
@@ -16,8 +15,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::probe::{Disk, Pressure};
 
+mod hold;
 #[cfg(test)]
 mod tests;
+
+pub use self::hold::Hold;
+use self::hold::percent;
 
 /// The bytes in a gibibyte.
 pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -67,6 +70,9 @@ pub struct Limits {
     pub max_jobs: NonZeroUsize,
     /// The number of logical cores, or `None` when it is unknown.
     pub cores: Option<NonZeroUsize>,
+    /// Whether each lane leaves one place open for the other, which a
+    /// priority file with at least one entry turns on.
+    pub reserve_lanes: bool,
 }
 
 impl Limits {
@@ -83,107 +89,46 @@ impl Limits {
     }
 }
 
-/// Why a waiting job does not start yet.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "hold", rename_all = "snake_case")]
-pub enum Hold {
-    /// The most jobs run already.
-    Full {
-        /// The most jobs that run at once.
-        max_jobs: usize,
-    },
-    /// The disk is critically short of free space.
-    Disk {
-        /// The disk's free bytes.
-        free_bytes: u64,
-        /// The disk's total bytes.
-        total_bytes: u64,
-    },
-    /// Memory pressure is above normal.
-    Memory {
-        /// The memory pressure level.
-        pressure: Pressure,
-    },
-    /// The load, with the threads of the jobs started in the last minute,
-    /// exceeds the cores.
-    Load {
-        /// The 1-minute load plus those threads.
-        projected: f64,
-        /// The number of logical cores.
-        cores: usize,
-    },
-}
-
-impl fmt::Display for Hold {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Full { max_jobs: 1 } => {
-                f.write_str("the daemon already runs 1 job, its most at once")
-            }
-            Self::Full { max_jobs } => {
-                write!(
-                    f,
-                    "the daemon already runs {max_jobs} jobs, its most at once"
-                )
-            }
-            Self::Disk {
-                free_bytes,
-                total_bytes,
-            } => write!(
-                f,
-                "free disk is {} GiB, {}% of the disk, under {} GiB or {DISK_CRITICAL_PERCENT}%",
-                free_bytes / GIB,
-                percent(*free_bytes, *total_bytes),
-                DISK_CRITICAL_BYTES / GIB
-            ),
-            Self::Memory { pressure } => write!(f, "memory pressure is {pressure}"),
-            Self::Load { projected, cores } => write!(
-                f,
-                "the 1-minute load with the jobs started in the last minute is {projected:.1}, over the {cores} cores"
-            ),
-        }
-    }
-}
-
-/// Returns `part` as a whole percentage of `whole`, rounded down, or 100
-/// for an empty whole.
-fn percent(part: u64, whole: u64) -> u64 {
-    part.saturating_mul(100).checked_div(whole).unwrap_or(100)
+/// The running jobs that the rule weighs for one waiting job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Running {
+    /// How many jobs run.
+    pub all: usize,
+    /// How many of them run in the waiting job's lane.
+    pub in_lane: usize,
+    /// The threads of the running jobs that started in the last [`RECENT`].
+    pub recent_jobs: usize,
 }
 
 /// Reports whether one more job starts now, or why it waits.
 ///
 /// `reading` is what the daemon last read of the machine, or `None` when
-/// the probe could not read it. `running` counts the jobs that run now, and
-/// `recent_jobs` adds up the threads of the jobs started in the last
-/// [`RECENT`].
+/// the probe could not read it. `running` counts the jobs that run now.
 ///
-/// A job starts when nothing runs, so one job never waits forever. A job
-/// also starts when the probe failed, so a broken probe never holds work
-/// back. Otherwise a job waits while `max_jobs` jobs run, while free disk
-/// is under [`DISK_CRITICAL_BYTES`] or [`DISK_CRITICAL_PERCENT`], while
-/// memory pressure is above normal, or while the load plus `recent_jobs`
-/// exceeds the cores. An unreadable disk or an unknown core count holds
-/// nothing.
+/// A job waits while `max_jobs` jobs run, even when the probe failed. When
+/// `limits.reserve_lanes` is on and more than one job may run, a job also
+/// waits while its lane runs all but one place. A job waits while free disk
+/// is under [`DISK_CRITICAL_BYTES`] or [`DISK_CRITICAL_PERCENT`], even when
+/// nothing runs. Otherwise a job starts when nothing runs, so one job never
+/// waits forever, and when the probe failed, so a broken probe never holds
+/// work back. Past that, a job waits while memory pressure is above
+/// normal, or while the load plus the threads of the jobs started in the
+/// last [`RECENT`] reaches the cores. An unreadable disk or an unknown core
+/// count holds nothing.
 ///
 /// # Errors
 ///
 /// Returns the [`Hold`] that keeps the job waiting.
-pub fn admits(
-    reading: Option<&Reading>,
-    running: usize,
-    recent_jobs: usize,
-    limits: &Limits,
-) -> Result<(), Hold> {
-    let Some(reading) = reading.filter(|_| running > 0) else {
-        return Ok(());
-    };
-    if running >= limits.max_jobs.get() {
-        return Err(Hold::Full {
-            max_jobs: limits.max_jobs.get(),
-        });
+pub fn admits(reading: Option<&Reading>, running: &Running, limits: &Limits) -> Result<(), Hold> {
+    let max_jobs = limits.max_jobs.get();
+    if running.all >= max_jobs {
+        return Err(Hold::Full { max_jobs });
     }
-    if let Some(disk) = reading.disk {
+    let places = max_jobs - 1;
+    if limits.reserve_lanes && max_jobs > 1 && running.in_lane >= places {
+        return Err(Hold::Lane { places });
+    }
+    if let Some(disk) = reading.and_then(|reading| reading.disk) {
         let critical = disk.free_bytes < DISK_CRITICAL_BYTES
             || percent(disk.free_bytes, disk.total_bytes) < DISK_CRITICAL_PERCENT;
         if critical {
@@ -193,6 +138,9 @@ pub fn admits(
             });
         }
     }
+    let Some(reading) = reading.filter(|_| running.all > 0) else {
+        return Ok(());
+    };
     if reading.pressure != Pressure::Normal {
         return Err(Hold::Memory {
             pressure: reading.pressure,
@@ -203,12 +151,11 @@ pub fn admits(
             clippy::cast_precision_loss,
             reason = "thread and core counts are far below 2^52, so the conversion is exact"
         )]
-        let projected = reading.load_1m + recent_jobs as f64;
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "a core count is far below 2^52, so the conversion is exact"
-        )]
-        if projected > cores.get() as f64 {
+        let (projected, cores_f) = (
+            reading.load_1m + running.recent_jobs as f64,
+            cores.get() as f64,
+        );
+        if projected >= cores_f {
             return Err(Hold::Load {
                 projected,
                 cores: cores.get(),
@@ -221,8 +168,8 @@ pub fn admits(
 /// The number that the queue gives each job it receives.
 pub type JobId = u64;
 
-/// The waiting jobs in each lane in the order they arrived, the running
-/// jobs, and the threads of the jobs started recently.
+/// The waiting jobs in each lane in the order they arrived, and the
+/// running jobs.
 #[derive(Debug)]
 pub struct Queue<J> {
     /// The number the next job receives.
@@ -232,9 +179,7 @@ pub struct Queue<J> {
     /// The normal jobs that wait, the oldest first.
     normal: VecDeque<(JobId, J)>,
     /// The jobs that run, in the order they started.
-    running: Vec<(JobId, J)>,
-    /// When each job of the last [`RECENT`] started, with its threads.
-    recent: VecDeque<(Instant, usize)>,
+    running: Vec<Started<J>>,
     /// Why the first waiting job did not start at the last admission.
     held: Option<Hold>,
 }
@@ -246,10 +191,24 @@ impl<J> Default for Queue<J> {
             fast: VecDeque::new(),
             normal: VecDeque::new(),
             running: Vec::new(),
-            recent: VecDeque::new(),
             held: None,
         }
     }
+}
+
+/// A running job, with what the load projection needs to know of it.
+#[derive(Debug)]
+struct Started<J> {
+    /// The job's number.
+    id: JobId,
+    /// The job.
+    job: J,
+    /// The lane the job waited in.
+    lane: Lane,
+    /// When the job started.
+    at: Instant,
+    /// The job's threads.
+    jobs: usize,
 }
 
 impl<J> Queue<J> {
@@ -266,39 +225,73 @@ impl<J> Queue<J> {
 
     /// Starts waiting jobs, the fast lane first, while [`admits`] lets one
     /// more start at `now`, and returns the number of each job it started
-    /// with its threads.
+    /// with its threads. When the fast lane's first job waits on its lane's
+    /// cap, the normal lane's first job may still start.
     pub fn admit(
         &mut self,
         reading: Option<&Reading>,
         limits: &Limits,
         now: Instant,
     ) -> Vec<(JobId, usize)> {
-        self.recent
-            .retain(|(at, _)| now.saturating_duration_since(*at) < RECENT);
         self.held = None;
         let mut started = Vec::new();
-        loop {
-            let (lane, waiting) = if self.fast.is_empty() {
-                (Lane::Normal, &mut self.normal)
-            } else {
-                (Lane::Fast, &mut self.fast)
-            };
-            if waiting.is_empty() {
-                break;
-            }
-            let recent_jobs = self.recent.iter().map(|(_, jobs)| jobs).sum();
-            if let Err(hold) = admits(reading, self.running.len(), recent_jobs, limits) {
+        while let Some((lane, hold)) = self.next_lane(reading, limits, now) {
+            if let Some(hold) = hold {
                 self.held = Some(hold);
                 break;
             }
+            let waiting = match lane {
+                Lane::Fast => &mut self.fast,
+                Lane::Normal => &mut self.normal,
+            };
             if let Some((id, job)) = waiting.pop_front() {
                 let jobs = limits.parallelism(lane);
-                self.running.push((id, job));
-                self.recent.push_back((now, jobs));
+                self.running.push(Started {
+                    id,
+                    job,
+                    lane,
+                    at: now,
+                    jobs,
+                });
                 started.push((id, jobs));
             }
         }
         started
+    }
+
+    /// Returns the lane whose first waiting job starts next, with `None`,
+    /// or the first lane that has a waiting job with the hold that keeps it
+    /// waiting. Returns `None` when no job waits.
+    fn next_lane(
+        &self,
+        reading: Option<&Reading>,
+        limits: &Limits,
+        now: Instant,
+    ) -> Option<(Lane, Option<Hold>)> {
+        let recent_jobs = self
+            .running
+            .iter()
+            .filter(|each| now.saturating_duration_since(each.at) < RECENT)
+            .map(|each| each.jobs)
+            .sum();
+        let mut first = None;
+        for (lane, waiting) in [(Lane::Fast, &self.fast), (Lane::Normal, &self.normal)] {
+            if waiting.is_empty() {
+                continue;
+            }
+            let running = Running {
+                all: self.running.len(),
+                in_lane: self.running.iter().filter(|each| each.lane == lane).count(),
+                recent_jobs,
+            };
+            match admits(reading, &running, limits) {
+                Ok(()) => return Some((lane, None)),
+                Err(hold) => {
+                    first.get_or_insert((lane, Some(hold)));
+                }
+            }
+        }
+        first
     }
 
     /// Returns why the first waiting job did not start at the last
@@ -316,8 +309,8 @@ impl<J> Queue<J> {
                 return waiting.remove(index).map(|(_, job)| job);
             }
         }
-        let index = self.running.iter().position(|(each, _)| *each == id)?;
-        Some(self.running.remove(index).1)
+        let index = self.running.iter().position(|each| each.id == id)?;
+        Some(self.running.remove(index).job)
     }
 
     /// Returns the running job numbered `id`.
@@ -325,8 +318,8 @@ impl<J> Queue<J> {
     pub fn running_job(&self, id: JobId) -> Option<&J> {
         self.running
             .iter()
-            .find(|(each, _)| *each == id)
-            .map(|(_, job)| job)
+            .find(|each| each.id == id)
+            .map(|each| &each.job)
     }
 
     /// Returns how many jobs start before the waiting job numbered `id`, or
@@ -343,7 +336,7 @@ impl<J> Queue<J> {
 
     /// Returns the running jobs in the order they started.
     pub fn running(&self) -> impl Iterator<Item = &J> {
-        self.running.iter().map(|(_, job)| job)
+        self.running.iter().map(|each| &each.job)
     }
 
     /// Returns the waiting jobs in the order they start: the fast lane,

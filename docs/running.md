@@ -40,18 +40,24 @@ The daemon samples memory pressure, the 1-minute load average and the free
 space of the disk that holds `$HOME` once a second. It admits a waiting job
 when all of these hold:
 
-- Fewer than `--max-jobs` jobs run. The default for `--max-jobs` is half
-  the logical cores, and at least 1.
+- Fewer than `--max-jobs` jobs run. The default for `--max-jobs` is a
+  quarter of the logical cores, rounded up, and at least 1, so a machine
+  with 14 cores runs 4 jobs at once.
+- When the priority file holds at least one entry and `--max-jobs` is more
+  than 1, the job's lane runs fewer than `--max-jobs` minus 1 jobs. Each
+  lane leaves the last place open for the other, so a fast job starts at
+  once on a machine full of normal jobs, and the reverse.
 - The disk has at least 20 GiB free, and its free space is at least 3% of
   the disk.
 - Memory pressure is normal.
-- The 1-minute load average, plus the threads of each job admitted in the
-  last 60 seconds, is at most the number of logical cores. The load average
-  takes about a minute to show a new job, so the daemon adds those threads
-  itself.
+- The 1-minute load average, plus the threads of each running job that
+  started in the last 60 seconds, is below the number of logical cores. The
+  load average takes about a minute to show a new job, so the daemon adds
+  those threads itself.
 
-A job that arrives while nothing runs always starts, so one job never waits
-forever. A job counts as running until its `deadband run` ends. A waiting
+A job that arrives while nothing runs starts unless the disk is critically
+low, so one job never waits forever on load or memory. A job that waits on
+the disk starts once free space is back above both limits. A job counts as running until its `deadband run` ends. A waiting
 job prints one line on standard error that says why it waits and how many
 jobs start before it. An unreadable disk holds no job, and the daemon's log
 says why.
@@ -72,8 +78,10 @@ one that its caller already set:
 | `CMAKE_BUILD_PARALLEL_LEVEL` | the threads |
 | `MAKEFLAGS` | `-j` and the threads |
 
-A job that starts at once because the daemon cannot be asked gets none of
-these variables.
+A job that starts at once because the daemon cannot be asked still gets
+these variables, with the threads of the default `--max-jobs`: the cores
+divided by a quarter of the cores rounded up, and one more in the fast
+lane. So a job never runs with every core.
 
 ## Lanes
 
@@ -124,7 +132,7 @@ queued a job, `deadband run` waits for the grant with no deadline, so a
 daemon that hangs while it keeps the connection open also keeps the job
 waiting. Stopping that daemon closes the connection, and the job then
 starts at once. When the probe cannot read the machine, the
-daemon admits every job at once and its log says why.
+daemon admits each job as soon as a place is free, and its log says why.
 
 `deadband status` prints the load, memory pressure and swap, followed by the
 running and waiting jobs, or `daemon: not running` when no daemon answers.

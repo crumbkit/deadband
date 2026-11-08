@@ -79,8 +79,8 @@ pub struct RunArgs {
 /// The arguments of `deadband daemon`.
 #[derive(Debug, Args)]
 pub struct DaemonArgs {
-    /// The most jobs that run at once. The default is half the logical
-    /// cores, and at least 1.
+    /// The most jobs that run at once. The default is a quarter of the
+    /// logical cores, rounded up, and at least 1.
     #[arg(long, value_name = "N")]
     pub max_jobs: Option<NonZeroUsize>,
 }

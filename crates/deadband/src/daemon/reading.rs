@@ -76,3 +76,10 @@ fn read_disk(
         }
     }
 }
+
+/// Reports whether the priority file at `file` holds at least one entry.
+/// A missing or unreadable file holds none.
+pub(super) fn priority_active(file: Option<&Path>) -> bool {
+    file.and_then(|file| std::fs::read_to_string(file).ok())
+        .is_some_and(|words| crate::priority::active(&words))
+}
