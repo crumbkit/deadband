@@ -7,5 +7,32 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[[bin]]
+name = "deadband"
+path = "src/main.rs"
+# The binary has no API to document, and its docs would take the crate name
+# that rustdoc gives the library docs.
+doc = false
+
+[dependencies]
+# clap parses the command line. These are the user-facing features that a
+# binary chooses: help, usage lines and the context of a refusal. The eval
+# /evals/crumbkit-vs-clap chose clap with crumbkit.
+clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+# crumbkit holds the command-line conventions: parsing, `--json` documents
+# and failures with stable codes (the cli profile of the Rust standards).
+crumbkit = "0.1.0"
+
+# libc calls getloadavg and sysctlbyname, which read the load average, the
+# memory pressure level and swap use on macOS. The eval
+# /evals/deadband-probe-source chose libc over the sysinfo crate.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.191"
+
+[dev-dependencies]
+# crumbkit-test checks the command's guide, effects, documents and failure
+# codes against crumbkit's conventions.
+crumbkit-test = "0.1.0"
+
 [lints]
 workspace = true
