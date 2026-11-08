@@ -6,8 +6,10 @@
 schema = "rust-standards/adoption/v1"
 standards = { version = "draft", commit = "107f4eb72a8c26ed377329f70debdbc9f91540dc" }
 
-# deadband will be a command and a per-user daemon that starts and pauses
-# job processes and keeps a ledger of job costs on disk.
+# deadband is a command and a per-user daemon. It starts job processes and
+# lowers the priority of normal-lane jobs. It keeps no durable state yet, so
+# the durable-state profile is adopted ahead of the ledger of job costs that
+# the architecture document plans.
 profiles = ["base", "cli", "child-process", "durable-state"]
 
 [[decision]]
