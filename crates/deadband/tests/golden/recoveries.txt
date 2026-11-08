@@ -1,0 +1,5 @@
+codes that no start provokes:
+  deadband::machine::unreadable: Only a failed call to the kernel provokes it, and no command line makes the kernel fail.
+  deadband::machine::unsupported: Only a platform other than macOS provokes it, so whether `deadband status` provokes it depends on the machine the test runs on.
+
+codes whose recoveries the check did not follow, because no declared code spells them: 0

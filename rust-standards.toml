@@ -14,7 +14,96 @@ profiles = ["base", "cli", "child-process", "durable-state"]
 id = "lanes"
 requirement = """
 - Lane: `lane` in .github/workflows/ci.yml, on each pull request and each push to main. It runs every step of the pull-request lane in the standards' order (format, workflows, deny, shear, clippy, tests, doctests, rustdoc). It leaves out the `features` step, which the library profile needs and deadband does not adopt. Its budget is ten minutes, the job's timeout.
+- Lane: `macos` in .github/workflows/ci.yml, on each pull request and each push to main, on a macOS runner. It runs clippy on all targets and the tests, so the macOS reader of the probe, which compiles only on macOS, is compiled, linted and tested. Its budget is ten minutes, the job's timeout.
 - Lane: `advisories` in .github/workflows/ci.yml, daily at 06:43 UTC and on demand (BASE-29). Nothing waits for it.
 """
 purpose = "The pull-request lane stays within ten minutes on a small workspace and grows with the code. A daily advisory run catches an advisory published against a dependency already on main, and finding it after merge is safe because the advisory concerns code that is already on main."
 realizations = [".github/workflows/ci.yml"]
+
+[[decision]]
+id = "unsafe"
+requirement = """
+- Module: crates/deadband/src/probe/macos.rs, the macOS reader of the probe. It is the only module with unsafe code. The workspace lint `unsafe_code` is `deny`, and the module's declaration in crates/deadband/src/probe.rs carries `#[expect(unsafe_code, reason = ...)]`.
+- Invariant: each unsafe call writes only into a buffer that the module owns and passes that buffer's exact length. `getloadavg` receives a one-element array and is asked for one value. `sysctlbyname` receives a NUL-terminated name, a buffer and its length, and a null new value of length 0, so it reads from the kernel and changes nothing. Compile-time assertions check that the buffer lengths match the C types `xsw_usage` and `int`.
+"""
+purpose = "macOS gives the memory pressure level and swap use only through sysctl, and the load average through getloadavg, all C calls. A measured comparison chose to call them through libc, because the sysinfo crate has no memory pressure level. Keeping every unsafe call in one small module with one stated invariant lets a reviewer check all of it in one place."
+realizations = ["crates/deadband/src/probe/macos.rs", "crates/deadband/src/probe.rs", "Cargo.toml"]
+
+[[exception]]
+rule = "CLI-7"
+paths = ["crates/deadband/src/main.rs"]
+owner = "Luke"
+reason = "deadband keeps no crumbkit-usage log and has no `self usage` command yet. The first pull request with a command adds only `deadband status`."
+correction = "a later deadband pull request turns it on"
+
+[[exception]]
+rule = "CLI-6"
+paths = ["crates/deadband/src/cli/tests.rs"]
+items = ["crumbkit-test:check_names"]
+owner = "Luke"
+reason = "The tests do not run crumbkit-test's `check_names` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+correction = "a later deadband pull request turns it on"
+
+[[exception]]
+rule = "CLI-6"
+paths = ["crates/deadband/src/cli/tests.rs"]
+items = ["crumbkit-test:check_grammar"]
+owner = "Luke"
+reason = "The tests do not run crumbkit-test's `check_grammar` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+correction = "a later deadband pull request turns it on"
+
+[[exception]]
+rule = "CLI-6"
+paths = ["crates/deadband/src/cli/tests.rs"]
+items = ["crumbkit-test:check_filters"]
+owner = "Luke"
+reason = "The tests do not run crumbkit-test's `check_filters` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+correction = "a later deadband pull request turns it on"
+
+[[exception]]
+rule = "CLI-6"
+paths = ["crates/deadband/src/cli/tests.rs"]
+items = ["crumbkit-test:check_help_sizes"]
+owner = "Luke"
+reason = "The tests do not run crumbkit-test's `check_help_sizes` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+correction = "a later deadband pull request turns it on"
+
+[[exception]]
+rule = "CLI-6"
+paths = ["crates/deadband/src/cli/tests.rs"]
+items = ["crumbkit-test:check_help_goldens"]
+owner = "Luke"
+reason = "The tests do not run crumbkit-test's `check_help_goldens` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+correction = "a later deadband pull request turns it on"
+
+[[exception]]
+rule = "CLI-6"
+paths = ["crates/deadband/src/cli/tests.rs"]
+items = ["crumbkit-test:check_path_weights"]
+owner = "Luke"
+reason = "The tests do not run crumbkit-test's `check_path_weights` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+correction = "a later deadband pull request turns it on"
+
+[[exception]]
+rule = "CLI-6"
+paths = ["crates/deadband/src/cli/tests.rs"]
+items = ["crumbkit-test:check_output_budget"]
+owner = "Luke"
+reason = "The tests do not run crumbkit-test's `check_output_budget` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+correction = "a later deadband pull request turns it on"
+
+[[exception]]
+rule = "CLI-6"
+paths = ["crates/deadband/src/cli/tests.rs"]
+items = ["crumbkit-test:check_command_reference"]
+owner = "Luke"
+reason = "The tests do not run crumbkit-test's `check_command_reference` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+correction = "a later deadband pull request turns it on"
+
+[[exception]]
+rule = "CLI-6"
+paths = ["crates/deadband/src/cli/tests.rs"]
+items = ["crumbkit-test:check_opt_outs"]
+owner = "Luke"
+reason = "The tests do not run crumbkit-test's `check_opt_outs` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+correction = "a later deadband pull request turns it on"

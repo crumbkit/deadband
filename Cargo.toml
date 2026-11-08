@@ -17,7 +17,7 @@ overflow-checks = true
 # (baseline/lints/base.toml).
 
 [workspace.lints.rust]
-unsafe_code = "forbid"                 # BASE-3
+unsafe_code = "deny"                   # BASE-3: only crates/deadband/src/probe/macos.rs, which rust-standards.toml names
 unreachable_pub = "warn"               # BASE-8
 missing_debug_implementations = "warn"
 
