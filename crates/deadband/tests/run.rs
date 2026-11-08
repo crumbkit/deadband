@@ -191,8 +191,9 @@ fn run_without_a_daemon_exits_with_the_command_and_says_in_one_line_that_the_dae
     assert!(err.contains("the daemon is not running"), "{err}");
 }
 
-/// The daemon holds jobs back only on macOS, where the probe reads memory
-/// pressure. Elsewhere every sample fails, so every job starts at once.
+/// These tests need the probe, which reads the machine only on macOS.
+/// Elsewhere every sample fails, and the daemon holds jobs only on the job
+/// count.
 #[cfg(target_os = "macos")]
 #[expect(
     clippy::disallowed_methods,

@@ -35,7 +35,9 @@ pub(super) fn read_machine(
             if before.is_none_or(|before| before.is_some()) {
                 note(
                     log,
-                    format_args!("{error}, so every job starts at once until it reads again"),
+                    format_args!(
+                        "{error}, so each job starts once a place is free until it reads again"
+                    ),
                 );
             }
             None

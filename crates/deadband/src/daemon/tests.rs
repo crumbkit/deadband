@@ -247,25 +247,23 @@ fn a_job_waits_under_warn_pressure_and_starts_when_pressure_falls_to_normal() {
 }
 
 #[test]
-fn a_job_waits_while_free_disk_is_critically_low_and_starts_when_it_is_freed() {
+fn a_job_waits_while_free_disk_is_critically_low_even_when_nothing_runs_and_starts_when_freed() {
     let dial = Dial::new(Pressure::Normal);
     dial.fill_disk(true);
     let (path, _) = start(2, &dial);
     let mut first = Client::ask(&path, "a");
-    assert_eq!(first.reply(), granted(2));
-    let mut second = Client::ask(&path, "b");
     assert!(
         matches!(
-            second.reply(),
+            first.reply(),
             Reply::Queued {
                 ahead: 0,
                 held: Some(Hold::Disk { .. })
             }
         ),
-        "the low disk holds the second job"
+        "the low disk holds the first job"
     );
     dial.fill_disk(false);
-    assert_eq!(second.reply(), granted(2));
+    assert_eq!(first.reply(), granted(2));
 }
 
 #[test]
@@ -339,18 +337,20 @@ fn a_waiting_fast_job_starts_before_a_normal_job_that_waited_longer() {
 }
 
 #[test]
-fn every_job_starts_at_once_when_the_probe_fails_and_the_log_says_why() {
+fn jobs_start_while_places_are_free_when_the_probe_fails_and_the_log_says_why() {
     let dial = Dial::new(Pressure::Normal);
     dial.break_it();
-    let (path, log) = start(1, &dial);
+    let (path, log) = start(2, &dial);
     let mut first = Client::ask(&path, "a");
-    assert_eq!(first.reply(), granted(1));
+    assert_eq!(first.reply(), granted(2));
     let mut second = Client::ask(&path, "b");
-    assert_eq!(second.reply(), granted(1));
+    assert_eq!(second.reply(), granted(2));
+    let mut third = Client::ask(&path, "c");
+    assert_eq!(third.reply(), queued(0, 2));
     let log = String::from_utf8(log.lock().expect("the log locks").clone()).expect("UTF-8");
     assert_eq!(
         log,
-        "deadband: deadband could not read the 1-minute load average, so every job starts at once until it reads again\n"
+        "deadband: deadband could not read the 1-minute load average, so each job starts once a place is free until it reads again\n"
     );
 }
 
