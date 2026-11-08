@@ -295,23 +295,31 @@ fn sample(shared: &Shared, probe: &impl Probe, stopped: &mpsc::Receiver<()>, log
         state.grant();
         if let Some(resource) = state.reclaim_now() {
             let config = state.settings.reclaim.clone();
+            let quiet = state.watch.quiet(resource);
             drop(state);
-            start_reclaim(shared, config, resource, log);
+            start_reclaim(shared, config, resource, quiet, log);
         }
     }
 }
 
 /// Runs the reclaimers of `config` for `resource` on a thread of their
 /// own, so admission never waits for them, and records each outcome for
-/// `deadband status`.
-fn start_reclaim(shared: &Shared, config: reclaim::Config, resource: Resource, log: &Log) {
+/// `deadband status`. `quiet` says the last reclaim of `resource` freed
+/// nothing.
+fn start_reclaim(
+    shared: &Shared,
+    config: reclaim::Config,
+    resource: Resource,
+    quiet: bool,
+    log: &Log,
+) {
     let shared = Arc::clone(shared);
     let log = Arc::clone(log);
     thread::spawn(move || {
-        reclaim::reclaim(&config, resource, &log, &mut |reclaimed| {
+        let freed = reclaim::reclaim(&config, resource, quiet, &log, &mut |reclaimed| {
             lock(&shared).reclaimed = Some(reclaimed);
         });
-        lock(&shared).watch.ended(Instant::now());
+        lock(&shared).watch.ended(freed, Instant::now());
     });
 }
 

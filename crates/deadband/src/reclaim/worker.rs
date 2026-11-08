@@ -21,14 +21,22 @@ struct Run {
 
 /// Asks each reclaimer of `config` in turn to free `resource`: a dry run
 /// first, then, when the dry run plans to free any bytes, the real run. It
-/// stops once the bytes freed cover the need. Each reclaimer's outcome
-/// goes to `record`, and each failure to `log` in one line; a failure
-/// moves on to the next reclaimer.
-pub fn reclaim(config: &Config, resource: Resource, log: &Log, record: &mut dyn FnMut(Reclaimed)) {
+/// stops once the bytes freed cover the need, and returns the bytes the
+/// real runs reported freeing. Each reclaimer's outcome goes to `record`,
+/// and each failure to `log` in one line; a failure moves on to the next
+/// reclaimer. When `quiet` holds, the last reclaim of `resource` freed
+/// nothing, and a plan to free nothing is not logged again.
+pub fn reclaim(
+    config: &Config,
+    resource: Resource,
+    quiet: bool,
+    log: &Log,
+    record: &mut dyn FnMut(Reclaimed),
+) -> u64 {
     let need = resource.need(config);
     let mut freed = 0_u64;
     for reclaimer in &config.reclaimers {
-        let dry = run_once(config, reclaimer, &need, true, log, record);
+        let dry = run_once(config, reclaimer, &need, true, log);
         let Some(plan) = dry.report.filter(|_| dry.failed.is_none()) else {
             let failed = dry.failed.unwrap_or_default();
             if !dry.logged {
@@ -43,6 +51,10 @@ pub fn reclaim(config: &Config, resource: Resource, log: &Log, record: &mut dyn 
             record(outcome(reclaimer, &need, None, Some(failed)));
             continue;
         };
+        if plan.freed_bytes == 0 && quiet {
+            record(outcome(reclaimer, &need, Some(0), None));
+            continue;
+        }
         note(
             log,
             format_args!(
@@ -60,7 +72,7 @@ pub fn reclaim(config: &Config, resource: Resource, log: &Log, record: &mut dyn 
             record(outcome(reclaimer, &need, Some(0), None));
             continue;
         }
-        let real = run_once(config, reclaimer, &need, false, log, record);
+        let real = run_once(config, reclaimer, &need, false, log);
         let reported = real.report.map(|report| report.freed_bytes);
         match &real.failed {
             Some(_) if real.logged => {}
@@ -83,22 +95,16 @@ pub fn reclaim(config: &Config, resource: Resource, log: &Log, record: &mut dyn 
         record(outcome(reclaimer, &need, reported, real.failed));
         freed = freed.saturating_add(reported.unwrap_or(0));
         if freed >= resource.need_bytes(config) {
-            return;
+            return freed;
         }
     }
+    freed
 }
 
 /// Runs `reclaimer` once with `--need need`, and `--dry-run` when `dry`
-/// holds. When it runs past the config's timeout, the log and `record` say
-/// so at once, and the run waits until the reclaimer exits.
-fn run_once(
-    config: &Config,
-    reclaimer: &Reclaimer,
-    need: &str,
-    dry: bool,
-    log: &Log,
-    record: &mut dyn FnMut(Reclaimed),
-) -> Run {
+/// holds. When it runs past the config's timeout, the log says so at once,
+/// and the run waits until the reclaimer exits.
+fn run_once(config: &Config, reclaimer: &Reclaimer, need: &str, dry: bool, log: &Log) -> Run {
     let mut args = vec!["--need", need];
     if dry {
         args.push("--dry-run");
@@ -115,7 +121,6 @@ fn run_once(
                 reclaimer.name
             ),
         );
-        record(outcome(reclaimer, need, None, Some(timed_out.clone())));
     };
     match reclaimer::run(&reclaimer.command, &args, config.timeout, on_timeout) {
         Ok(Ended::Exited { code, stdout }) => {

@@ -83,8 +83,9 @@ The reclaim module holds the rule that says when to reclaim, as a pure
 function of what the daemon reads each second. Memory is short while
 memory pressure is above normal or a job waits for memory, and a reclaim
 starts once it has been short for `reclaim_after`. Critically low disk
-starts a reclaim at once. At most one reclaim runs at a time, and the next
-waits `reclaim_after` after the last one ends.
+starts a reclaim at once. At most one reclaim runs at a time. Memory and
+disk each wait `reclaim_after` after their last reclaim, and each reclaim
+in a row that frees nothing doubles that wait, up to 30 minutes.
 
 A reclaim runs on a thread of its own, so admission never waits for it.
 For each reclaimer in turn, the daemon runs the command with

@@ -1,9 +1,14 @@
 //! Tests of the reclaim config, the rule that says when to reclaim, and the
 //! reading of a reclaimer's report.
 
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::{Config, Reclaimer, Report, Resource, Watch, size_bytes};
+use super::{Config, Reclaimed, Reclaimer, Report, Resource, Watch, reclaim, size_bytes};
+use crate::admit::GIB;
+use crate::daemon::Log;
 
 const AFTER: Duration = Duration::from_secs(60);
 
@@ -143,7 +148,7 @@ fn no_reclaim_starts_while_one_runs_or_within_reclaim_after_of_its_end() {
     );
     assert_eq!(watch.observe(&config, false, true, start + AFTER), None);
     let ended = start + AFTER * 2;
-    watch.ended(ended);
+    watch.ended(1, ended);
     assert_eq!(watch.observe(&config, false, true, ended + AFTER / 2), None);
     assert_eq!(
         watch.observe(&config, false, true, ended + AFTER),
@@ -186,4 +191,208 @@ fn a_report_that_is_not_json_is_refused_in_one_line() {
 fn a_resource_names_itself_as_the_need_argument_does() {
     assert_eq!(Resource::Memory.need(&Config::default()), "memory=4G");
     assert_eq!(Resource::Disk.need(&Config::default()), "disk=20G");
+}
+
+#[test]
+fn a_config_refuses_a_reclaim_after_under_10_seconds_and_a_zero_timeout() {
+    let error = Config::parse("reclaim_after = \"5s\"\n").expect_err("5s is refused");
+    assert!(error.contains("10s"), "{error}");
+    assert!(Config::parse("reclaim_after = \"10s\"\n").is_ok());
+    let error = Config::parse("reclaim_timeout = \"0s\"\n").expect_err("0s is refused");
+    assert!(error.contains("reclaim_timeout"), "{error}");
+}
+
+#[test]
+fn a_disk_need_the_reclaimer_cannot_meet_never_starves_memory_reclaim() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let start = Instant::now();
+    assert_eq!(
+        watch.observe(&config, true, true, start),
+        Some(Resource::Disk)
+    );
+    watch.ended(0, start);
+    assert_eq!(
+        watch.observe(&config, true, true, start + AFTER),
+        Some(Resource::Memory)
+    );
+}
+
+#[test]
+fn a_reclaim_that_frees_nothing_doubles_the_wait_for_that_resource_up_to_30_minutes() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let mut now = Instant::now();
+    assert_eq!(
+        watch.observe(&config, false, true, now),
+        Some(Resource::Disk)
+    );
+    assert!(!watch.quiet(Resource::Disk));
+    let mut expected = AFTER;
+    for _ in 0..8 {
+        watch.ended(0, now);
+        assert!(watch.quiet(Resource::Disk));
+        expected = (expected * 2).min(Duration::from_secs(30 * 60));
+        let early = now + expected - Duration::from_secs(1);
+        assert_eq!(watch.observe(&config, false, true, early), None);
+        now += expected;
+        assert_eq!(
+            watch.observe(&config, false, true, now),
+            Some(Resource::Disk)
+        );
+    }
+    assert_eq!(expected, Duration::from_secs(30 * 60));
+    watch.ended(GIB, now);
+    assert!(!watch.quiet(Resource::Disk));
+    assert_eq!(
+        watch.observe(&config, false, true, now + AFTER),
+        Some(Resource::Disk)
+    );
+}
+
+#[test]
+fn the_back_off_ends_when_the_resource_recovers() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let now = Instant::now();
+    assert_eq!(
+        watch.observe(&config, false, true, now),
+        Some(Resource::Disk)
+    );
+    watch.ended(0, now);
+    assert_eq!(watch.observe(&config, false, false, now + AFTER / 2), None);
+    assert!(!watch.quiet(Resource::Disk));
+    assert_eq!(
+        watch.observe(&config, false, true, now + AFTER),
+        Some(Resource::Disk)
+    );
+}
+
+#[test]
+fn after_a_memory_reclaim_the_next_needs_a_fresh_reclaim_after_of_shortage() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let start = Instant::now();
+    assert_eq!(watch.observe(&config, true, false, start), None);
+    let first = start + AFTER;
+    assert_eq!(
+        watch.observe(&config, true, false, first),
+        Some(Resource::Memory)
+    );
+    let ended = first + AFTER * 2;
+    watch.observe(&config, true, false, ended);
+    watch.ended(GIB, ended);
+    assert_eq!(watch.observe(&config, true, false, ended + AFTER / 2), None);
+    assert_eq!(watch.observe(&config, true, false, ended + AFTER), None);
+    assert_eq!(
+        watch.observe(&config, true, false, ended + AFTER + AFTER / 2),
+        Some(Resource::Memory)
+    );
+}
+
+/// A directory of reclaimer scripts, removed when the test ends.
+struct Scripts(PathBuf);
+
+impl Scripts {
+    fn new() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let directory = std::env::temp_dir().join(format!("db-worker-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("the directory is made");
+        Self(directory)
+    }
+
+    /// Returns a reclaimer named `name` whose script appends its arguments
+    /// to `calls`, prints `dry` on a dry run, and otherwise prints `real`
+    /// and exits with `code`.
+    fn reclaimer(&self, name: &str, dry: u64, real: u64, code: i32) -> Reclaimer {
+        let script = self.0.join(format!("{name}.sh"));
+        let body = format!(
+            "echo \"{name} $*\" >> '{calls}'\n\
+             case \"$*\" in *--dry-run*) echo '{{\"data\":[{{\"name\":\"w\",\"freed\":{dry}}}]}}'; exit 0;; esac\n\
+             echo '{{\"data\":[{{\"name\":\"w\",\"freed\":{real}}}]}}'\nexit {code}\n",
+            calls = self.0.join("calls").display()
+        );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test writes the script a person would configure"
+        )]
+        std::fs::write(&script, body).expect("the script writes");
+        Reclaimer {
+            name: name.to_owned(),
+            command: vec!["/bin/sh".to_owned(), script.display().to_string()],
+        }
+    }
+
+    fn calls(&self) -> String {
+        std::fs::read_to_string(self.0.join("calls")).unwrap_or_default()
+    }
+}
+
+impl Drop for Scripts {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Runs one memory reclaim with `reclaimers`, and returns the bytes it
+/// freed, the records and the log.
+fn run(reclaimers: Vec<Reclaimer>, quiet: bool) -> (u64, Vec<Reclaimed>, String) {
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let log: Log = written.clone();
+    let config = Config {
+        reclaimers,
+        ..Config::default()
+    };
+    let mut records = Vec::new();
+    let freed = reclaim(&config, Resource::Memory, quiet, &log, &mut |each| {
+        records.push(each);
+    });
+    let log = String::from_utf8(written.lock().expect("locks").clone()).expect("UTF-8");
+    (freed, records, log)
+}
+
+#[test]
+fn a_dry_run_that_plans_nothing_skips_the_real_run() {
+    let scripts = Scripts::new();
+    let (freed, records, log) = run(vec![scripts.reclaimer("a", 0, 5 * GIB, 0)], false);
+    assert_eq!(freed, 0);
+    assert_eq!(scripts.calls(), "a --need memory=4G --dry-run\n");
+    assert_eq!(records.len(), 1);
+    assert!(
+        log.contains("would free 0 MiB for memory=4G: nothing"),
+        "{log}"
+    );
+}
+
+#[test]
+fn a_quiet_reclaim_does_not_log_a_plan_of_nothing_again() {
+    let scripts = Scripts::new();
+    let (_, _, log) = run(vec![scripts.reclaimer("a", 0, 0, 0)], true);
+    assert_eq!(log, "");
+}
+
+#[test]
+fn the_reclaim_stops_once_the_bytes_freed_cover_the_need() {
+    let scripts = Scripts::new();
+    let reclaimers = vec![
+        scripts.reclaimer("a", 5 * GIB, 5 * GIB, 0),
+        scripts.reclaimer("b", 5 * GIB, 5 * GIB, 0),
+    ];
+    let (freed, _, _) = run(reclaimers, false);
+    assert_eq!(freed, 5 * GIB);
+    assert_eq!(
+        scripts.calls(),
+        "a --need memory=4G --dry-run\na --need memory=4G\n"
+    );
+}
+
+#[test]
+fn a_real_run_that_exits_with_an_error_still_counts_the_bytes_it_reported() {
+    let scripts = Scripts::new();
+    let (freed, records, _) = run(vec![scripts.reclaimer("a", 5 * GIB, 2 * GIB, 1)], false);
+    assert_eq!(freed, 2 * GIB);
+    let last = records.last().expect("a record");
+    assert_eq!(last.freed_bytes, Some(2 * GIB));
+    assert_eq!(last.failed.as_deref(), Some("it exited with code 1"));
 }

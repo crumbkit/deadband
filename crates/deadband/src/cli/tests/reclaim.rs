@@ -1,19 +1,23 @@
-//! The plan's acceptance checks of reclaiming: `deadband daemon` reads its
-//! config file, runs a reclaimer under memory pressure, and `deadband
-//! status --json` shows the reclaim.
+//! The plan's acceptance checks of reclaiming: the daemon runs the
+//! reclaimer of its config file under memory pressure, and `deadband
+//! status --json` shows the reclaim. `deadband daemon` reads the file.
 
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crumbkit::Sink;
 
 use super::{REPLY_WITHIN, Test, ask};
 use crate::admit::GIB;
 use crate::cli::{Machine, run_to};
+use crate::daemon::{Settings, bind, serve};
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::Reply;
+use crate::reclaim::{CONFIG_FILE, Config};
 
 /// A probe whose memory pressure is always warn, the test hook that forces
 /// the daemon to reclaim.
@@ -52,8 +56,8 @@ impl Reclaimer {
         let script = directory.join("reclaimer.sh");
         let calls = directory.join("calls");
         let config = format!(
-            "reclaim_after = \"50ms\"\nreclaim_timeout = \"{timeout}\"\n\n\
-             [[reclaim]]\nname = \"workspaces\"\ncommand = [\"sh\", \"{}\"]\n",
+            "reclaim_after = \"10s\"\nreclaim_timeout = \"{timeout}\"\n\n\
+             [[reclaim]]\nname = \"workspaces\"\ncommand = [\"/bin/sh\", \"{}\"]\n",
             script.display()
         );
         #[expect(
@@ -100,6 +104,34 @@ fn start_daemon_command(test: &Test<Warn>) {
             ["deadband", "daemon", "--max-jobs", "2"],
         )
     });
+    wait_for_daemon(test);
+}
+
+/// How long memory stays short before the test daemon reclaims. The config
+/// file refuses less than 10 seconds, so the test sets it after reading the
+/// file.
+const TEST_AFTER: Duration = Duration::from_millis(50);
+
+/// Starts a daemon on the test's machine with the reclaimers of the
+/// config file in `reclaimer`, which reclaims after [`TEST_AFTER`], and
+/// waits until it answers.
+fn start_daemon(test: &Test<Warn>, reclaimer: &Reclaimer) {
+    let bound = bind(&test.machine.socket).expect("the test socket binds");
+    let log = Arc::clone(&test.machine.log);
+    let mut config = Config::load(&reclaimer.0.join(CONFIG_FILE)).expect("the config reads");
+    config.after = TEST_AFTER;
+    thread::spawn(move || {
+        let bound = bound;
+        let max_jobs = NonZeroUsize::new(2).expect("positive");
+        let mut settings = Settings::new(max_jobs, NonZeroUsize::new(4), None, None);
+        settings.reclaim = config;
+        serve(&bound.listener, Warn, settings, &log)
+    });
+    wait_for_daemon(test);
+}
+
+/// Waits until the daemon on the test's socket answers.
+fn wait_for_daemon(test: &Test<Warn>) {
     let deadline = Instant::now() + REPLY_WITHIN;
     while crate::client::jobs(&test.machine.socket, REPLY_WITHIN).is_err() {
         assert!(Instant::now() < deadline, "the daemon answers");
@@ -127,9 +159,8 @@ fn under_warn_pressure_the_daemon_runs_the_reclaimer_dry_then_for_real_and_statu
         "10s",
         r#"echo '{"data":[{"name":"idle-one","state":"stopped","freed":5368709120}]}'"#,
     );
-    let mut test = Test::new(Warn);
-    test.machine.environment.config = Some(reclaimer.0.clone());
-    start_daemon_command(&test);
+    let test = Test::new(Warn);
+    start_daemon(&test, &reclaimer);
     let out = status_until(&test, |out| out.contains(r#""freed_bytes":5368709120"#));
     assert!(out.contains(r#""reclaimer":"workspaces""#), "{out}");
     assert!(out.contains(r#""need":"memory=4G""#), "{out}");
@@ -149,9 +180,8 @@ fn under_warn_pressure_the_daemon_runs_the_reclaimer_dry_then_for_real_and_statu
 #[test]
 fn a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues() {
     let reclaimer = Reclaimer::with("100ms", "exec sleep 3");
-    let mut test = Test::new(Warn);
-    test.machine.environment.config = Some(reclaimer.0.clone());
-    start_daemon_command(&test);
+    let test = Test::new(Warn);
+    start_daemon(&test, &reclaimer);
     let out = status_until(&test, |out| out.contains("ran past its timeout"));
     assert!(out.contains(r#""reclaimer":"workspaces""#), "{out}");
     let log = test.log();
@@ -161,4 +191,30 @@ fn a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues() {
     );
     let (_job, reply) = ask(&test.machine.socket, "build");
     assert_eq!(reply, Reply::Granted { jobs: 2 });
+}
+
+#[test]
+fn the_daemon_command_reads_its_reclaimers_from_the_config_file() {
+    let reclaimer = Reclaimer::with("10s", "exit 0");
+    let mut test = Test::new(Warn);
+    test.machine.environment.config = Some(reclaimer.0.clone());
+    start_daemon_command(&test);
+    let log = test.log();
+    assert!(
+        log.contains("the daemon asks workspaces to reclaim when memory or disk runs short"),
+        "{log}"
+    );
+}
+
+#[test]
+fn the_daemon_command_runs_no_reclaimer_and_says_why_when_its_config_is_refused() {
+    let reclaimer = Reclaimer::with("0s", "exit 0");
+    let mut test = Test::new(Warn);
+    test.machine.environment.config = Some(reclaimer.0.clone());
+    start_daemon_command(&test);
+    let log = test.log();
+    assert!(
+        log.contains("reclaim_timeout is 0") && log.contains("so the daemon runs no reclaimer"),
+        "{log}"
+    );
 }

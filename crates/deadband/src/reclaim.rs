@@ -13,15 +13,17 @@
 use std::fmt;
 use std::io;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 mod tests;
+mod watch;
 mod worker;
 
+pub use self::watch::{MAX_REST, Watch};
 pub use self::worker::reclaim;
 
 /// The name of the daemon's config file in deadband's configuration
@@ -31,6 +33,10 @@ pub const CONFIG_FILE: &str = "config.toml";
 /// How long memory must stay short before the daemon reclaims, and how long
 /// it waits after a reclaim before the next, when the config sets none.
 pub const DEFAULT_AFTER: Duration = Duration::from_secs(60);
+
+/// The shortest `reclaim_after` that the config file accepts. A shorter one
+/// would ask a reclaimer again before it could have freed anything.
+pub const MIN_AFTER: Duration = Duration::from_secs(10);
 
 /// How long the daemon waits for one run of a reclaimer when the config
 /// sets no timeout.
@@ -117,18 +123,30 @@ impl Config {
     /// # Errors
     ///
     /// Returns, in one line, why the text is not a config: a TOML error,
-    /// an unknown key, an age or size that does not parse, or a reclaimer
-    /// with an empty command.
+    /// an unknown key, an age or size that does not parse, a
+    /// `reclaim_after` under [`MIN_AFTER`], a zero `reclaim_timeout`, or a
+    /// reclaimer with an empty command.
     pub fn parse(text: &str) -> Result<Self, String> {
         let file: File = basic_toml::from_str(text).map_err(|error| one_line(&error))?;
         if let Some(empty) = file.reclaim.iter().find(|each| each.command.is_empty()) {
             return Err(format!("the reclaimer {} has an empty command", empty.name));
         }
         let defaults = Self::default();
+        let after = age(file.reclaim_after, defaults.after)?;
+        if after < MIN_AFTER {
+            return Err(format!(
+                "reclaim_after is {}, under the shortest it accepts, 10s",
+                humantime::format_duration(after)
+            ));
+        }
+        let timeout = age(file.reclaim_timeout, defaults.timeout)?;
+        if timeout.is_zero() {
+            return Err("reclaim_timeout is 0, and a reclaimer needs time to run".to_owned());
+        }
         Ok(Self {
             reclaimers: file.reclaim,
-            after: age(file.reclaim_after, defaults.after)?,
-            timeout: age(file.reclaim_timeout, defaults.timeout)?,
+            after,
+            timeout,
             memory: size(file.reclaim_memory, defaults.memory)?,
             disk: size(file.reclaim_disk, defaults.disk)?,
         })
@@ -203,63 +221,6 @@ impl Resource {
             Self::Disk => &config.disk,
         };
         size_bytes(size).unwrap_or(u64::MAX)
-    }
-}
-
-/// The rule that says when the daemon starts a reclaim, fed with what the
-/// daemon reads each second. It reads no clock, so the tests check each
-/// case directly.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Watch {
-    /// Since when memory has been short without a break.
-    short_since: Option<Instant>,
-    /// Whether a reclaim runs now.
-    running: bool,
-    /// When the last reclaim ended.
-    ended: Option<Instant>,
-}
-
-impl Watch {
-    /// Records that at `now` memory was short, or not, and free disk was
-    /// critically low, or not, and returns what to reclaim now. A returned
-    /// resource counts as a running reclaim until [`Watch::ended`].
-    ///
-    /// Nothing is reclaimed without a reclaimer in `config`, while a
-    /// reclaim runs, or within `config.after` of the last one's end.
-    /// Critically low disk is reclaimed at once, and before memory. Short
-    /// memory is reclaimed once it has lasted `config.after`.
-    pub fn observe(
-        &mut self,
-        config: &Config,
-        memory_short: bool,
-        disk_critical: bool,
-        now: Instant,
-    ) -> Option<Resource> {
-        self.short_since = memory_short.then(|| self.short_since.unwrap_or(now));
-        let resting = self
-            .ended
-            .is_some_and(|ended| now.saturating_duration_since(ended) < config.after);
-        if config.reclaimers.is_empty() || self.running || resting {
-            return None;
-        }
-        let lasted = self
-            .short_since
-            .is_some_and(|since| now.saturating_duration_since(since) >= config.after);
-        let resource = if disk_critical {
-            Resource::Disk
-        } else if lasted {
-            Resource::Memory
-        } else {
-            return None;
-        };
-        self.running = true;
-        Some(resource)
-    }
-
-    /// Records that the running reclaim ended at `now`.
-    pub const fn ended(&mut self, now: Instant) {
-        self.running = false;
-        self.ended = Some(now);
     }
 }
 
