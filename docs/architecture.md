@@ -39,7 +39,9 @@ status.
 | --- | --- |
 | probe | Reads CPU load, memory pressure, swap and disk space from macOS every second, behind a trait so a Linux probe can be added later. |
 | admit | Decides whether a waiting job starts now and how many threads it gets, and holds the queue with its fast and normal lanes. The rule holds a job on the job count or the lane's places even when the probe fails, and on critically low disk even when nothing runs. Past those checks it admits a job when nothing runs or the probe fails, and otherwise holds it on memory pressure or the load. |
+| admission | One public call, `admit`, that does what `deadband run` does before it starts a job: it chooses the lane, asks the daemon, waits, and returns the job's lease and variables. It writes no log, so a program that embeds deadband passes a callback. |
 | daemon | Listens on the socket, samples the probe once a second, and grants waiting jobs as admit allows. |
+| serve | One public call, `run_daemon`, that does what `deadband daemon` does before it prints a failure: it binds the socket, reads the reclaim config and serves. |
 | client | Asks the daemon to admit a job or to list its jobs, and gives the reason to start at once when the daemon cannot be asked. |
 | protocol | The messages over the socket, one JSON object per line. |
 | socket | Finds the socket's path from the environment, and lists the variables deadband reads. |
