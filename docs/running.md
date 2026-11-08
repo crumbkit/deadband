@@ -322,5 +322,7 @@ keeps running its job, and each waiting one starts its job at once.
 
 A daemon that launchd restarts starts with an empty queue and an empty list
 of running jobs. It admits up to `--max-jobs` more jobs while jobs that the
-earlier daemon granted may still be running, so the machine can briefly run
-more than `--max-jobs` jobs.
+earlier daemon granted may still be running. The jobs that were waiting on
+the earlier daemon start at once when the connection closes, and the new
+daemon does not count them. The machine can therefore run more than
+`--max-jobs` jobs until those jobs end.

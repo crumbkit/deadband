@@ -38,7 +38,7 @@ status.
 | Module | Owns |
 | --- | --- |
 | probe | Reads CPU load, memory pressure, swap and disk space from macOS every second, behind a trait so a Linux probe can be added later. |
-| admit | Decides whether a waiting job starts now and how many threads it gets, and holds the queue with its fast and normal lanes. The rule admits a job when nothing runs or the probe fails, and otherwise holds it on the job count, the lane's places, critically low disk, memory pressure or the load. |
+| admit | Decides whether a waiting job starts now and how many threads it gets, and holds the queue with its fast and normal lanes. The rule holds a job on the job count or the lane's places even when the probe fails, and on critically low disk even when nothing runs. Past those checks it admits a job when nothing runs or the probe fails, and otherwise holds it on memory pressure or the load. |
 | daemon | Listens on the socket, samples the probe once a second, and grants waiting jobs as admit allows. |
 | client | Asks the daemon to admit a job or to list its jobs, and gives the reason to start at once when the daemon cannot be asked. |
 | protocol | The messages over the socket, one JSON object per line. |
@@ -55,8 +55,12 @@ status.
 - Only the throttle module changes a job's priority. clippy's
   `disallowed-methods` refuses those calls everywhere else.
 - deadband never signals or ends a job.
-- When the probe or the daemon fails, the job runs at once and deadband says
-  why in one line. A failure in deadband never blocks work.
+- When the daemon cannot be reached, does not answer or closes the connection,
+  the job runs at once and `deadband run` says why in one line on standard
+  error. A daemon that hangs while it keeps the connection open still keeps a
+  queued job waiting, as [running.md](running.md) says.
+- When the probe cannot read the machine, the daemon starts each job once a
+  place is free, and its log says why in one line.
 - No source file outside tests is longer than 400 lines.
 
 ## Reclaiming memory and disk
@@ -125,15 +129,18 @@ owner of the jobserver and of signals.
 | sink | The `HistorySink` trait that receives a record of each finished job. The first sink writes records to a board with `board put`. |
 | tui | `deadband top`: live load, the queue, running jobs and their learned costs, drawn with ratatui. |
 
-Two built modules would also grow. The admit rule would additionally require
-that live headroom covers the label's learned cost. The throttle module would
+Three built modules would also grow. The admit rule would additionally
+require that live headroom covers the label's learned cost. The client would
+start the job with the jobserver's environment. The throttle module would
 pause and resume jobs, with pausing off by default.
 
 ## Planned rules
 
-- Only the throttle module would send a signal to a job.
+- Only the throttle module would send a signal to a job, and clippy's
+  `disallowed-methods` would refuse those calls everywhere else.
 - deadband would pause and resume jobs and never end one. When deadband exits
   for any reason, it would resume every job it paused.
-- When the ledger fails, the job would run at once.
+- When the ledger fails, the job would run at once and deadband would say
+  why in one line.
 - At idle the daemon would use under 1% of one core and under 50 MB of
   memory, and an admission answer would take under 5 ms.

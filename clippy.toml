@@ -3,9 +3,10 @@
 # owning module, which suppresses the lint with #[expect] and a reason
 # (BASE-5). The environment, process, priority and entry-point effects have
 # owning modules now, and their reasons name them. The DUR-1 and DUR-2
-# entries have no owning module yet, because deadband writes no durable file
-# and takes no file lock. The change that adds one names its path in the
-# #[expect] reason.
+# entries have no atomic writer and no lock module yet. Their only uses are
+# in crates/deadband/src/daemon/bind.rs, which creates the daemon's empty lock
+# file and locks it without waiting, and whose #[expect] reasons say so. The
+# change that adds a writer or lock module names its path in the reason.
 
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
