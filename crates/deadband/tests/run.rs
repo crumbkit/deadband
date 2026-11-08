@@ -219,7 +219,10 @@ mod macos {
             .expect("the second run starts");
         let second_err = second.stderr.take().expect("piped");
         let waits = line(second_err).expect("reads");
-        assert!(waits.contains("the job waits for headroom"), "{waits}");
+        assert!(
+            waits.contains("the job waits because the daemon already runs 1 job"),
+            "{waits}"
+        );
 
         let status = deadband(socket, &["status"]).output().expect("status runs");
         let status = String::from_utf8(status.stdout).expect("UTF-8");

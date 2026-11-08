@@ -423,7 +423,8 @@
       "required": [
         "label",
         "pid",
-        "command"
+        "command",
+        "lane"
       ]
     },
     "Jobs": {
