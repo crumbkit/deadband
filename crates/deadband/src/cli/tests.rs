@@ -235,6 +235,15 @@ fn run_with_a_daemon_runs_the_command_and_frees_its_place_when_it_ends() {
     let (code, _, err) = test.run(&["run", "--label", "first", "--", "true"]);
     assert_eq!(code, 0, "{err}");
     assert_eq!(test.log(), "");
+    // The daemon frees the place on its own thread once it reads the end;
+    // each status request is an observable round trip.
+    let mut listed = crate::client::jobs(&test.machine.socket, REPLY_WITHIN);
+    while listed
+        .as_ref()
+        .map_or(true, |jobs| !jobs.running.is_empty())
+    {
+        listed = crate::client::jobs(&test.machine.socket, REPLY_WITHIN);
+    }
     let (_next, reply) = ask(&test.machine.socket, "next");
     assert_eq!(reply, Reply::Granted { jobs: 4 });
 }
