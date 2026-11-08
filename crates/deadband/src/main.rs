@@ -2,9 +2,28 @@
 //! holds against the machine it runs on.
 
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
-/// Runs the command and returns its exit code, so destructors run before
-/// the process ends (BASE-7).
+use deadband::cli::Machine;
+
+/// Reads the environment once (BASE-6), runs the command and returns its
+/// exit code, so destructors run before the process ends (BASE-7).
 fn main() -> ExitCode {
-    deadband::cli::run(&deadband::probe::System)
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the entry point reads the environment once, for the variables that deadband::socket::VARIABLES lists"
+    )]
+    let socket = deadband::socket::path(|name| std::env::var_os(name));
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the daemon's log and the line that says why `run` starts a job at once go to standard error, which crumbkit's Sink does not lend out"
+    )]
+    let stderr = std::io::stderr();
+    deadband::cli::run(&Machine {
+        probe: deadband::probe::System,
+        socket,
+        log: Arc::new(Mutex::new(stderr)),
+        cores: thread::available_parallelism().ok(),
+    })
 }
