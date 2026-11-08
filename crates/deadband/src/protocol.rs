@@ -1,0 +1,115 @@
+//! The messages that a client and the daemon exchange over the socket, one
+//! JSON object per line.
+//!
+//! A client opens one connection per request. `run` sends [`Request::Ask`],
+//! reads [`Reply::Granted`] or [`Reply::Queued`] and then, if it waited,
+//! [`Reply::Granted`], keeps the connection open while its job runs, and
+//! sends [`Request::Done`] when the job ends. The daemon counts the job as
+//! running until that line arrives or the connection closes. `status` sends
+//! [`Request::Status`] and reads [`Reply::Jobs`].
+
+use std::io::{self, BufRead, Read, Write};
+
+use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+
+#[cfg(test)]
+mod tests;
+
+/// The longest line, in bytes, that either side reads. A longer line is
+/// refused as malformed, so a peer cannot make the reader hold an unbounded
+/// line in memory.
+pub const MAX_LINE: u64 = 64 * 1024;
+
+/// A job, as a client describes it and `status` shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Job {
+    /// The label that `--label` gave, or the program's name.
+    pub label: String,
+    /// The process ID of the `deadband run` that asked for the job.
+    pub pid: u32,
+    /// The job's command line, with its words joined by spaces.
+    pub command: String,
+}
+
+/// What a client asks the daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Request {
+    /// Asks to start a job, and waits for [`Reply::Granted`].
+    Ask(Job),
+    /// Asks for the running and waiting jobs.
+    Status,
+    /// Says that the granted job ended.
+    Done {
+        /// The job's exit code, or `None` when a signal ended it or it did
+        /// not start.
+        exit_code: Option<i32>,
+    },
+}
+
+/// What the daemon answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reply {
+    /// The job may start now.
+    Granted,
+    /// The job waits, and `ahead` jobs wait in front of it.
+    Queued {
+        /// How many jobs wait in front of this one.
+        ahead: usize,
+    },
+    /// The running and waiting jobs.
+    Jobs(Jobs),
+}
+
+/// The daemon's running and waiting jobs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Jobs {
+    /// The most jobs that the daemon lets run at once.
+    pub max_jobs: usize,
+    /// The running jobs, in the order they started.
+    pub running: Vec<Job>,
+    /// The waiting jobs, the oldest first.
+    pub waiting: Vec<Job>,
+}
+
+/// Writes `message` to `writer` as one JSON line and flushes it.
+///
+/// # Errors
+///
+/// Returns the error of a write that failed.
+pub fn write_line<T: Serialize>(writer: &mut impl Write, message: &T) -> io::Result<()> {
+    let mut line = serde_json::to_vec(message).map_err(io::Error::other)?;
+    line.push(b'\n');
+    writer.write_all(&line)?;
+    writer.flush()
+}
+
+/// Reads one JSON line from `reader`, or returns `None` when the peer closed
+/// the connection before it sent a line.
+///
+/// # Errors
+///
+/// Returns an error of kind [`io::ErrorKind::InvalidData`] for a line that
+/// is not a `T` or is longer than [`MAX_LINE`], and the error of a read
+/// that failed, such as a timeout.
+pub fn read_line<T: DeserializeOwned>(reader: &mut impl BufRead) -> io::Result<Option<T>> {
+    let mut line = Vec::new();
+    // One byte past the limit shows that the line is longer than it.
+    reader.take(MAX_LINE + 1).read_until(b'\n', &mut line)?;
+    if line.is_empty() {
+        return Ok(None);
+    }
+    let too_long = u64::try_from(line.len()).map_or(true, |length| length > MAX_LINE);
+    if too_long {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("a line is longer than {MAX_LINE} bytes"),
+        ));
+    }
+    serde_json::from_slice(&line)
+        .map(Some)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
