@@ -1,8 +1,9 @@
 //! Tests of `deadband run` and `deadband daemon` through the built binary,
 //! which are the plan's acceptance checks.
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Output, Stdio};
 
 /// A socket path in the temporary directory. Dropping it removes the
 /// socket and its lock file.
@@ -20,7 +21,20 @@ fn socket(name: &str) -> Socket {
     Socket(std::env::temp_dir().join(format!("db-it-{}-{name}.sock", std::process::id())))
 }
 
-/// Returns a `deadband` command whose daemon socket is `socket`.
+/// The variables that the environment of the test's caller may set and
+/// that change what `deadband run` does.
+const CALLER_VARIABLES: [&str; 7] = [
+    "DEADBAND_HELD",
+    "DEADBAND_BYPASS",
+    "CARGO_BUILD_JOBS",
+    "NEXTEST_TEST_THREADS",
+    "RUST_TEST_THREADS",
+    "CMAKE_BUILD_PARALLEL_LEVEL",
+    "MAKEFLAGS",
+];
+
+/// Returns a `deadband` command whose daemon socket is `socket`, without
+/// the variables of [`CALLER_VARIABLES`].
 fn deadband(socket: &Path, args: &[&str]) -> Command {
     #[expect(
         clippy::disallowed_methods,
@@ -28,7 +42,100 @@ fn deadband(socket: &Path, args: &[&str]) -> Command {
     )]
     let mut command = Command::new(env!("CARGO_BIN_EXE_deadband"));
     command.args(args).env("DEADBAND_SOCKET", socket);
+    for name in CALLER_VARIABLES {
+        command.env_remove(name);
+    }
     command
+}
+
+/// A daemon that the test started, which the test stops when it ends.
+struct Daemon(Child);
+
+impl Daemon {
+    /// Starts a daemon on `socket` that runs at most `max_jobs` jobs, and
+    /// waits until it listens.
+    fn start(socket: &Path, max_jobs: &str) -> Self {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test runs the built binary as a person would"
+        )]
+        let mut daemon = deadband(socket, &["daemon", "--max-jobs", max_jobs])
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the daemon starts");
+        let err = daemon.stderr.take().expect("piped");
+        let mut first = String::new();
+        BufReader::new(err).read_line(&mut first).expect("reads");
+        assert!(first.contains("listens on"), "{first}");
+        Self(daemon)
+    }
+}
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test stops the daemon it started"
+        )]
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Runs `command` and returns its output.
+fn output(command: &mut Command) -> Output {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test runs the built binary, as a person would"
+    )]
+    let output = command.output().expect("deadband runs");
+    output
+}
+
+/// Returns the nice value of the process `pid`, as `ps` prints it.
+fn nice_of(pid: &str) -> i32 {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test reads a nice value with ps"
+    )]
+    let ps = Command::new("ps")
+        .args(["-o", "nice=", "-p", pid])
+        .output()
+        .expect("ps runs");
+    String::from_utf8(ps.stdout)
+        .expect("UTF-8")
+        .trim()
+        .parse()
+        .expect("ps prints a number")
+}
+
+#[test]
+fn a_granted_job_on_a_daemon_of_two_jobs_gets_half_the_cores_as_its_build_jobs() {
+    let socket = socket("half");
+    let _daemon = Daemon::start(&socket.0, "2");
+    let run = output(deadband(
+        &socket.0,
+        &["run", "--", "sh", "-c", "echo $CARGO_BUILD_JOBS"],
+    ));
+    assert!(run.status.success(), "{run:?}");
+    let cores = std::thread::available_parallelism().expect("the cores read");
+    let half = (cores.get() / 2).max(1);
+    assert_eq!(String::from_utf8(run.stdout).expect("UTF-8"), format!("{half}\n"));
+}
+
+#[test]
+fn a_normal_job_runs_at_nice_5_and_a_fast_job_at_its_callers_nice_value() {
+    let socket = socket("nice");
+    let _daemon = Daemon::start(&socket.0, "2");
+    let caller = nice_of(&std::process::id().to_string());
+    let script = "ps -o nice= -p $$";
+    let normal = output(deadband(&socket.0, &["run", "--", "sh", "-c", script]));
+    let normal = String::from_utf8(normal.stdout).expect("UTF-8");
+    assert_eq!(normal.trim().parse::<i32>().ok(), Some(caller.max(5)));
+    let args = ["run", "--lane", "fast", "--", "sh", "-c", script];
+    let fast = output(deadband(&socket.0, &args));
+    let fast = String::from_utf8(fast.stdout).expect("UTF-8");
+    assert_eq!(fast.trim().parse::<i32>().ok(), Some(caller));
 }
 
 #[test]
@@ -107,5 +214,56 @@ mod macos {
         assert!(started.elapsed() >= Duration::from_secs(4));
         daemon.kill().expect("the test stops its daemon");
         daemon.wait().expect("the daemon is reaped");
+    }
+
+    #[test]
+    fn with_one_place_a_fast_job_queued_after_a_normal_job_starts_first() {
+        let socket = socket("lanes");
+        let socket = &socket.0;
+        let _daemon = super::Daemon::start(socket, "1");
+        let order = socket.with_extension("order");
+        let order_path = order.to_str().expect("UTF-8");
+
+        let mut running = deadband(socket, &["run", "--", "sh", "-c", "echo started; sleep 3"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the running job starts");
+        let out = running.stdout.take().expect("piped");
+        assert_eq!(line(out).expect("reads"), "started\n");
+
+        let mut queue = |lane: &str| {
+            let script = format!("echo {lane} >> {order_path}; sleep 1");
+            let mut run = deadband(socket, &["run", "--lane", lane, "--", "sh", "-c", &script])
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("the run starts");
+            let err = run.stderr.take().expect("piped");
+            let waits = line(err).expect("reads");
+            assert!(waits.contains("the job waits"), "{waits}");
+            run
+        };
+        let mut normal = queue("normal");
+        let mut fast = queue("fast");
+
+        assert!(running.wait().expect("the running job ends").success());
+        assert!(normal.wait().expect("the normal job ends").success());
+        assert!(fast.wait().expect("the fast job ends").success());
+        let started = std::fs::read_to_string(&order).expect("the order reads");
+        let _ = std::fs::remove_file(&order);
+        assert_eq!(started, "fast\nnormal\n");
+    }
+
+    #[test]
+    fn a_run_inside_the_job_that_holds_the_only_place_runs_at_once() {
+        let socket = socket("nested");
+        let socket = &socket.0;
+        let _daemon = super::Daemon::start(socket, "1");
+        let started = Instant::now();
+        let deadband_path = env!("CARGO_BIN_EXE_deadband");
+        let run = deadband(socket, &["run", "--", deadband_path, "run", "--", "true"])
+            .output()
+            .expect("deadband runs");
+        assert!(run.status.success(), "{run:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

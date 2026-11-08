@@ -5,13 +5,14 @@ use std::io::BufReader;
 use std::num::NonZeroUsize;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use super::{Log, Settings, Unbound, bind, default_max_jobs, lock_path, serve};
-use crate::probe::{Pressure, Probe, Sample, Unreadable};
+use crate::admit::{GIB, Hold, Lane};
+use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
@@ -27,15 +28,23 @@ const FIRST_LINE_WITHIN: Duration = Duration::from_millis(100);
 /// The value of a [`Dial`] that makes its probe fail.
 const UNREADABLE: u8 = 3;
 
-/// A probe whose pressure the test sets.
+/// The cores of the test daemon's machine.
+const CORES: usize = 16;
+
+/// A probe whose pressure and free disk the test sets. Its load is 1.
 #[derive(Clone)]
-struct Dial(Arc<AtomicU8>);
+struct Dial(Arc<AtomicU8>, Arc<AtomicBool>);
 
 impl Dial {
     fn new(pressure: Pressure) -> Self {
-        let dial = Self(Arc::new(AtomicU8::new(0)));
+        let dial = Self(Arc::new(AtomicU8::new(0)), Arc::new(AtomicBool::new(false)));
         dial.set(pressure);
         dial
+    }
+
+    /// Makes the disk's free space critically low, or not.
+    fn fill_disk(&self, full: bool) {
+        self.1.store(full, Ordering::SeqCst);
     }
 
     fn set(&self, pressure: Pressure) {
@@ -67,6 +76,14 @@ impl Probe for Dial {
             swap_total_bytes: 0,
         })
     }
+
+    fn disk(&self, _path: &Path) -> std::io::Result<Disk> {
+        let free = if self.1.load(Ordering::SeqCst) { 5 } else { 500 };
+        Ok(Disk {
+            free_bytes: free * GIB,
+            total_bytes: 1000 * GIB,
+        })
+    }
 }
 
 /// Starts a daemon with `max_jobs` and `dial` on a new socket, and returns
@@ -78,6 +95,8 @@ fn start(max_jobs: usize, dial: &Dial) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
     let log: Log = written.clone();
     let settings = Settings {
         max_jobs: NonZeroUsize::new(max_jobs).expect("the test passes a positive maximum"),
+        cores: NonZeroUsize::new(CORES),
+        home: Some(std::env::temp_dir()),
         sample_every: SAMPLE_EVERY,
         first_line_within: FIRST_LINE_WITHIN,
     };
@@ -108,8 +127,15 @@ impl Client {
     }
 
     fn ask(path: &Path, label: &str) -> Self {
+        Self::ask_in(path, label, Lane::Normal)
+    }
+
+    fn ask_in(path: &Path, label: &str, lane: Lane) -> Self {
         let mut client = Self::connect(path);
-        client.send(&Request::Ask(job(label)));
+        client.send(&Request::Ask(Job {
+            lane,
+            ..job(label)
+        }));
         client
     }
 
@@ -129,6 +155,7 @@ fn job(label: &str) -> Job {
         label: label.to_owned(),
         pid: 7,
         command: format!("make {label}"),
+        lane: Lane::Normal,
     }
 }
 
@@ -141,41 +168,57 @@ fn jobs(path: &Path) -> Jobs {
     }
 }
 
+/// The reply to a job that waits behind `ahead` jobs because the most jobs
+/// run.
+fn queued(ahead: usize, max_jobs: usize) -> Reply {
+    Reply::Queued {
+        ahead,
+        held: Some(Hold::Full { max_jobs }),
+    }
+}
+
+/// The grant of a normal-lane job on a daemon of `max_jobs` jobs.
+fn granted(max_jobs: usize) -> Reply {
+    Reply::Granted {
+        jobs: CORES / max_jobs,
+    }
+}
+
 #[test]
 fn a_job_starts_at_once_when_nothing_runs() {
     let (path, _) = start(1, &Dial::new(Pressure::Critical));
-    assert_eq!(Client::ask(&path, "a").reply(), Reply::Granted);
+    assert_eq!(Client::ask(&path, "a").reply(), granted(1));
 }
 
 #[test]
 fn a_second_job_waits_until_the_first_job_says_it_ended() {
     let (path, _) = start(1, &Dial::new(Pressure::Normal));
     let mut first = Client::ask(&path, "a");
-    assert_eq!(first.reply(), Reply::Granted);
+    assert_eq!(first.reply(), granted(1));
     let mut second = Client::ask(&path, "b");
-    assert_eq!(second.reply(), Reply::Queued { ahead: 0 });
+    assert_eq!(second.reply(), queued(0, 1));
     first.send(&Request::Done { exit_code: Some(0) });
-    assert_eq!(second.reply(), Reply::Granted);
+    assert_eq!(second.reply(), granted(1));
 }
 
 #[test]
 fn a_waiting_job_starts_when_the_client_of_the_running_job_disconnects() {
     let (path, _) = start(1, &Dial::new(Pressure::Normal));
     let mut first = Client::ask(&path, "a");
-    assert_eq!(first.reply(), Reply::Granted);
+    assert_eq!(first.reply(), granted(1));
     let mut second = Client::ask(&path, "b");
-    assert_eq!(second.reply(), Reply::Queued { ahead: 0 });
+    assert_eq!(second.reply(), queued(0, 1));
     drop(first);
-    assert_eq!(second.reply(), Reply::Granted);
+    assert_eq!(second.reply(), granted(1));
 }
 
 #[test]
 fn status_lists_the_running_and_the_waiting_jobs() {
     let (path, _) = start(1, &Dial::new(Pressure::Normal));
     let mut first = Client::ask(&path, "a");
-    assert_eq!(first.reply(), Reply::Granted);
+    assert_eq!(first.reply(), granted(1));
     let mut second = Client::ask(&path, "b");
-    assert_eq!(second.reply(), Reply::Queued { ahead: 0 });
+    assert_eq!(second.reply(), queued(0, 1));
     assert_eq!(
         jobs(&path),
         Jobs {
@@ -191,11 +234,68 @@ fn a_job_waits_under_warn_pressure_and_starts_when_pressure_falls_to_normal() {
     let dial = Dial::new(Pressure::Warn);
     let (path, _) = start(2, &dial);
     let mut first = Client::ask(&path, "a");
-    assert_eq!(first.reply(), Reply::Granted);
+    assert_eq!(first.reply(), granted(2));
     let mut second = Client::ask(&path, "b");
-    assert_eq!(second.reply(), Reply::Queued { ahead: 0 });
+    let held = Some(Hold::Memory {
+        pressure: Pressure::Warn,
+    });
+    assert_eq!(second.reply(), Reply::Queued { ahead: 0, held });
     dial.set(Pressure::Normal);
-    assert_eq!(second.reply(), Reply::Granted);
+    assert_eq!(second.reply(), granted(2));
+}
+
+#[test]
+fn a_job_waits_while_free_disk_is_critically_low_and_starts_when_it_is_freed() {
+    let dial = Dial::new(Pressure::Normal);
+    dial.fill_disk(true);
+    let (path, _) = start(2, &dial);
+    let mut first = Client::ask(&path, "a");
+    assert_eq!(first.reply(), granted(2));
+    let mut second = Client::ask(&path, "b");
+    assert!(
+        matches!(
+            second.reply(),
+            Reply::Queued {
+                ahead: 0,
+                held: Some(Hold::Disk { .. })
+            }
+        ),
+        "the low disk holds the second job"
+    );
+    dial.fill_disk(false);
+    assert_eq!(second.reply(), granted(2));
+}
+
+#[test]
+fn a_second_job_starts_at_once_while_free_disk_is_ample() {
+    let (path, _) = start(2, &Dial::new(Pressure::Normal));
+    let mut first = Client::ask(&path, "a");
+    assert_eq!(first.reply(), granted(2));
+    assert_eq!(Client::ask(&path, "b").reply(), granted(2));
+}
+
+#[test]
+fn a_fast_job_gets_one_more_thread_than_a_normal_job() {
+    let (path, _) = start(2, &Dial::new(Pressure::Normal));
+    assert_eq!(
+        Client::ask_in(&path, "a", Lane::Fast).reply(),
+        Reply::Granted { jobs: 9 }
+    );
+}
+
+#[test]
+fn a_waiting_fast_job_starts_before_a_normal_job_that_waited_longer() {
+    let (path, _) = start(1, &Dial::new(Pressure::Normal));
+    let mut first = Client::ask(&path, "a");
+    assert_eq!(first.reply(), granted(1));
+    let mut normal = Client::ask(&path, "normal");
+    assert_eq!(normal.reply(), queued(0, 1));
+    let mut fast = Client::ask_in(&path, "fast", Lane::Fast);
+    assert_eq!(fast.reply(), queued(0, 1));
+    first.send(&Request::Done { exit_code: Some(0) });
+    assert_eq!(fast.reply(), Reply::Granted { jobs: 17 });
+    fast.send(&Request::Done { exit_code: Some(0) });
+    assert_eq!(normal.reply(), granted(1));
 }
 
 #[test]
@@ -204,9 +304,9 @@ fn every_job_starts_at_once_when_the_probe_fails_and_the_log_says_why() {
     dial.break_it();
     let (path, log) = start(1, &dial);
     let mut first = Client::ask(&path, "a");
-    assert_eq!(first.reply(), Reply::Granted);
+    assert_eq!(first.reply(), granted(1));
     let mut second = Client::ask(&path, "b");
-    assert_eq!(second.reply(), Reply::Granted);
+    assert_eq!(second.reply(), granted(1));
     let log = String::from_utf8(log.lock().expect("the log locks").clone()).expect("UTF-8");
     assert_eq!(
         log,
@@ -267,11 +367,11 @@ fn the_socket_and_its_lock_file_are_open_to_their_user_only() {
 fn a_waiting_client_that_disconnects_leaves_the_queue_and_the_next_moves_up() {
     let (path, _) = start(1, &Dial::new(Pressure::Normal));
     let mut first = Client::ask(&path, "a");
-    assert_eq!(first.reply(), Reply::Granted);
+    assert_eq!(first.reply(), granted(1));
     let mut second = Client::ask(&path, "b");
-    assert_eq!(second.reply(), Reply::Queued { ahead: 0 });
+    assert_eq!(second.reply(), queued(0, 1));
     let mut third = Client::ask(&path, "c");
-    assert_eq!(third.reply(), Reply::Queued { ahead: 1 });
+    assert_eq!(third.reply(), queued(1, 1));
     drop(second);
     let mut listed = jobs(&path);
     while listed.waiting.len() > 1 {
@@ -282,25 +382,25 @@ fn a_waiting_client_that_disconnects_leaves_the_queue_and_the_next_moves_up() {
     }
     assert_eq!(listed.waiting, vec![job("c")]);
     first.send(&Request::Done { exit_code: Some(0) });
-    assert_eq!(third.reply(), Reply::Granted);
+    assert_eq!(third.reply(), granted(1));
 }
 
 #[test]
 fn a_line_the_daemon_cannot_read_after_an_ask_removes_that_job() {
     let (path, _) = start(1, &Dial::new(Pressure::Normal));
     let mut first = Client::ask(&path, "a");
-    assert_eq!(first.reply(), Reply::Granted);
+    assert_eq!(first.reply(), granted(1));
     let mut second = Client::ask(&path, "b");
-    assert_eq!(second.reply(), Reply::Queued { ahead: 0 });
+    assert_eq!(second.reply(), queued(0, 1));
     std::io::Write::write_all(&mut first.stream, b"not json\n").expect("the line writes");
-    assert_eq!(second.reply(), Reply::Granted);
+    assert_eq!(second.reply(), granted(1));
 }
 
 #[test]
 fn a_client_that_sends_nothing_is_closed_and_does_not_hold_up_others() {
     let (path, _) = start(1, &Dial::new(Pressure::Normal));
     let mut silent = Client::connect(&path);
-    assert_eq!(Client::ask(&path, "a").reply(), Reply::Granted);
+    assert_eq!(Client::ask(&path, "a").reply(), granted(1));
     let closed: Option<Reply> = read_line(&mut silent.reader).expect("the daemon closes it");
     assert_eq!(closed, None);
 }

@@ -4,7 +4,8 @@
 use std::io::BufReader;
 use std::num::NonZeroUsize;
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -17,8 +18,12 @@ use super::{
     Cli, EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_FOUND, EXIT_NOT_STARTED, GUIDE, JOB_NOT_FOUND,
     JOB_NOT_STARTED, Machine, run_to,
 };
+use crate::admit::{GIB, Lane};
 use crate::daemon::{DAEMON_RUNNING, Log, SOCKET_UNUSABLE, Settings, bind, serve};
-use crate::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Pressure, Probe, Sample, Unreadable};
+use crate::environment::Environment;
+use crate::probe::{
+    Disk, MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Pressure, Probe, Sample, Unreadable,
+};
 use crate::protocol::{Job, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
@@ -38,6 +43,13 @@ impl Probe for Fixed {
             swap_total_bytes: 13_312 * 1_048_576,
         })
     }
+
+    fn disk(&self, _path: &Path) -> std::io::Result<Disk> {
+        Ok(Disk {
+            free_bytes: 500 * GIB,
+            total_bytes: 1000 * GIB,
+        })
+    }
 }
 
 /// A probe that cannot read the machine.
@@ -47,6 +59,10 @@ struct Broken;
 impl Probe for Broken {
     fn sample(&self) -> Result<Sample, Unreadable> {
         Err(Unreadable::Load)
+    }
+
+    fn disk(&self, _path: &Path) -> std::io::Result<Disk> {
+        Err(std::io::ErrorKind::Unsupported.into())
     }
 }
 
@@ -69,6 +85,7 @@ impl<P: Probe + Clone + Send + 'static> Test<P> {
             socket: socket.to_path_buf(),
             log: shared,
             cores: NonZeroUsize::new(4),
+            environment: Environment::default(),
         };
         Self {
             machine,
@@ -88,7 +105,8 @@ impl<P: Probe + Clone + Send + 'static> Test<P> {
         // the daemon's thread.
         thread::spawn(move || {
             let bound = bound;
-            serve(&bound.listener, probe, Settings::new(max_jobs), &log)
+            let settings = Settings::new(max_jobs, NonZeroUsize::new(4), None);
+            serve(&bound.listener, probe, settings, &log)
         });
     }
 
@@ -125,6 +143,7 @@ fn ask(socket: &Path, label: &str) -> (UnixStream, Reply) {
         label: label.to_owned(),
         pid: 5,
         command: format!("make {label}"),
+        lane: Lane::Normal,
     };
     write_line(&mut stream, &Request::Ask(job)).expect("the request writes");
     let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
@@ -152,9 +171,9 @@ fn status_lists_the_daemons_running_and_waiting_jobs() {
     let test = Test::new(Fixed);
     test.start_daemon(1);
     let (_first, reply) = ask(&test.machine.socket, "build");
-    assert_eq!(reply, Reply::Granted);
+    assert_eq!(reply, Reply::Granted { jobs: 4 });
     let (_second, reply) = ask(&test.machine.socket, "tests");
-    assert_eq!(reply, Reply::Queued { ahead: 0 });
+    assert!(matches!(reply, Reply::Queued { ahead: 0, .. }), "{reply:?}");
     let (code, out, err) = test.run(&["status"]);
     assert_eq!(code, 0, "{err}");
     assert!(
@@ -217,7 +236,134 @@ fn run_with_a_daemon_runs_the_command_and_frees_its_place_when_it_ends() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(test.log(), "");
     let (_next, reply) = ask(&test.machine.socket, "next");
-    assert_eq!(reply, Reply::Granted);
+    assert_eq!(reply, Reply::Granted { jobs: 4 });
+}
+
+/// A shell script that exits 0 when the job's parallelism variables all
+/// give `jobs` and the job is marked held.
+fn checks_parallelism(jobs: usize) -> String {
+    format!(
+        "test \"$CARGO_BUILD_JOBS\" = {jobs} && test \"$NEXTEST_TEST_THREADS\" = {jobs} \
+         && test \"$RUST_TEST_THREADS\" = {jobs} && test \"$CMAKE_BUILD_PARALLEL_LEVEL\" = {jobs} \
+         && test \"$MAKEFLAGS\" = -j{jobs} && test \"$DEADBAND_HELD\" = 1"
+    )
+}
+
+#[test]
+fn run_with_a_daemon_gives_the_job_the_cores_divided_by_max_jobs_in_each_parallelism_variable() {
+    let test = Test::new(Fixed);
+    test.start_daemon(2);
+    let script = checks_parallelism(2);
+    let (code, _, err) = test.run(&["run", "--", "sh", "-c", &script]);
+    assert_eq!(code, 0, "{err}{}", test.log());
+}
+
+#[test]
+fn run_in_the_fast_lane_gives_the_job_one_more_thread() {
+    let test = Test::new(Fixed);
+    test.start_daemon(2);
+    let script = checks_parallelism(3);
+    let (code, _, err) = test.run(&["run", "--lane", "fast", "--", "sh", "-c", &script]);
+    assert_eq!(code, 0, "{err}{}", test.log());
+}
+
+/// A directory in the temporary directory that holds a priority file with
+/// `words`, removed when the test ends.
+struct Config(PathBuf);
+
+impl Config {
+    fn with(words: &str) -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let directory =
+            std::env::temp_dir().join(format!("db-config-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("the directory is made");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test writes the priority file a person would write"
+        )]
+        std::fs::write(directory.join("priority"), words).expect("the file writes");
+        Self(directory)
+    }
+}
+
+impl Drop for Config {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn run_takes_the_fast_lane_when_its_label_is_in_the_priority_file() {
+    let mut test = Test::new(Fixed);
+    let config = Config::with("urgent\n");
+    test.machine.environment.config = Some(config.0.clone());
+    test.start_daemon(2);
+    let script = checks_parallelism(3);
+    let args = ["run", "--label", "urgent", "--", "sh", "-c", &script];
+    let (code, _, err) = test.run(&args);
+    assert_eq!(code, 0, "{err}{}", test.log());
+}
+
+#[test]
+fn run_with_lane_normal_stays_in_the_normal_lane_whatever_the_priority_file_says() {
+    let mut test = Test::new(Fixed);
+    let config = Config::with("urgent\n");
+    test.machine.environment.config = Some(config.0.clone());
+    test.start_daemon(2);
+    let script = checks_parallelism(2);
+    let args = [
+        "run", "--label", "urgent", "--lane", "normal", "--", "sh", "-c", &script,
+    ];
+    let (code, _, err) = test.run(&args);
+    assert_eq!(code, 0, "{err}{}", test.log());
+}
+
+#[test]
+fn run_inside_a_granted_job_runs_at_once_without_asking() {
+    let mut test = Test::new(Fixed);
+    test.machine.environment.held = true;
+    test.start_daemon(1);
+    let (_busy, reply) = ask(&test.machine.socket, "busy");
+    assert_eq!(reply, Reply::Granted { jobs: 4 });
+    let (code, _, err) = test.run(&["run", "--", "true"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(test.log(), "");
+}
+
+#[test]
+fn run_with_bypass_runs_at_once_without_asking() {
+    let mut test = Test::new(Fixed);
+    test.machine.environment.bypass = true;
+    test.start_daemon(1);
+    let (_busy, reply) = ask(&test.machine.socket, "busy");
+    assert_eq!(reply, Reply::Granted { jobs: 4 });
+    let (code, _, err) = test.run(&["run", "--", "true"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(test.log(), "");
+}
+
+#[test]
+fn run_says_in_one_line_why_its_job_waits() {
+    let test = Test::new(Fixed);
+    test.start_daemon(1);
+    let (busy, reply) = ask(&test.machine.socket, "busy");
+    assert_eq!(reply, Reply::Granted { jobs: 4 });
+    thread::scope(|scope| {
+        let waiting = scope.spawn(|| test.run(&["run", "--", "true"]));
+        let mut listed = crate::client::jobs(&test.machine.socket, REPLY_WITHIN);
+        // Each status request is an observable round trip to the daemon.
+        while listed.as_ref().map_or(true, |jobs| jobs.waiting.is_empty()) {
+            listed = crate::client::jobs(&test.machine.socket, REPLY_WITHIN);
+        }
+        drop(busy);
+        let (code, _, err) = waiting.join().expect("the run ends");
+        assert_eq!(code, 0, "{err}");
+    });
+    assert_eq!(
+        test.log(),
+        "deadband: the job waits because the daemon already runs 1 job, its most at once, and no other job waits ahead of it\n"
+    );
 }
 
 #[test]

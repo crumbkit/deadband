@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::{Admission, Unasked, ask, jobs};
+use crate::admit::{Hold, Lane};
 use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
@@ -22,6 +23,7 @@ fn job() -> Job {
         label: "build".to_owned(),
         pid: 9,
         command: "make".to_owned(),
+        lane: Lane::Normal,
     }
 }
 
@@ -54,7 +56,7 @@ fn scripted(replies: Vec<Reply>) -> (TestSocket, mpsc::Receiver<Request>) {
 #[test]
 fn ask_without_a_daemon_starts_the_job_and_says_the_daemon_is_not_running() {
     let path = socket_path();
-    let Admission::Open(unasked) = ask(&path, &job(), ANSWER_WITHIN, |_| {}) else {
+    let Admission::Open(unasked) = ask(&path, &job(), ANSWER_WITHIN, |_, _| {}) else {
         panic!("a missing daemon granted the job");
     };
     assert!(matches!(unasked, Unasked::NotRunning { .. }));
@@ -71,7 +73,7 @@ fn ask_without_a_daemon_starts_the_job_and_says_the_daemon_is_not_running() {
 fn ask_treats_a_socket_file_that_no_daemon_answers_on_as_no_daemon() {
     let path = socket_path();
     drop(UnixListener::bind(&path).expect("the stale socket binds"));
-    let Admission::Open(unasked) = ask(&path, &job(), ANSWER_WITHIN, |_| {}) else {
+    let Admission::Open(unasked) = ask(&path, &job(), ANSWER_WITHIN, |_, _| {}) else {
         panic!("a stale socket granted the job");
     };
     assert!(matches!(unasked, Unasked::NotRunning { .. }), "{unasked:?}");
@@ -87,7 +89,7 @@ fn ask_starts_the_job_when_the_daemon_does_not_answer_in_time() {
         let _ = hold.recv();
         drop(connection);
     });
-    let Admission::Open(unasked) = ask(&path, &job(), SHORT_WAIT, |_| {}) else {
+    let Admission::Open(unasked) = ask(&path, &job(), SHORT_WAIT, |_, _| {}) else {
         panic!("a silent daemon granted the job");
     };
     drop(held);
@@ -99,14 +101,20 @@ fn ask_starts_the_job_when_the_daemon_does_not_answer_in_time() {
 
 #[test]
 fn ask_starts_the_job_when_the_daemon_closes_the_connection_while_it_waits() {
-    let (path, received) = scripted(vec![Reply::Queued { ahead: 2 }]);
-    let mut ahead = None;
-    let admission = ask(&path, &job(), ANSWER_WITHIN, |n| ahead = Some(n));
+    let held = Hold::Full { max_jobs: 1 };
+    let (path, received) = scripted(vec![Reply::Queued {
+        ahead: 2,
+        held: Some(held),
+    }]);
+    let mut queued = None;
+    let admission = ask(&path, &job(), ANSWER_WITHIN, |n, why| {
+        queued = Some((n, why));
+    });
     assert_eq!(
         received.recv().expect("the ask arrives"),
         Request::Ask(job())
     );
-    assert_eq!(ahead, Some(2));
+    assert_eq!(queued, Some((2, Some(held))));
     assert!(
         matches!(admission, Admission::Open(Unasked::Closed)),
         "{admission:?}"
@@ -115,10 +123,15 @@ fn ask_starts_the_job_when_the_daemon_closes_the_connection_while_it_waits() {
 
 #[test]
 fn ask_returns_a_lease_when_the_daemon_grants_the_job_after_it_waits() {
-    let (path, received) = scripted(vec![Reply::Queued { ahead: 0 }, Reply::Granted]);
-    let Admission::Granted(lease) = ask(&path, &job(), ANSWER_WITHIN, |_| {}) else {
+    let queued = Reply::Queued {
+        ahead: 0,
+        held: None,
+    };
+    let (path, received) = scripted(vec![queued, Reply::Granted { jobs: 5 }]);
+    let Admission::Granted(lease) = ask(&path, &job(), ANSWER_WITHIN, |_, _| {}) else {
         panic!("the daemon's grant was not taken");
     };
+    assert_eq!(lease.jobs(), 5);
     lease.end(Some(4));
     assert_eq!(
         received.recv().expect("the ask arrives"),
@@ -138,7 +151,7 @@ fn ask_starts_the_job_when_the_daemon_answers_with_a_reply_the_client_does_not_e
         waiting: Vec::new(),
     };
     let (path, _received) = scripted(vec![Reply::Jobs(jobs)]);
-    let admission = ask(&path, &job(), ANSWER_WITHIN, |_| {});
+    let admission = ask(&path, &job(), ANSWER_WITHIN, |_, _| {});
     assert!(
         matches!(admission, Admission::Open(Unasked::Garbled { .. })),
         "{admission:?}"

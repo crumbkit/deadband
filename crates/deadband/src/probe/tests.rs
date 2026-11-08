@@ -107,3 +107,23 @@ fn a_failed_load_reading_offers_a_retry() {
 
     assert!(matches!(Unreadable::Load.recovery(), Recovery::Retry));
 }
+
+#[test]
+fn the_system_probe_reads_the_free_and_total_disk_of_a_directory() {
+    use super::{Probe, System};
+
+    let disk = System
+        .disk(&std::env::temp_dir())
+        .expect("the temporary directory's disk reads");
+    assert!(disk.total_bytes > 0);
+    assert!(disk.free_bytes <= disk.total_bytes);
+}
+
+#[test]
+fn the_system_probe_says_why_it_cannot_read_a_missing_directory() {
+    use super::{Probe, System};
+
+    let missing = std::env::temp_dir().join("deadband-test-no-such-directory");
+    let error = System.disk(&missing).expect_err("a missing directory has no disk");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+}
