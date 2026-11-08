@@ -8,9 +8,6 @@ use std::io;
 
 use rustix::process::{getpriority_process, setpriority_process};
 
-#[cfg(test)]
-mod tests;
-
 /// The nice value of a job in the normal lane.
 pub const NORMAL_NICE: i32 = 5;
 

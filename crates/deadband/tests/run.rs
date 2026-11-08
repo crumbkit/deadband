@@ -143,6 +143,24 @@ fn a_granted_job_on_a_daemon_of_two_jobs_gets_half_the_cores_as_its_build_jobs()
 }
 
 #[test]
+fn a_normal_job_keeps_a_nice_value_above_5_that_its_caller_set() {
+    let socket = socket("nicer");
+    let caller = nice_of(&std::process::id().to_string());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test runs the built binary under nice, as a person would"
+    )]
+    let mut command = Command::new("nice");
+    command
+        .args(["-n", "7", env!("CARGO_BIN_EXE_deadband"), "run", "--"])
+        .args(["sh", "-c", "ps -o nice= -p $$"])
+        .env("DEADBAND_SOCKET", &socket.0);
+    let run = output(command);
+    let nice = String::from_utf8(run.stdout.clone()).expect("UTF-8");
+    assert_eq!(nice.trim().parse::<i32>().ok(), Some(caller + 7), "{run:?}");
+}
+
+#[test]
 fn a_normal_job_runs_at_nice_5_and_a_fast_job_at_its_callers_nice_value() {
     let socket = socket("nice");
     let _daemon = Daemon::start(&socket.0, "2");

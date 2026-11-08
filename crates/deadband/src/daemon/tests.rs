@@ -101,6 +101,7 @@ fn start(max_jobs: usize, dial: &Dial) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
         max_jobs: NonZeroUsize::new(max_jobs).expect("the test passes a positive maximum"),
         cores: NonZeroUsize::new(CORES),
         home: Some(std::env::temp_dir()),
+        priority_file: None,
         sample_every: SAMPLE_EVERY,
         first_line_within: FIRST_LINE_WITHIN,
     };
@@ -285,6 +286,44 @@ fn a_fast_job_gets_one_more_thread_than_a_normal_job() {
 }
 
 #[test]
+fn with_an_active_priority_file_a_fast_job_takes_the_place_that_normal_jobs_leave_open() {
+    let file = std::env::temp_dir().join(format!("db-priority-{}", std::process::id()));
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test writes the priority file a person would write"
+    )]
+    std::fs::write(&file, "urgent\n").expect("the file writes");
+    let path = socket_path();
+    let bound = bind(&path).expect("the test socket binds");
+    let mut settings = Settings::new(
+        NonZeroUsize::new(2).expect("positive"),
+        NonZeroUsize::new(CORES),
+        None,
+        Some(file.clone()),
+    );
+    settings.sample_every = SAMPLE_EVERY;
+    let log: Log = Arc::new(Mutex::new(Vec::new()));
+    let probe = Dial::new(Pressure::Normal);
+    thread::spawn(move || {
+        let bound = bound;
+        serve(&bound.listener, probe, settings, &log)
+    });
+    let mut first = Client::ask(&path, "a");
+    assert_eq!(first.reply(), granted(2));
+    let mut second = Client::ask(&path, "b");
+    assert_eq!(
+        second.reply(),
+        Reply::Queued {
+            ahead: 0,
+            held: Some(Hold::Lane { places: 1 })
+        }
+    );
+    let mut fast = Client::ask_in(&path, "fast", Lane::Fast);
+    assert_eq!(fast.reply(), Reply::Granted { jobs: 9 });
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
 fn a_waiting_fast_job_starts_before_a_normal_job_that_waited_longer() {
     let (path, _) = start(1, &Dial::new(Pressure::Normal));
     let mut first = Client::ask(&path, "a");
@@ -407,8 +446,10 @@ fn a_client_that_sends_nothing_is_closed_and_does_not_hold_up_others() {
 }
 
 #[test]
-fn the_default_maximum_is_half_the_cores_and_at_least_one() {
-    assert_eq!(default_max_jobs(NonZeroUsize::new(10)).get(), 5);
+fn the_default_maximum_is_a_quarter_of_the_cores_rounded_up_and_at_least_one() {
+    assert_eq!(default_max_jobs(NonZeroUsize::new(14)).get(), 4);
+    assert_eq!(default_max_jobs(NonZeroUsize::new(16)).get(), 4);
+    assert_eq!(default_max_jobs(NonZeroUsize::new(10)).get(), 3);
     assert_eq!(default_max_jobs(NonZeroUsize::new(1)).get(), 1);
     assert_eq!(default_max_jobs(None).get(), 1);
 }

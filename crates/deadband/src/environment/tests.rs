@@ -85,7 +85,7 @@ fn the_priority_file_is_in_the_home_config_directory_otherwise() {
 fn a_granted_job_gets_its_parallelism_in_every_variable_and_is_marked_held() {
     let read = Environment::read(environment(&[]), None);
     assert_eq!(
-        read.job_variables(3),
+        read.job_variables(3, true),
         [
             ("DEADBAND_HELD", "1".to_owned()),
             ("CARGO_BUILD_JOBS", "3".to_owned()),
@@ -104,7 +104,7 @@ fn a_granted_job_keeps_each_parallelism_variable_that_its_caller_set() {
         None,
     );
     assert_eq!(
-        read.job_variables(3),
+        read.job_variables(3, true),
         [
             ("DEADBAND_HELD", "1".to_owned()),
             ("NEXTEST_TEST_THREADS", "3".to_owned()),
@@ -112,4 +112,12 @@ fn a_granted_job_keeps_each_parallelism_variable_that_its_caller_set() {
             ("CMAKE_BUILD_PARALLEL_LEVEL", "3".to_owned()),
         ]
     );
+}
+
+#[test]
+fn a_job_that_starts_without_a_grant_gets_its_parallelism_but_is_not_marked_held() {
+    let read = Environment::read(environment(&[]), None);
+    let variables = read.job_variables(2, false);
+    assert!(variables.iter().all(|(name, _)| *name != "DEADBAND_HELD"));
+    assert!(variables.contains(&("CARGO_BUILD_JOBS", "2".to_owned())));
 }

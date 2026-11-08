@@ -105,7 +105,7 @@ impl<P: Probe + Clone + Send + 'static> Test<P> {
         // the daemon's thread.
         thread::spawn(move || {
             let bound = bound;
-            let settings = Settings::new(max_jobs, NonZeroUsize::new(4), None);
+            let settings = Settings::new(max_jobs, NonZeroUsize::new(4), None, None);
             serve(&bound.listener, probe, settings, &log)
         });
     }
@@ -255,6 +255,15 @@ fn run_with_a_daemon_gives_the_job_the_cores_divided_by_max_jobs_in_each_paralle
     test.start_daemon(2);
     let script = checks_parallelism(2);
     let (code, _, err) = test.run(&["run", "--", "sh", "-c", &script]);
+    assert_eq!(code, 0, "{err}{}", test.log());
+}
+
+#[test]
+fn run_without_a_daemon_still_caps_the_jobs_threads_at_the_default_share() {
+    let test = Test::new(Fixed);
+    let script = "test \"$CARGO_BUILD_JOBS\" = 4 && test \"$NEXTEST_TEST_THREADS\" = 4 \
+         && test \"$MAKEFLAGS\" = -j4";
+    let (code, _, err) = test.run(&["run", "--", "sh", "-c", script]);
     assert_eq!(code, 0, "{err}{}", test.log());
 }
 
