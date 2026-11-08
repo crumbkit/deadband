@@ -32,8 +32,9 @@ deadband run --label tests -- cargo nextest run
 `deadband run` waits until the daemon admits the job, runs the job with its
 own standard input, output and error, and exits with the job's exit status.
 A job that a signal ended exits with 128 plus the signal's number, as a
-shell reports it. When the command cannot start, `deadband run` exits
-with 5.
+shell reports it. When the program is not found, `deadband run` exits with
+127, and when the program is found but cannot start, it exits with 126, as
+`env` and `timeout` do.
 
 The daemon samples memory pressure once a second. It admits the oldest
 waiting job when memory pressure is normal and fewer than `--max-jobs` jobs
@@ -41,10 +42,14 @@ run. The default for `--max-jobs` is half the logical cores, and at least
 1. A job that arrives while nothing runs always starts, so one job never
 waits forever. A job counts as running until its `deadband run` ends.
 
-`deadband run` never waits on a broken daemon. When no daemon listens, when
-the daemon does not answer within 2 seconds, or when it closes the
-connection, the job starts at once and `deadband run` prints one line on
-standard error that says why. When the probe cannot read the machine, the
+`deadband run` does not wait on a daemon that is missing, silent or gone.
+When no daemon listens, when the daemon does not answer within 2 seconds,
+or when it closes the connection, the job starts at once and `deadband run`
+prints one line on standard error that says why. After the daemon has
+queued a job, `deadband run` waits for the grant with no deadline, so a
+daemon that hangs while it keeps the connection open also keeps the job
+waiting. Stopping that daemon closes the connection, and the job then
+starts at once. When the probe cannot read the machine, the
 daemon admits every job at once and its log says why.
 
 `deadband status` prints the load, memory pressure and swap, followed by the
@@ -59,14 +64,15 @@ set and not empty:
 | Variable | Socket |
 | --- | --- |
 | `DEADBAND_SOCKET` | the path it names |
-| `XDG_RUNTIME_DIR` | `deadband.sock` in that directory |
 | `TMPDIR` | `deadband.sock` in that directory, which macOS makes per user |
 | `USER` | `/tmp/deadband-<USER>.sock` |
 
 When none is set, the socket is `/tmp/deadband.sock`. The daemon makes the
-socket readable and writable by its own user only. When the socket file
-exists and no daemon answers on it, a new daemon replaces it, and a second
-daemon on the same socket refuses to start.
+socket readable and writable by its own user only. The daemon holds a lock
+on a file named after the socket with `.lock` added, so a second daemon on
+the same socket refuses to start. A socket file that a stopped daemon left
+behind is replaced. When something other than a socket is at the socket's
+path, the daemon refuses to start and removes nothing.
 
 ## Running the daemon under launchd
 

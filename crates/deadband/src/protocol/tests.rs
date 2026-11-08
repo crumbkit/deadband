@@ -83,3 +83,17 @@ fn read_line_refuses_a_line_longer_than_the_limit() {
     let error = read_line::<Request>(&mut reader).expect_err("the line is refused");
     assert_eq!(error.kind(), ErrorKind::InvalidData);
 }
+
+#[test]
+fn read_line_accepts_a_line_of_exactly_the_limit() {
+    let length = usize::try_from(MAX_LINE).expect("fits");
+    // Two quotes and the newline make up the rest of the line.
+    let text = "a".repeat(length - 3);
+    let line = format!("\"{text}\"\n");
+    assert_eq!(line.len(), length);
+    let mut reader = BufReader::new(line.as_bytes());
+    assert_eq!(
+        read_line::<String>(&mut reader).expect("the line reads"),
+        Some(text)
+    );
+}

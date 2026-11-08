@@ -36,12 +36,6 @@ pub const VARIABLES: &[Variable] = &[
         name: "DEADBAND_SOCKET",
         purpose: "the path of the daemon's socket, which the daemon, `run` and `status` all use",
         form: "a file path",
-        absent: "deadband puts the socket in the first per-user directory below that is set",
-    },
-    Variable {
-        name: "XDG_RUNTIME_DIR",
-        purpose: "the per-user runtime directory, which holds `deadband.sock`",
-        form: "a directory path",
         absent: "deadband reads TMPDIR",
     },
     Variable {
@@ -62,7 +56,7 @@ pub const VARIABLES: &[Variable] = &[
 /// `read`, which returns `None` for an absent variable.
 ///
 /// The path is `DEADBAND_SOCKET` when it is set. Otherwise it is
-/// `deadband.sock` in `XDG_RUNTIME_DIR` or else in `TMPDIR`. When neither is
+/// `deadband.sock` in `TMPDIR`, which macOS makes per-user. When neither is
 /// set, it is `/tmp/deadband-<USER>.sock`, where other users can see it; the
 /// daemon makes the socket readable and writable by its own user only.
 pub fn path(read: impl Fn(&str) -> Option<OsString>) -> PathBuf {
@@ -70,7 +64,7 @@ pub fn path(read: impl Fn(&str) -> Option<OsString>) -> PathBuf {
     if let Some(socket) = set("DEADBAND_SOCKET") {
         return PathBuf::from(socket);
     }
-    if let Some(directory) = set("XDG_RUNTIME_DIR").or_else(|| set("TMPDIR")) {
+    if let Some(directory) = set("TMPDIR") {
         return PathBuf::from(directory).join(FILE);
     }
     let file = match set("USER") {

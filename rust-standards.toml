@@ -117,7 +117,7 @@ correction = "a change to the child-process profile that covers a wrapper which 
 
 [[exception]]
 rule = "CLI-2"
-paths = ["crates/deadband/src/cli/commands.rs", "crates/deadband/src/job.rs"]
+paths = ["crates/deadband/src/cli.rs", "crates/deadband/src/cli/commands.rs", "crates/deadband/src/job.rs"]
 owner = "Luke"
-reason = "`deadband run` starts its job with std's Command in place of `crumbkit_child::hand_over`. crumbkit-child brings signal-hook, a crate new to deadband's graph, which needs an eval first. Without it, Ctrl-C reaches both deadband and the job, and deadband can end before the job does."
+reason = "`deadband run` and `deadband daemon` print no crumbkit Document; both declare `prints_no_result`. `run` starts its job with std's Command in place of `crumbkit_child::hand_over`. crumbkit-child brings signal-hook, a crate new to deadband's graph, which needs an eval first. Without it, Ctrl-C reaches both deadband and the job, and deadband can end before the job does."
 correction = "a later deadband pull request evaluates crumbkit-child and hands the terminal to the job through it"

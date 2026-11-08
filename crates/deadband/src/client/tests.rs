@@ -3,14 +3,13 @@
 use std::io::BufReader;
 use std::net::Shutdown;
 use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use super::{Admission, Unasked, ask, jobs};
 use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
-use crate::testing::socket_path;
+use crate::testing::{TestSocket, socket_path};
 
 /// How long the tests let a scripted daemon take to answer.
 const ANSWER_WITHIN: Duration = Duration::from_secs(10);
@@ -29,7 +28,7 @@ fn job() -> Job {
 /// Starts a daemon on a new socket that reads one request, writes
 /// `replies`, closes its side of the connection, and then sends each further request it reads to the returned
 /// receiver until the client closes the connection.
-fn scripted(replies: Vec<Reply>) -> (PathBuf, mpsc::Receiver<Request>) {
+fn scripted(replies: Vec<Reply>) -> (TestSocket, mpsc::Receiver<Request>) {
     let path = socket_path();
     let listener = UnixListener::bind(&path).expect("the test socket binds");
     let (sender, received) = mpsc::channel();

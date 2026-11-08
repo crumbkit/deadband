@@ -11,14 +11,16 @@ use std::time::Duration;
 
 use clap::CommandFactory;
 use crumbkit::{Code, Sink};
+use crumbkit_test::{Allow, Rule};
 
 use super::{
-    Cli, EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_STARTED, GUIDE, JOB_NOT_STARTED, Machine, run_to,
+    Cli, EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_FOUND, EXIT_NOT_STARTED, GUIDE, JOB_NOT_FOUND,
+    JOB_NOT_STARTED, Machine, run_to,
 };
 use crate::daemon::{DAEMON_RUNNING, Log, SOCKET_UNUSABLE, Settings, bind, serve};
 use crate::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::{Job, Reply, Request, read_line, write_line};
-use crate::testing::socket_path;
+use crate::testing::{TestSocket, socket_path};
 
 /// How long a test waits for a reply that it expects.
 const REPLY_WITHIN: Duration = Duration::from_secs(10);
@@ -53,29 +55,41 @@ impl Probe for Broken {
 struct Test<P> {
     machine: Machine<P>,
     log: Arc<Mutex<Vec<u8>>>,
+    /// The machine's socket, which the test removes when it ends.
+    _socket: TestSocket,
 }
 
 impl<P: Probe + Clone + Send + 'static> Test<P> {
     fn new(probe: P) -> Self {
         let log = Arc::new(Mutex::new(Vec::new()));
         let shared: Log = log.clone();
+        let socket = socket_path();
         let machine = Machine {
             probe,
-            socket: socket_path(),
+            socket: socket.to_path_buf(),
             log: shared,
             cores: NonZeroUsize::new(4),
         };
-        Self { machine, log }
+        Self {
+            machine,
+            log,
+            _socket: socket,
+        }
     }
 
     /// Starts a daemon on the machine's socket that runs at most
     /// `max_jobs` jobs at once.
     fn start_daemon(&self, max_jobs: usize) {
-        let listener = bind(&self.machine.socket).expect("the test socket binds");
+        let bound = bind(&self.machine.socket).expect("the test socket binds");
         let probe = self.machine.probe.clone();
         let log = Arc::clone(&self.machine.log);
         let max_jobs = NonZeroUsize::new(max_jobs).expect("positive");
-        thread::spawn(move || serve(&listener, probe, Settings::new(max_jobs), &log));
+        // The closure takes the whole `Bound`, so its lock lives as long as
+        // the daemon's thread.
+        thread::spawn(move || {
+            let bound = bound;
+            serve(&bound.listener, probe, Settings::new(max_jobs), &log)
+        });
     }
 
     /// Runs `deadband` with `args`, and returns the exit code, standard
@@ -207,10 +221,23 @@ fn run_with_a_daemon_runs_the_command_and_frees_its_place_when_it_ends() {
 }
 
 #[test]
-fn run_fails_with_job_not_started_when_the_program_does_not_exist() {
+fn run_exits_127_with_job_not_found_when_the_program_does_not_exist() {
     let test = Test::new(Fixed);
     let (code, out, err) = test.run(&["run", "--", "deadband-test-no-such-program"]);
-    assert_eq!(code, EXIT_NOT_STARTED);
+    assert_eq!(code, EXIT_NOT_FOUND);
+    assert_eq!(out, "");
+    assert!(err.contains("code:  deadband::job::not_found"), "{err}");
+}
+
+#[test]
+fn run_exits_126_with_job_not_started_when_the_program_cannot_start() {
+    let test = Test::new(Fixed);
+    let directory = std::env::temp_dir();
+    let directory = directory
+        .to_str()
+        .expect("the temporary directory is UTF-8");
+    let (code, out, err) = test.run(&["run", "--", directory]);
+    assert_eq!(code, EXIT_NOT_STARTED, "{err}");
     assert_eq!(out, "");
     assert!(err.contains("code:  deadband::job::not_started"), "{err}");
 }
@@ -239,7 +266,12 @@ fn every_document_schema_matches_its_golden_file() {
 
 #[test]
 fn every_exit_code_is_declared_with_its_failures() {
-    crumbkit_test::check_exit_codes(&Cli::command(), &GUIDE, &[]);
+    let allow = [Allow::new(
+        Rule::ShellExitCode,
+        "run",
+        "run passes on its job's exit status, and gives 126 and 127 their env and timeout meanings for a program that cannot start or is not found",
+    )];
+    crumbkit_test::check_exit_codes(&Cli::command(), &GUIDE, &allow);
 }
 
 #[test]
@@ -250,6 +282,7 @@ fn every_failure_code_is_distinct_and_printable() {
         &DAEMON_RUNNING,
         &SOCKET_UNUSABLE,
         &JOB_NOT_STARTED,
+        &JOB_NOT_FOUND,
     ];
     crumbkit_test::check_codes(&GUIDE, &[codes]);
 }

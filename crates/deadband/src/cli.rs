@@ -22,7 +22,7 @@ mod commands;
 #[cfg(test)]
 mod tests;
 
-pub use self::commands::{JOB_NOT_STARTED, NotStarted};
+pub use self::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED, NotStarted};
 
 /// Keep a busy machine usable while many heavy jobs compete for it.
 #[derive(Debug, Parser)]
@@ -44,6 +44,11 @@ pub enum Command {
     /// jobs.
     Status,
     /// Wait until the daemon admits a job, then run it.
+    ///
+    /// `run` exits with the job's exit status, or with 128 plus the signal's
+    /// number when a signal ended the job. It exits with 127 when the
+    /// program is not found and with 126 when it is found but cannot start,
+    /// as `env` and `timeout` do.
     Run(RunArgs),
     /// Run the daemon that admits jobs, in the foreground.
     Daemon(DaemonArgs),
@@ -145,8 +150,13 @@ pub const EXIT_MACHINE: u8 = 3;
 /// The exit code of a daemon that could not listen on its socket.
 pub const EXIT_DAEMON: u8 = 4;
 
-/// The exit code of a `deadband run` whose command could not start.
-pub const EXIT_NOT_STARTED: u8 = 5;
+/// The exit code of a `deadband run` whose program was found but could not
+/// start, as `env` and `timeout` report it.
+pub const EXIT_NOT_STARTED: u8 = 126;
+
+/// The exit code of a `deadband run` whose program was not found, as `env`
+/// and `timeout` report it.
+pub const EXIT_NOT_FOUND: u8 = 127;
 
 /// deadband's guide: the examples, effects and document of each command,
 /// and the exit codes with the failures that produce them.
@@ -181,9 +191,13 @@ pub const GUIDE: Guide = Guide::new()
             .failures(&[&DAEMON_RUNNING, &SOCKET_UNUSABLE]),
         Exit::new(
             EXIT_NOT_STARTED,
-            "the command given to `run` could not start.",
+            "the program given to `run` was found but could not start.",
         )
+        .commands(&[&["run"]])
         .failures(&[&JOB_NOT_STARTED]),
+        Exit::new(EXIT_NOT_FOUND, "the program given to `run` was not found.")
+            .commands(&[&["run"]])
+            .failures(&[&JOB_NOT_FOUND]),
     ]);
 
 /// Parses the process's command line, runs the command against `machine`

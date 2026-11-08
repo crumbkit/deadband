@@ -15,8 +15,11 @@ use crate::job;
 use crate::probe::Probe;
 use crate::protocol::Job;
 
-/// The code of a command given to `run` that could not start.
+/// The code of a program given to `run` that was found but could not start.
 pub const JOB_NOT_STARTED: Code = Code::new("deadband", "job", "not_started");
+
+/// The code of a program given to `run` that was not found.
+pub const JOB_NOT_FOUND: Code = Code::new("deadband", "job", "not_found");
 
 /// A command given to `run` that could not start.
 #[derive(Debug)]
@@ -42,12 +45,16 @@ impl std::error::Error for NotStarted {}
 
 impl Failure for NotStarted {
     fn code(&self) -> &'static Code {
-        &JOB_NOT_STARTED
+        if self.error.kind() == io::ErrorKind::NotFound {
+            &JOB_NOT_FOUND
+        } else {
+            &JOB_NOT_STARTED
+        }
     }
 
     fn recovery(&self) -> Recovery {
         Recovery::None {
-            reason: "the command after `--` must name a program on PATH that this user can run"
+            reason: "the command after `--` must name a program on PATH that this user may run"
                 .to_owned(),
         }
     }
@@ -83,10 +90,12 @@ pub(super) fn run<O: Write, W: Write, P>(
         command: words.join(" "),
     };
     let queued = |ahead: usize| {
-        note(
-            &machine.log,
-            format_args!("the job waits for headroom, behind {ahead} other waiting jobs"),
-        );
+        let line = match ahead {
+            0 => "the job waits for headroom, and no other job waits ahead of it".to_owned(),
+            1 => "the job waits for headroom, and 1 job waits ahead of it".to_owned(),
+            n => format!("the job waits for headroom, and {n} jobs wait ahead of it"),
+        };
+        note(&machine.log, format_args!("{line}"));
     };
     let lease = match client::ask(&machine.socket, &asked, ANSWER_WITHIN, queued) {
         Admission::Granted(lease) => Some(lease),
@@ -124,8 +133,9 @@ pub(super) fn daemon<O: Write, W: Write, P: Probe + Clone + Send + 'static>(
     let max_jobs = args
         .max_jobs
         .unwrap_or_else(|| daemon::default_max_jobs(machine.cores));
+    daemon::raise_descriptor_limit();
     let failure = match daemon::bind(&machine.socket) {
-        Ok(listener) => {
+        Ok(bound) => {
             note(
                 &machine.log,
                 format_args!(
@@ -134,7 +144,7 @@ pub(super) fn daemon<O: Write, W: Write, P: Probe + Clone + Send + 'static>(
                 ),
             );
             let error = daemon::serve(
-                &listener,
+                &bound.listener,
                 machine.probe.clone(),
                 Settings::new(max_jobs),
                 &machine.log,

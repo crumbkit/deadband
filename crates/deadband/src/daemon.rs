@@ -11,22 +11,25 @@
 use std::fmt;
 use std::io::{self, BufReader, Write};
 use std::num::NonZeroUsize;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use crumbkit::{Code, Failure, Recovery};
+use rustix::io::Errno;
 
 use crate::admit::{JobId, Queue};
 use crate::probe::{Pressure, Probe};
 use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
 
+mod bind;
 #[cfg(test)]
 mod tests;
+
+pub use self::bind::{
+    Bound, DAEMON_RUNNING, SOCKET_UNUSABLE, Unbound, bind, lock_path, raise_descriptor_limit,
+};
 
 /// How often the daemon samples the probe.
 pub const SAMPLE_EVERY: Duration = Duration::from_secs(1);
@@ -35,12 +38,14 @@ pub const SAMPLE_EVERY: Duration = Duration::from_secs(1);
 /// the client as gone.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// The code of a refusal to start a daemon while another one answers on
-/// the same socket.
-pub const DAEMON_RUNNING: Code = Code::new("deadband", "daemon", "running");
+/// How long the daemon waits for a new connection's first line before it
+/// closes the connection.
+pub const FIRST_LINE_WITHIN: Duration = Duration::from_secs(2);
 
-/// The code of a socket that the daemon could not listen on.
-pub const SOCKET_UNUSABLE: Code = Code::new("deadband", "socket", "unusable");
+/// How long the daemon waits after a failed accept before it accepts
+/// again, so a lasting failure such as running out of descriptors does not
+/// spin a core.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Where the daemon writes its log lines, which several threads share.
 pub type Log = Arc<Mutex<dyn Write + Send>>;
@@ -52,16 +57,20 @@ pub struct Settings {
     pub max_jobs: NonZeroUsize,
     /// How often the daemon samples the probe.
     pub sample_every: Duration,
+    /// How long the daemon waits for a new connection's first line.
+    pub first_line_within: Duration,
 }
 
 impl Settings {
-    /// Returns the settings with `max_jobs` and the default sampling
-    /// interval, [`SAMPLE_EVERY`].
+    /// Returns the settings with `max_jobs`, the default sampling
+    /// interval, [`SAMPLE_EVERY`], and the default wait for a first line,
+    /// [`FIRST_LINE_WITHIN`].
     #[must_use]
     pub const fn new(max_jobs: NonZeroUsize) -> Self {
         Self {
             max_jobs,
             sample_every: SAMPLE_EVERY,
+            first_line_within: FIRST_LINE_WITHIN,
         }
     }
 }
@@ -72,90 +81,6 @@ impl Settings {
 pub fn default_max_jobs(cores: Option<NonZeroUsize>) -> NonZeroUsize {
     let half = cores.map_or(1, |cores| cores.get() / 2);
     NonZeroUsize::new(half).unwrap_or(NonZeroUsize::MIN)
-}
-
-/// A daemon that could not start listening.
-#[derive(Debug)]
-pub enum Unbound {
-    /// Another daemon answers on the socket.
-    Running {
-        /// The socket's path.
-        path: PathBuf,
-    },
-    /// The socket could not be made.
-    Socket {
-        /// The socket's path.
-        path: PathBuf,
-        /// The error of the call that failed.
-        error: io::Error,
-    },
-}
-
-impl fmt::Display for Unbound {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Running { path } => {
-                write!(f, "a deadband daemon already listens on {}", path.display())
-            }
-            Self::Socket { path, error } => write!(
-                f,
-                "deadband could not listen on {}: {error}",
-                path.display()
-            ),
-        }
-    }
-}
-
-impl std::error::Error for Unbound {}
-
-impl Failure for Unbound {
-    fn code(&self) -> &'static Code {
-        match self {
-            Self::Running { .. } => &DAEMON_RUNNING,
-            Self::Socket { .. } => &SOCKET_UNUSABLE,
-        }
-    }
-
-    fn recovery(&self) -> Recovery {
-        match self {
-            Self::Running { .. } => Recovery::None {
-                reason: "one daemon serves each socket, and the running one already admits jobs"
-                    .to_owned(),
-            },
-            Self::Socket { .. } => Recovery::None {
-                reason: "the socket's directory must exist and be writable; DEADBAND_SOCKET names another path".to_owned(),
-            },
-        }
-    }
-}
-
-/// Makes the socket at `path` and listens on it.
-///
-/// A socket file that no daemon answers on is left from a daemon that
-/// ended, so `bind` removes it first. The socket is readable and writable
-/// by the daemon's user only.
-///
-/// # Errors
-///
-/// Returns [`Unbound::Running`] when a daemon answers on `path`, and
-/// [`Unbound::Socket`] when the socket cannot be made.
-pub fn bind(path: &Path) -> Result<UnixListener, Unbound> {
-    let socket_error = |error| Unbound::Socket {
-        path: path.to_owned(),
-        error,
-    };
-    if UnixStream::connect(path).is_ok() {
-        return Err(Unbound::Running {
-            path: path.to_owned(),
-        });
-    }
-    match std::fs::remove_file(path) {
-        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(socket_error(error)),
-        _ => {}
-    }
-    let listener = UnixListener::bind(path).map_err(socket_error)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(socket_error)?;
-    Ok(listener)
 }
 
 /// A job that waits or runs, with the connection to its client.
@@ -226,8 +151,13 @@ pub fn note(log: &Log, line: fmt::Arguments<'_>) {
     let _ = writeln!(log, "deadband: {line}");
 }
 
-/// Serves clients on `listener` until accepting a connection fails, and
-/// returns that error. It samples `probe` every `settings.sample_every`.
+/// Serves clients on `listener` until accepting a connection fails in a way
+/// that another try cannot fix, and returns that error. It samples `probe`
+/// every `settings.sample_every`.
+///
+/// A failed accept that can pass, such as running out of descriptors or a
+/// client that gave up while it connected, is logged, and the daemon
+/// accepts again after 100 ms.
 pub fn serve<P: Probe + Send + 'static>(
     listener: &UnixListener,
     probe: P,
@@ -250,9 +180,35 @@ pub fn serve<P: Probe + Send + 'static>(
                 let shared = Arc::clone(&shared);
                 thread::spawn(move || connection(&shared, stream));
             }
+            Err(error) if passing(&error) => {
+                note(
+                    log,
+                    format_args!("accepting a connection failed: {error}; the daemon tries again"),
+                );
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "the backoff after a failed accept, whose failure has no event to wait on; ACCEPT_BACKOFF names it"
+                )]
+                thread::sleep(ACCEPT_BACKOFF);
+            }
             Err(error) => return error,
         }
     }
+}
+
+/// Reports whether a failed accept can pass, so another try may succeed.
+fn passing(error: &io::Error) -> bool {
+    [
+        Errno::MFILE,
+        Errno::NFILE,
+        Errno::NOBUFS,
+        Errno::NOMEM,
+        Errno::CONNABORTED,
+        Errno::INTR,
+        Errno::AGAIN,
+        Errno::PROTO,
+    ]
+    .contains(&Errno::from_io_error(error).unwrap_or(Errno::INVAL))
 }
 
 /// Reads the pressure with `probe`. It writes a log line when the probe
@@ -298,9 +254,14 @@ fn sample(shared: &Shared, probe: &impl Probe, stopped: &mpsc::Receiver<()>, log
     }
 }
 
-/// Serves one client on `stream`.
+/// Serves one client on `stream`. A client that sends no first line within
+/// the settings' `first_line_within` is closed.
 fn connection(shared: &Shared, stream: UnixStream) {
-    if stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err() {
+    let first_line_within = lock(shared).settings.first_line_within;
+    let timeouts = stream
+        .set_write_timeout(Some(WRITE_TIMEOUT))
+        .and_then(|()| stream.set_read_timeout(Some(first_line_within)));
+    if timeouts.is_err() {
         return;
     }
     let Ok(clone) = stream.try_clone() else {
@@ -308,7 +269,13 @@ fn connection(shared: &Shared, stream: UnixStream) {
     };
     let mut reader = BufReader::new(clone);
     match read_line::<Request>(&mut reader) {
-        Ok(Some(Request::Ask(job))) => ask(shared, stream, &mut reader, job),
+        Ok(Some(Request::Ask(job))) => {
+            // A granted job may run for hours, so its connection waits for
+            // the end without a deadline.
+            if stream.set_read_timeout(None).is_ok() {
+                ask(shared, stream, &mut reader, job);
+            }
+        }
         Ok(Some(Request::Status)) => {
             let jobs = lock(shared).jobs();
             let _ = write_line(&mut &stream, &Reply::Jobs(jobs));
@@ -339,6 +306,8 @@ fn ask(shared: &Shared, stream: UnixStream, reader: &mut BufReader<UnixStream>, 
         id
     };
     while let Ok(Some(request)) = read_line::<Request>(reader) {
+        // `Done` carries the job's exit code, which the daemon does not use
+        // yet; the ledger records it with the job's cost.
         if let Request::Done { .. } = request {
             break;
         }

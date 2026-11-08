@@ -29,16 +29,7 @@ fn deadband_socket_names_the_socket_when_it_is_set() {
 }
 
 #[test]
-fn the_socket_is_in_the_runtime_directory_before_the_temporary_directory() {
-    let socket = path(environment(&[
-        ("XDG_RUNTIME_DIR", "/run/user/501"),
-        ("TMPDIR", "/var/folders/ab/T/"),
-    ]));
-    assert_eq!(socket, Path::new("/run/user/501/deadband.sock"));
-}
-
-#[test]
-fn the_socket_is_in_the_temporary_directory_when_no_runtime_directory_is_set() {
+fn the_socket_is_in_the_temporary_directory_when_deadband_socket_is_not_set() {
     let socket = path(environment(&[
         ("TMPDIR", "/var/folders/ab/T/"),
         ("USER", "me"),
