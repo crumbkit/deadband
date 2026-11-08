@@ -16,16 +16,15 @@ doc = false
 
 [dependencies]
 # clap parses the command line. These are the user-facing features that a
-# binary chooses: help, usage lines and the context of a refusal. The eval
-# /evals/crumbkit-vs-clap chose clap with crumbkit.
+# binary chooses: help, usage lines and the context of a refusal.
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 # crumbkit holds the command-line conventions: parsing, `--json` documents
 # and failures with stable codes (the cli profile of the Rust standards).
 crumbkit = "0.1.0"
 
 # libc calls getloadavg and sysctlbyname, which read the load average, the
-# memory pressure level and swap use on macOS. The eval
-# /evals/deadband-probe-source chose libc over the sysinfo crate.
+# memory pressure level and swap use on macOS. A measured comparison chose
+# libc over the sysinfo crate, which has no memory pressure level.
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2.191"
 

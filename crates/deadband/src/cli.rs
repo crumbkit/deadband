@@ -2,12 +2,13 @@
 
 use std::ffi::OsString;
 use std::io::Write;
+use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
-use crumbkit::help::Guide;
-use crumbkit::{Sink, ViewFlags};
+use clap::{CommandFactory, Parser, Subcommand};
+use crumbkit::help::{Effects, Example, Guide, Leaf};
+use crumbkit::{Document, Prose, Sink, ViewFlags};
 
-use crate::probe::Probe;
+use crate::probe::{Probe, Sample, Unreadable};
 
 #[cfg(test)]
 mod tests;
@@ -32,15 +33,53 @@ pub enum Command {
     Status,
 }
 
-/// deadband's guide.
-pub const GUIDE: Guide = Guide::new();
+/// The document that `deadband status` prints.
+pub const STATUS: Document<Prose<Sample>> = Document::new(
+    "deadband",
+    "status",
+    1,
+    "One sample of the machine's 1-minute load average, memory pressure and swap.",
+);
+
+/// deadband's guide: the examples, effects and document of each command.
+pub const GUIDE: Guide = Guide::new().leaves(&[Leaf::new(&["status"])
+    .examples(&[
+        Example::new(&[], "Print the machine's load, memory pressure and swap"),
+        Example::new(&["--json"], "Print the same sample as a JSON document"),
+    ])
+    .effects(Effects::read_only())
+    .document(STATUS)]);
+
+/// Parses the process's command line, runs the command against `probe` and
+/// prints the result to standard output and standard error.
+pub fn run(probe: &impl Probe) -> ExitCode {
+    let (cli, output) = match crumbkit::parse::<Cli>(Cli::command(), &GUIDE) {
+        Ok(parsed) => parsed,
+        Err(stop) => return stop.exit_code(),
+    };
+    match cli.command {
+        Command::Status => crumbkit::finish(output, STATUS, status(probe)),
+    }
+}
 
 /// Parses `args`, runs the command against `probe` and prints the result to
 /// `sink`. Returns the exit code.
 pub fn run_to<O: Write, W: Write, T: Into<OsString>>(
-    _sink: &mut Sink<O, W>,
-    _probe: &impl Probe,
-    _args: impl IntoIterator<Item = T>,
+    sink: &mut Sink<O, W>,
+    probe: &impl Probe,
+    args: impl IntoIterator<Item = T>,
 ) -> u8 {
-    1
+    let parsed = crumbkit::parse_to::<Cli, _, _, _, _>(sink, Cli::command(), &GUIDE, args);
+    let (cli, output) = match parsed {
+        Ok(parsed) => parsed,
+        Err(stop) => return stop.exit(),
+    };
+    match cli.command {
+        Command::Status => crumbkit::finish_to(sink, output, STATUS, status(probe)),
+    }
+}
+
+/// Takes one sample with `probe` for `deadband status`.
+fn status(probe: &impl Probe) -> Result<Prose<Sample>, Unreadable> {
+    probe.sample().map(Prose::new)
 }
