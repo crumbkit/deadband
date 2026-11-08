@@ -128,15 +128,13 @@ pub fn admits(reading: Option<&Reading>, running: &Running, limits: &Limits) -> 
     if limits.reserve_lanes && max_jobs > 1 && running.in_lane >= places {
         return Err(Hold::Lane { places });
     }
-    if let Some(disk) = reading.and_then(|reading| reading.disk) {
-        let critical = disk.free_bytes < DISK_CRITICAL_BYTES
-            || percent(disk.free_bytes, disk.total_bytes) < DISK_CRITICAL_PERCENT;
-        if critical {
-            return Err(Hold::Disk {
-                free_bytes: disk.free_bytes,
-                total_bytes: disk.total_bytes,
-            });
-        }
+    if let Some(disk) = reading.and_then(|reading| reading.disk)
+        && disk_critical(&disk)
+    {
+        return Err(Hold::Disk {
+            free_bytes: disk.free_bytes,
+            total_bytes: disk.total_bytes,
+        });
     }
     let Some(reading) = reading.filter(|_| running.all > 0) else {
         return Ok(());
@@ -163,6 +161,14 @@ pub fn admits(reading: Option<&Reading>, running: &Running, limits: &Limits) -> 
         }
     }
     Ok(())
+}
+
+/// Reports whether `disk` has less free space than
+/// [`DISK_CRITICAL_BYTES`] or [`DISK_CRITICAL_PERCENT`] of the disk.
+#[must_use]
+pub fn disk_critical(disk: &Disk) -> bool {
+    disk.free_bytes < DISK_CRITICAL_BYTES
+        || percent(disk.free_bytes, disk.total_bytes) < DISK_CRITICAL_PERCENT
 }
 
 /// The number that the queue gives each job it receives.

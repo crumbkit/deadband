@@ -27,6 +27,8 @@ use crate::probe::{
 use crate::protocol::{Job, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
+mod reclaim;
+
 /// How long a test waits for a reply that it expects.
 const REPLY_WITHIN: Duration = Duration::from_secs(10);
 

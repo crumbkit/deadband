@@ -9,6 +9,7 @@ pub mod job;
 pub mod priority;
 pub mod probe;
 pub mod protocol;
+pub mod reclaim;
 pub mod socket;
 #[cfg(test)]
 mod testing;

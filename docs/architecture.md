@@ -49,7 +49,8 @@ jobserver's environment, and reports the job's exit status.
 | client | Asks the daemon to admit a job or to list its jobs, and gives the reason to start at once when the daemon cannot be asked. |
 | protocol | The messages over the socket, one JSON object per line. |
 | socket | Finds the socket's path from the environment, and lists the variables deadband reads. |
-| job | The only module that starts a process: the job that `deadband run` was given. |
+| job | The only module that starts a process: the job that `deadband run` was given, and the reclaimers that the daemon's config file names. |
+| reclaim | Reads the daemon's config file, decides when to reclaim memory or disk, runs the reclaimers on a thread of their own, and keeps the last reclaim for `deadband status`. |
 | environment | Reads the variables that `deadband run` uses, and gives a granted job its parallelism variables. |
 | priority | Chooses a job's lane from the priority file. |
 | jobserver | Runs one shared jobserver pipe, so all cargo processes together start at most a set number of compiler processes. admit raises and lowers the ceiling. |
@@ -70,30 +71,27 @@ jobserver's environment, and reports the job's exit status.
 - At idle the daemon uses under 1% of one core and under 50 MB of memory, and
   an admission answer takes under 5 ms.
 
-## Later: reclaiming idle workspaces
+## Reclaiming memory and disk
 
-This section is a draft for after the first modules exist.
+When the machine runs short of memory or disk, the daemon can ask external
+reclaimers to free some, such as a tool that stops the servers and
+containers of workspaces nobody is using. The daemon's config file lists
+reclaimers as commands, so deadband links no such tool and does not know
+what a reclaimer stops. The reclaimer chooses.
 
-When the machine runs short of memory or disk, deadband can ask an external
-reclaimer to stop the servers and containers of workspaces nobody is using,
-least recently used first. The configuration lists reclaimers as external
-commands, so deadband links no workspace tool and does not know what a
-workspace is:
+The reclaim module holds the rule that says when to reclaim, as a pure
+function of what the daemon reads each second. Memory is short while
+memory pressure is above normal or a job waits for memory, and a reclaim
+starts once it has been short for `reclaim_after`. Critically low disk
+starts a reclaim at once. At most one reclaim runs at a time, and the next
+waits `reclaim_after` after the last one ends.
 
-```toml
-[[reclaim]]
-name = "example"
-command = ["example-workspace-tool", "reclaim", "--json"]
-```
-
-1. deadband runs the command with `--need memory=4G --dry-run`. The reclaimer
-   answers with what it would stop, what each item frees, and why each counts
-   as idle.
-2. deadband shows the plan in `deadband top` and its log, then runs the same
-   command without `--dry-run`.
-3. The reclaimer stops those workspaces gracefully and reports what it freed.
-   deadband measures pressure again before asking for more.
-
-For disk, `--need disk=20G` asks the reclaimer to delete the build output of
-idle workspaces. Reclaim runs only under pressure, and an age-based stop is
-opt-in. The reclaimer chooses what to stop.
+A reclaim runs on a thread of its own, so admission never waits for it.
+For each reclaimer in turn, the daemon runs the command with
+`--need memory=4G --dry-run`, logs the plan in one line, and then runs it
+without `--dry-run`. It stops once the bytes freed cover the need. A
+reclaimer that fails or runs past its timeout is logged in one line and
+holds no job. deadband never signals or stops a reclaimer; past its
+timeout the daemon stops waiting for it, and starts no other reclaim until
+it exits. [running.md](running.md) gives the config and the JSON a
+reclaimer prints.

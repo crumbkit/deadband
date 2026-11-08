@@ -52,6 +52,7 @@ fn each_reply_is_one_json_line() {
         max_jobs: 1,
         running: vec![job()],
         waiting: Vec::new(),
+        reclaim: None,
     });
     assert!(line(&jobs).starts_with("{\"jobs\":{\"max_jobs\":1,\"running\":[{"));
 }

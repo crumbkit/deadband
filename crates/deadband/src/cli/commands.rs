@@ -16,6 +16,7 @@ use crate::job;
 use crate::priority;
 use crate::probe::Probe;
 use crate::protocol::Job;
+use crate::reclaim::{self, CONFIG_FILE};
 use crate::throttle::{self, NORMAL_NICE};
 
 /// The code of a program given to `run` that was found but could not start.
@@ -207,6 +208,45 @@ fn finish<O: Write, W: Write>(
     }
 }
 
+/// Reads the daemon's config file in the configuration directory. A file
+/// that cannot be read turns reclaiming off, and the log says why in one
+/// line. The log names the reclaimers the file lists.
+fn reclaim_config<P>(machine: &Machine<P>) -> reclaim::Config {
+    let Some(path) = machine
+        .environment
+        .config
+        .as_ref()
+        .map(|config| config.join(CONFIG_FILE))
+    else {
+        return reclaim::Config::default();
+    };
+    let config = reclaim::Config::load(&path).unwrap_or_else(|error| {
+        note(
+            &machine.log,
+            format_args!(
+                "deadband could not read {}: {error}, so the daemon runs no reclaimer",
+                path.display()
+            ),
+        );
+        reclaim::Config::default()
+    });
+    if !config.reclaimers.is_empty() {
+        let names: Vec<_> = config
+            .reclaimers
+            .iter()
+            .map(|each| each.name.as_str())
+            .collect();
+        note(
+            &machine.log,
+            format_args!(
+                "the daemon asks {} to reclaim when memory or disk runs short",
+                names.join(", ")
+            ),
+        );
+    }
+    config
+}
+
 /// Runs `deadband daemon`: listens on the machine's socket and admits jobs
 /// until accepting a connection fails, which it prints as a failure.
 pub(super) fn daemon<O: Write, W: Write, P: Probe + Clone + Send + 'static>(
@@ -228,12 +268,13 @@ pub(super) fn daemon<O: Write, W: Write, P: Probe + Clone + Send + 'static>(
                     machine.socket.display()
                 ),
             );
-            let settings = Settings::new(
+            let mut settings = Settings::new(
                 max_jobs,
                 machine.cores,
                 machine.environment.home.clone(),
                 machine.environment.priority_file(),
             );
+            settings.reclaim = reclaim_config(machine);
             let error = daemon::serve(
                 &bound.listener,
                 machine.probe.clone(),
