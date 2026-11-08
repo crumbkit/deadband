@@ -145,9 +145,8 @@ pub const EXIT_MACHINE: u8 = 3;
 /// The exit code of a daemon that could not listen on its socket.
 pub const EXIT_DAEMON: u8 = 4;
 
-/// The exit code of a `deadband run` whose command could not start, which
-/// is the code a shell gives a command it cannot find.
-pub const EXIT_NOT_STARTED: u8 = 127;
+/// The exit code of a `deadband run` whose command could not start.
+pub const EXIT_NOT_STARTED: u8 = 5;
 
 /// deadband's guide: the examples, effects and document of each command,
 /// and the exit codes with the failures that produce them.
@@ -165,7 +164,7 @@ pub const GUIDE: Guide = Guide::new()
                 &["--label", "tests", "--", "cargo", "test"],
                 "Run cargo test once the daemon admits it",
             )])
-            .effects(Effects::additive().open_world())
+            .effects(Effects::additive().all_or_none().open_world())
             .prints_no_result(),
         Leaf::new(&["daemon"])
             .examples(&[Example::new(

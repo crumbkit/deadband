@@ -33,7 +33,7 @@ deadband run --label tests -- cargo nextest run
 own standard input, output and error, and exits with the job's exit status.
 A job that a signal ended exits with 128 plus the signal's number, as a
 shell reports it. When the command cannot start, `deadband run` exits
-with 127.
+with 5.
 
 The daemon samples memory pressure once a second. It admits the oldest
 waiting job when memory pressure is normal and fewer than `--max-jobs` jobs

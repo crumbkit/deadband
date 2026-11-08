@@ -40,7 +40,6 @@ fn run_without_a_daemon_exits_with_the_command_and_says_in_one_line_that_the_dae
 #[cfg(target_os = "macos")]
 #[expect(
     clippy::disallowed_methods,
-    clippy::disallowed_types,
     reason = "the test runs the built binary as a person would, and stops the daemon it started"
 )]
 mod macos {

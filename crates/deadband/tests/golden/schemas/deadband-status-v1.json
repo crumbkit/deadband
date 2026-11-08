@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "deadband/status/v1",
-  "description": "One sample of the machine's 1-minute load average, memory pressure and swap.",
+  "description": "One sample of the machine's 1-minute load average, memory pressure and swap, and the daemon's running and waiting jobs.",
   "type": "object",
   "properties": {
     "data": {
-      "$ref": "#/$defs/Sample"
+      "$ref": "#/$defs/Status"
     },
     "dry_run": {
       "description": "Present, and true, when the run was a dry run that changed nothing.",
@@ -396,6 +396,62 @@
     "failures"
   ],
   "$defs": {
+    "Job": {
+      "description": "A job, as a client describes it and `status` shows it.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "The job's command line, with its words joined by spaces.",
+          "type": "string"
+        },
+        "label": {
+          "description": "The label that `--label` gave, or the program's name.",
+          "type": "string"
+        },
+        "pid": {
+          "description": "The process ID of the `deadband run` that asked for the job.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "label",
+        "pid",
+        "command"
+      ]
+    },
+    "Jobs": {
+      "description": "The daemon's running and waiting jobs.",
+      "type": "object",
+      "properties": {
+        "max_jobs": {
+          "description": "The most jobs that the daemon lets run at once.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "running": {
+          "description": "The running jobs, in the order they started.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Job"
+          }
+        },
+        "waiting": {
+          "description": "The waiting jobs, the oldest first.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Job"
+          }
+        }
+      },
+      "required": [
+        "max_jobs",
+        "running",
+        "waiting"
+      ]
+    },
     "Pressure": {
       "description": "The kernel's memory pressure level.",
       "oneOf": [
@@ -416,10 +472,21 @@
         }
       ]
     },
-    "Sample": {
-      "description": "One sample of the machine.",
+    "Status": {
+      "description": "What `deadband status` prints: one sample of the machine, and the\ndaemon's jobs.",
       "type": "object",
       "properties": {
+        "daemon": {
+          "description": "The daemon's running and waiting jobs, or `null` when no daemon\nanswers.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Jobs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "load_1m": {
           "description": "The 1-minute load average.",
           "type": "number",
@@ -446,7 +513,8 @@
         "load_1m",
         "memory_pressure",
         "swap_used_bytes",
-        "swap_total_bytes"
+        "swap_total_bytes",
+        "daemon"
       ]
     }
   }
