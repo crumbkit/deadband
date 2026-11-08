@@ -1,5 +1,6 @@
 //! deadband keeps a busy machine usable while many heavy jobs compete for it.
 
+pub mod admission;
 pub mod admit;
 pub mod cli;
 pub mod client;
@@ -10,6 +11,7 @@ pub mod priority;
 pub mod probe;
 pub mod protocol;
 pub mod reclaim;
+pub mod serve;
 pub mod socket;
 #[cfg(test)]
 mod testing;

@@ -82,7 +82,10 @@ one that its caller already set:
 A job that starts at once because the daemon cannot be asked still gets
 these variables, with the threads of the default `--max-jobs`: the cores
 divided by a quarter of the cores rounded up, and one more in the fast
-lane. So a job never runs with every core.
+lane. On a machine with 4 or fewer cores that default allows one job at
+once, so the job gets every core, and one more thread in the fast lane.
+Otherwise it gets a share of the cores. When the number of cores is unknown,
+a normal-lane job gets 1 thread and a fast-lane job gets 2.
 
 ## Lanes
 
@@ -238,6 +241,83 @@ example:
 ran, the need it asked for, the bytes it reported freeing and why it
 failed, if it did. `deadband status --json` gives the same in the daemon's
 `reclaim` field.
+
+## Embedding deadband in a program
+
+A Rust program that links the `deadband` library can ask for admission and
+run the daemon without the command line. Each is one call, and the
+`deadband` commands use the same calls.
+
+A program reads its environment once, as the binary's `main.rs` does:
+the socket path with `socket::path`, the number of cores with
+`available_parallelism`, and the `Environment` with `Environment::read`.
+`admit` needs no `Machine`; only `run_daemon` does. The
+priority file is matched against `Environment::cwd`, so a long-lived program
+that starts a job in another directory passes an `Environment` whose `cwd`
+is the job's directory. `Environment::preset` records the parallelism
+variables the program had when it read its environment, so a job given its
+own value for one of them needs that variable in `preset`. To admit a job,
+the program calls `admit`, starts the job with the returned variables, and
+ends the lease:
+
+```rust,ignore
+use deadband::admission::{Asked, admit};
+use deadband::environment::Environment;
+
+// Read the environment once, at the entry point of the program.
+let socket = deadband::socket::path(|name| std::env::var_os(name));
+let environment = Environment::read(|name| std::env::var_os(name), std::env::current_dir().ok());
+let cores = std::thread::available_parallelism().ok();
+
+let asked = Asked {
+    socket: &socket,
+    environment: &environment,
+    cores,
+    label: "tests",
+    command: "cargo nextest run",
+    lane: None,
+};
+let mut notify = |line: &str| eprintln!("deadband: {line}");
+let admitted = admit(&asked, &mut notify);
+let status = start_the_job(admitted.variables());
+admitted.end(status.code());
+```
+
+A short-lived process that exists to run one job may also call
+`admitted.lower_priority(&mut notify)` before it starts the job, as
+`deadband run` does. In the normal lane it lowers the calling process to
+nice 5 for the rest of its life, and leaves a process that already runs at a
+higher nice value where it is, so a long-lived program does not call it.
+
+`admit` waits until the daemon admits the job. It waits at most 2 seconds for
+the daemon's first answer, and then the job starts without a grant. That
+limit does not cover sending the request, which has no deadline, so a daemon
+that has stopped reading can block `admit` when the command text is longer
+than the socket's send buffer, about 8 KiB on macOS. Once the daemon has
+queued the job, the wait for the grant has no deadline and cannot be
+cancelled. `admit` writes nothing itself; each line it reports goes to the callback: why the job waits, why it starts
+without the daemon, and why the priority file could not be read. A job that
+runs inside a granted job, or with `DEADBAND_BYPASS` set, is not asked:
+`admit` reports nothing and returns no lane and no variables. The job's pid
+in `deadband status` is the calling process's pid. A program that holds the
+lease for a child process reports its own pid, not the child's.
+
+To run the daemon, build a `Machine` as the binary's `main.rs` does (the probe, the socket
+path, a log, the cores and the `Environment`), and call `run_daemon` with it
+and the most jobs that may run at once, or `None` for the default:
+
+```rust,ignore
+let stopped = deadband::serve::run_daemon(&machine, None);
+```
+
+`run_daemon` returns when the socket cannot be bound, or when accepting a
+connection fails with an error that retrying cannot fix, with the reason as
+an `Unbound`. It logs and retries a failure that can pass, such as too many
+open files. The daemon is no longer sound once `run_daemon` returns: its
+connection threads keep running and can still grant a waiting client from
+the last machine reading, because the sampler has stopped, and a second
+daemon can bind the socket. A program must end its process at that point, as
+the `deadband` binary does.
 
 ## Where the socket is
 
