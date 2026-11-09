@@ -1,0 +1,27 @@
+Keep a busy machine usable while many heavy jobs compete for it
+
+Usage: deadband [OPTIONS] <COMMAND>
+
+Commands:
+  status  Print the machine's load, memory pressure and swap, and the daemon's jobs
+  run     Wait until the daemon admits a job, then run it
+  daemon  Run the daemon that admits jobs, in the foreground
+
+Options:
+      --json
+          Print the result as a JSON document. The default prints text.
+
+      --fields <FIELD>
+          Print only these comma-separated fields, in this order. The default prints the compact columns.
+
+      --long
+          Add the long columns after the compact ones. The default prints only the compact columns.
+
+      --full
+          With --json, print every field of every row. The default prints only the fields of the columns.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Topics: exit-codes. `deadband help <TOPIC>` prints one.
+Next: deadband <COMMAND> -h

@@ -1,0 +1,19 @@
+Print the machine's load, memory pressure and swap, and the daemon's jobs
+
+Usage: deadband status [OPTIONS]
+
+Options:
+      --json
+          Print the result as a JSON document. The default prints text.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  deadband status
+          Print the machine's load, memory pressure and swap
+
+  deadband status --json
+          Print the same sample as a JSON document
+
+Effects: read-only, closed-world.

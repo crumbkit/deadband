@@ -40,74 +40,34 @@ correction = "a later deadband pull request turns it on"
 
 [[exception]]
 rule = "CLI-6"
-paths = ["crates/deadband/src/cli/tests.rs"]
-items = ["crumbkit-test:check_names"]
-owner = "Luke"
-reason = "The tests do not run crumbkit-test's `check_names` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
-correction = "a later deadband pull request turns it on"
-
-[[exception]]
-rule = "CLI-6"
-paths = ["crates/deadband/src/cli/tests.rs"]
-items = ["crumbkit-test:check_grammar"]
-owner = "Luke"
-reason = "The tests do not run crumbkit-test's `check_grammar` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
-correction = "a later deadband pull request turns it on"
-
-[[exception]]
-rule = "CLI-6"
-paths = ["crates/deadband/src/cli/tests.rs"]
-items = ["crumbkit-test:check_filters"]
-owner = "Luke"
-reason = "The tests do not run crumbkit-test's `check_filters` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
-correction = "a later deadband pull request turns it on"
-
-[[exception]]
-rule = "CLI-6"
-paths = ["crates/deadband/src/cli/tests.rs"]
-items = ["crumbkit-test:check_help_sizes"]
-owner = "Luke"
-reason = "The tests do not run crumbkit-test's `check_help_sizes` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
-correction = "a later deadband pull request turns it on"
-
-[[exception]]
-rule = "CLI-6"
-paths = ["crates/deadband/src/cli/tests.rs"]
-items = ["crumbkit-test:check_help_goldens"]
-owner = "Luke"
-reason = "The tests do not run crumbkit-test's `check_help_goldens` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
-correction = "a later deadband pull request turns it on"
-
-[[exception]]
-rule = "CLI-6"
-paths = ["crates/deadband/src/cli/tests.rs"]
+paths = ["crates/deadband/tests/conventions.rs"]
 items = ["crumbkit-test:check_path_weights"]
 owner = "Luke"
-reason = "The tests do not run crumbkit-test's `check_path_weights` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+reason = "The convention suite skips crumbkit-test's `check_path_weights`; the skip and its reason are in tests/conventions.rs."
 correction = "a later deadband pull request turns it on"
 
 [[exception]]
 rule = "CLI-6"
-paths = ["crates/deadband/src/cli/tests.rs"]
-items = ["crumbkit-test:check_output_budget"]
-owner = "Luke"
-reason = "The tests do not run crumbkit-test's `check_output_budget` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
-correction = "a later deadband pull request turns it on"
-
-[[exception]]
-rule = "CLI-6"
-paths = ["crates/deadband/src/cli/tests.rs"]
+paths = ["crates/deadband/tests/conventions.rs"]
 items = ["crumbkit-test:check_command_reference"]
 owner = "Luke"
-reason = "The tests do not run crumbkit-test's `check_command_reference` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+reason = "The convention suite skips crumbkit-test's `check_command_reference`; the skip and its reason are in tests/conventions.rs."
 correction = "a later deadband pull request turns it on"
 
 [[exception]]
 rule = "CLI-6"
-paths = ["crates/deadband/src/cli/tests.rs"]
-items = ["crumbkit-test:check_opt_outs"]
+paths = ["crates/deadband/tests/conventions.rs"]
+items = ["crumbkit-test:check_examples"]
 owner = "Luke"
-reason = "The tests do not run crumbkit-test's `check_opt_outs` yet. The first pull request with a command runs the guide, effects, document, schema, exit-code, code and recovery checks."
+reason = "The convention suite skips crumbkit-test's `check_examples`; the `run` example would start a build and the `daemon` example does not exit."
+correction = "a later deadband pull request turns it on"
+
+[[exception]]
+rule = "CLI-6"
+paths = ["crates/deadband/tests/conventions.rs"]
+items = ["crumbkit-test:check_twins"]
+owner = "Luke"
+reason = "The convention suite skips crumbkit-test's `check_twins`; the skip and its reason are in tests/conventions.rs."
 correction = "a later deadband pull request turns it on"
 
 [[exception]]
