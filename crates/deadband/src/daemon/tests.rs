@@ -8,12 +8,12 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::{Log, Settings, Unbound, bind, default_max_jobs, lock_path, serve};
 use crate::admit::{GIB, Hold, Lane};
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
-use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
+use crate::protocol::{Job, JobState, Jobs, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
 mod timeline;
@@ -187,6 +187,108 @@ fn granted(max_jobs: usize) -> Reply {
     Reply::Granted {
         jobs: CORES / max_jobs,
     }
+}
+
+/// Tells the daemon at `path` that the job `label` already runs.
+fn seat(path: &Path, label: &str, claimed: usize, ran_ms: u64) -> Client {
+    let mut client = Client::connect(path);
+    client.send(&Request::Seat {
+        job: job(label),
+        jobs: claimed,
+        ran_ms,
+    });
+    client
+}
+
+/// Asks the daemon until `count` jobs run. A seat has no reply, and each
+/// request is an observable round trip.
+fn until_running(path: &Path, count: usize) -> Jobs {
+    let begun = Instant::now();
+    loop {
+        let listed = jobs(path);
+        if listed.running.len() == count {
+            return listed;
+        }
+        assert!(begun.elapsed() < REPLY_WITHIN, "{listed:?}");
+    }
+}
+
+/// Returns how long ago the running job `label` started, as the timeline
+/// says.
+fn started_ago(path: &Path, label: &str) -> Duration {
+    let mut client = Client::connect(path);
+    client.send(&Request::Timeline);
+    let Reply::Timeline(timeline) = client.reply() else {
+        panic!("the daemon did not answer with a timeline");
+    };
+    timeline
+        .jobs
+        .iter()
+        .find_map(|row| match row.state {
+            JobState::Running { started } if row.label.as_str() == label => {
+                Some(started.duration())
+            }
+            _ => None,
+        })
+        .expect("the timeline shows the job running")
+}
+
+#[test]
+fn a_seated_job_shows_in_status_and_a_new_job_waits_behind_it() {
+    let (path, _) = start(1, &Dial::new(Pressure::Normal));
+    let _seated = seat(&path, "a", 16, 0);
+    let listed = until_running(&path, 1);
+    assert_eq!(listed.running, [job("a")]);
+    assert_eq!(Client::ask(&path, "b").reply(), queued(0, 1));
+}
+
+#[test]
+fn a_seated_job_that_closes_its_connection_frees_its_place() {
+    let (path, _) = start(1, &Dial::new(Pressure::Normal));
+    let seated = seat(&path, "a", 16, 0);
+    until_running(&path, 1);
+    let mut waiting = Client::ask(&path, "b");
+    assert_eq!(waiting.reply(), queued(0, 1));
+    drop(seated);
+    assert_eq!(waiting.reply(), granted(1));
+}
+
+#[test]
+fn a_seated_job_that_says_it_ended_frees_its_place() {
+    let (path, _) = start(1, &Dial::new(Pressure::Normal));
+    let mut seated = seat(&path, "a", 16, 0);
+    until_running(&path, 1);
+    let mut waiting = Client::ask(&path, "b");
+    assert_eq!(waiting.reply(), queued(0, 1));
+    seated.send(&Request::Done {
+        exit_code: Some(0),
+        signal: None,
+    });
+    assert_eq!(waiting.reply(), granted(1));
+}
+
+#[test]
+fn a_seat_that_claims_huge_threads_counts_as_one_grant() {
+    let (path, _) = start(2, &Dial::new(Pressure::Normal));
+    let _seated = seat(&path, "a", usize::MAX, 0);
+    until_running(&path, 1);
+    assert_eq!(Client::ask(&path, "b").reply(), granted(2));
+}
+
+#[test]
+fn a_seated_job_keeps_the_time_it_has_run() {
+    let (path, _) = start(1, &Dial::new(Pressure::Normal));
+    let _seated = seat(&path, "a", 1, 5000);
+    until_running(&path, 1);
+    assert!(started_ago(&path, "a") >= Duration::from_secs(5));
+}
+
+#[test]
+fn a_seat_that_claims_the_longest_time_counts_as_running_and_holds_its_place() {
+    let (path, _) = start(1, &Dial::new(Pressure::Normal));
+    let _seated = seat(&path, "a", 1, u64::MAX);
+    until_running(&path, 1);
+    assert_eq!(Client::ask(&path, "b").reply(), queued(0, 1));
 }
 
 #[test]

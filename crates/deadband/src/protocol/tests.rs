@@ -44,6 +44,25 @@ fn each_request_is_one_json_line() {
 }
 
 #[test]
+fn a_seat_is_one_json_line_that_reads_back_as_itself() {
+    let seat = Request::Seat {
+        job: job(),
+        jobs: 3,
+        ran_ms: 1500,
+    };
+    let text = line(&seat);
+    assert_eq!(
+        text,
+        "{\"seat\":{\"job\":{\"label\":\"tests\",\"pid\":42,\"command\":\"cargo nextest run\",\"lane\":\"fast\"},\"jobs\":3,\"ran_ms\":1500}}\n"
+    );
+    let mut reader = BufReader::new(text.as_bytes());
+    assert_eq!(
+        read_line::<Request>(&mut reader).expect("the line reads"),
+        Some(seat)
+    );
+}
+
+#[test]
 fn each_reply_is_one_json_line() {
     assert_eq!(
         line(&Reply::Granted { jobs: 3 }),

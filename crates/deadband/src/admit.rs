@@ -229,6 +229,28 @@ impl<J> Queue<J> {
         id
     }
 
+    /// Adds `job` as a job that already runs since `at`, placed among the
+    /// running jobs in start order, and returns its number. The job counts
+    /// at most the threads of one grant in `lane`, whatever `jobs` claims,
+    /// and it runs even past `max_jobs`, because it has already started.
+    pub fn seat(&mut self, job: J, lane: Lane, jobs: usize, at: Instant, limits: &Limits) -> JobId {
+        let id = self.next;
+        self.next = self.next.wrapping_add(1);
+        let place = self.running.partition_point(|each| each.at <= at);
+        let jobs = jobs.min(limits.parallelism(lane));
+        self.running.insert(
+            place,
+            Started {
+                id,
+                job,
+                lane,
+                at,
+                jobs,
+            },
+        );
+        id
+    }
+
     /// Starts waiting jobs, the fast lane first, while [`admits`] lets one
     /// more start at `now`, and returns the number of each job it started
     /// with its threads. When the fast lane's first job waits on its lane's

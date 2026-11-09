@@ -421,8 +421,16 @@ Stopping the daemon does not stop any job. Each running `deadband run`
 keeps running its job, and each waiting one starts its job at once.
 
 A daemon that launchd restarts starts with an empty queue and an empty list
-of running jobs. It admits up to `--max-jobs` more jobs while jobs that the
-earlier daemon granted may still be running. The jobs that were waiting on
-the earlier daemon start at once when the connection closes, and the new
-daemon does not count them. The machine can therefore run more than
+of running jobs. Each `deadband run` whose job the earlier daemon granted
+connects again, trying once per 100 ms, and tells the new daemon that its
+job is already running. The new daemon counts that job at once, even past
+`--max-jobs`, and new jobs wait until enough of the running jobs have ended.
+A job whose daemon never returns runs to its end and keeps its own exit
+code.
+
+The new daemon does not count every job. A new daemon can admit a job in the
+moment before the running jobs have told it about themselves, at most about
+100 ms per retry after it starts listening. The jobs that were waiting on the
+earlier daemon start at once when the connection closes, and the new daemon
+does not count them. In both cases the machine can run more than
 `--max-jobs` jobs until those jobs end.

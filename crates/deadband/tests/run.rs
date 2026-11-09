@@ -199,6 +199,112 @@ fn run_without_a_daemon_exits_with_the_command_and_says_in_one_line_that_the_dae
     assert!(err.contains("the daemon is not running"), "{err}");
 }
 
+/// These tests kill a daemon while a job runs. They need no probe, because
+/// a daemon holds a job on the job count on every system.
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test runs the built binary as a person would"
+)]
+mod restart {
+    use std::io::{BufRead, BufReader, Read};
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use super::{Daemon, deadband, socket};
+
+    /// How long a test waits for a new daemon to show the running job.
+    const SHOWN_WITHIN: Duration = Duration::from_secs(20);
+
+    /// Returns the command that runs `script` under `deadband run` with
+    /// its standard streams piped, so the test ends the job by closing its
+    /// standard input.
+    fn piped_job(socket: &Path, script: &str) -> Command {
+        let mut run = deadband(socket, &["run", "--", "sh", "-c", script]);
+        run.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        run
+    }
+
+    /// Reads one line from `stream`.
+    fn line(stream: impl Read) -> String {
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).expect("reads");
+        line
+    }
+
+    /// Runs `deadband status` until its output holds `wanted`. Each run is
+    /// an observable round trip with the daemon.
+    fn status_until(socket: &Path, wanted: &str) {
+        let begun = Instant::now();
+        loop {
+            let status = deadband(socket, &["status"]).output().expect("status runs");
+            let status = String::from_utf8(status.stdout).expect("UTF-8");
+            if status.contains(wanted) {
+                return;
+            }
+            assert!(begun.elapsed() < SHOWN_WITHIN, "{status}");
+        }
+    }
+
+    #[test]
+    fn a_job_that_runs_when_its_daemon_is_killed_counts_on_the_next_daemon() {
+        let socket = socket("restart");
+        let socket = &socket.0;
+        let daemon = Daemon::start(socket, "1");
+        let mut first = piped_job(socket, "echo started; cat")
+            .spawn()
+            .expect("the first run starts");
+        let first_out = first.stdout.take().expect("piped");
+        assert_eq!(line(first_out), "started\n");
+
+        drop(daemon);
+        let _next = Daemon::start(socket, "1");
+        status_until(socket, "daemon: 1 running, 0 waiting, at most 1 at once");
+
+        let mut second = deadband(socket, &["run", "--", "echo", "second"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the second run starts");
+        let second_err = second.stderr.take().expect("piped");
+        let waits = line(second_err);
+        assert!(
+            waits.contains("the job waits because the daemon already runs 1 job"),
+            "{waits}"
+        );
+
+        drop(first.stdin.take().expect("piped"));
+        assert!(first.wait().expect("the first run ends").success());
+        let second = second.wait_with_output().expect("the second run ends");
+        assert!(second.status.success(), "{second:?}");
+        assert_eq!(second.stdout, b"second\n");
+    }
+
+    #[test]
+    fn a_job_whose_daemon_never_returns_ends_normally_with_its_own_exit_code() {
+        let socket = socket("gone");
+        let socket = &socket.0;
+        let daemon = Daemon::start(socket, "1");
+        let mut run = piped_job(socket, "echo started; cat; exit 7")
+            .spawn()
+            .expect("the run starts");
+        assert_eq!(line(run.stdout.take().expect("piped")), "started\n");
+
+        drop(daemon);
+        // Several connections fail in this time, one per 100 ms. The proof
+        // is the job's own end below, so a slow machine costs nothing.
+        std::thread::sleep(Duration::from_millis(300));
+        drop(run.stdin.take().expect("piped"));
+
+        let ended = run.wait_with_output().expect("the run ends");
+        assert_eq!(ended.status.code(), Some(7), "{ended:?}");
+        assert_eq!(String::from_utf8_lossy(&ended.stderr), "");
+    }
+}
+
 /// These tests need the probe, which reads the machine only on macOS.
 /// Elsewhere every sample fails, and the daemon holds jobs only on the job
 /// count.
