@@ -8,16 +8,17 @@
 use std::fmt;
 use std::io::{self, BufReader, ErrorKind, Read};
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
 use crate::admit::Hold;
 use crate::protocol::{Job, Jobs, Reply, Request, Timeline, read_line, write_line};
 
+mod lease;
 #[cfg(test)]
 mod tests;
+
+pub use self::lease::Lease;
 
 /// How long a client waits for the daemon's first answer before it counts
 /// the daemon as not answering.
@@ -31,42 +32,6 @@ pub enum Admission {
     Granted(Lease),
     /// The daemon could not be asked, so the job starts at once.
     Open(Unasked),
-}
-
-/// A granted job's connection to the daemon.
-#[derive(Debug)]
-pub struct Lease {
-    /// The connection the job holds while it runs.
-    stream: UnixStream,
-    /// The threads the daemon gave the job.
-    jobs: usize,
-}
-
-impl Lease {
-    /// Returns the threads the daemon gave the job.
-    #[must_use]
-    pub const fn jobs(&self) -> usize {
-        self.jobs
-    }
-
-    /// Tells the daemon that the job ended with `exit_code` and closes the
-    /// connection. A daemon that cannot be told sees the connection close,
-    /// which frees the job's place as well.
-    pub fn end(self, exit_code: Option<i32>) {
-        self.send_done(exit_code, None);
-    }
-
-    /// Tells the daemon how the job ended, the exit code or the signal, and
-    /// closes the connection, as [`Lease::end`] does.
-    pub fn end_status(self, status: ExitStatus) {
-        self.send_done(status.code(), status.signal());
-    }
-
-    /// Writes the `Done` line. A failed write closes the connection all the
-    /// same when `self` drops.
-    fn send_done(mut self, exit_code: Option<i32>, signal: Option<i32>) {
-        let _ = write_line(&mut self.stream, &Request::Done { exit_code, signal });
-    }
 }
 
 /// Why the daemon could not be asked.
@@ -183,13 +148,13 @@ fn try_ask(
     write_line(&mut stream, &Request::Ask(job.clone())).map_err(|_| Unasked::Closed)?;
     let mut reader = BufReader::new(stream.try_clone().map_err(garbled)?);
     match reply(&mut reader, answer_within)? {
-        Reply::Granted { jobs } => return Ok(Lease { stream, jobs }),
+        Reply::Granted { jobs } => return Ok(Lease::watched(stream, jobs, path, job)),
         Reply::Queued { ahead, held } => queued(ahead, held),
         Reply::Jobs(_) | Reply::Timeline(_) => return Err(wrong_reply()),
     }
     stream.set_read_timeout(None).map_err(garbled)?;
     match reply(&mut reader, answer_within)? {
-        Reply::Granted { jobs } => Ok(Lease { stream, jobs }),
+        Reply::Granted { jobs } => Ok(Lease::watched(stream, jobs, path, job)),
         Reply::Queued { .. } | Reply::Jobs(_) | Reply::Timeline(_) => Err(wrong_reply()),
     }
 }

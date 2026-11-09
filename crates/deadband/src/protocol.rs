@@ -5,7 +5,11 @@
 //! reads [`Reply::Granted`] or [`Reply::Queued`] and then, if it waited,
 //! [`Reply::Granted`], which carries the job's threads, keeps the connection open while its job runs, and
 //! sends [`Request::Done`] when the job ends. The daemon counts the job as
-//! running until that line arrives or the connection closes. `status` sends
+//! running until that line arrives or the connection closes. When that
+//! connection closes while the job runs, `run` connects again every 100 ms
+//! and sends [`Request::Seat`], and the daemon that reads it counts the job
+//! as running without a reply. A daemon that does not know the line closes
+//! the connection, and `run` tries again. `status` sends
 //! [`Request::Status`] and reads [`Reply::Jobs`]. `top` sends
 //! [`Request::Timeline`] once a second and reads [`Reply::Timeline`].
 
@@ -64,6 +68,17 @@ pub enum Request {
     },
     /// Asks for the jobs that `deadband top` draws.
     Timeline,
+    /// Says that a job the previous daemon granted still runs, as the first
+    /// line of a new connection. It has no reply. The connection then
+    /// behaves as a granted job's.
+    Seat {
+        /// The job as its client described it.
+        job: Job,
+        /// The threads of the job's grant.
+        jobs: usize,
+        /// How long the job has run, in milliseconds.
+        ran_ms: u64,
+    },
 }
 
 /// What the daemon answers.

@@ -579,6 +579,103 @@ fn removing_a_job_the_queue_does_not_hold_returns_nothing() {
 }
 
 #[test]
+fn a_seated_job_fills_a_place_without_waiting() {
+    let mut queue = Queue::default();
+    let limits = limits(2, 16);
+    let at = Instant::now();
+    queue.seat("seated", Lane::Normal, 8, at, &limits);
+    assert_eq!(queue.running().collect::<Vec<_>>(), vec![&"seated"]);
+    assert_eq!(queue.waiting().count(), 0);
+    let second = queue.push("second", Lane::Normal);
+    queue.push("third", Lane::Normal);
+    assert_eq!(queue.admit(None, &limits, at), [(second, 8)]);
+    assert_eq!(queue.held(), Some(Hold::Full { max_jobs: 2 }));
+}
+
+#[test]
+fn a_seat_past_max_jobs_holds_new_jobs_until_it_leaves() {
+    let mut queue = Queue::default();
+    let limits = limits(1, 16);
+    let at = Instant::now();
+    let first = queue.seat("first", Lane::Normal, 16, at, &limits);
+    let second = queue.seat("second", Lane::Normal, 16, at, &limits);
+    assert_eq!(queue.running().count(), 2);
+    let waiting = queue.push("waiting", Lane::Normal);
+    assert!(queue.admit(None, &limits, at).is_empty());
+    assert_eq!(queue.held(), Some(Hold::Full { max_jobs: 1 }));
+    queue.remove(first);
+    assert!(queue.admit(None, &limits, at).is_empty());
+    assert_eq!(queue.held(), Some(Hold::Full { max_jobs: 1 }));
+    // The twin: the same job starts once the last seat has left.
+    queue.remove(second);
+    assert_eq!(queue.admit(None, &limits, at), [(waiting, 16)]);
+}
+
+#[test]
+fn a_seat_younger_than_recent_adds_its_threads_to_the_load() {
+    let mut queue = Queue::default();
+    let limits = limits(8, 16);
+    let busy = reading(Pressure::Normal, 14.0);
+    let at = Instant::now();
+    queue.seat("seated", Lane::Normal, 2, at, &limits);
+    queue.push("waiting", Lane::Normal);
+    let young = at + RECENT - Duration::from_secs(1);
+    assert!(queue.admit(Some(&busy), &limits, young).is_empty());
+    assert_eq!(
+        queue.held(),
+        Some(Hold::Load {
+            projected: 16.0,
+            cores: 16
+        })
+    );
+}
+
+#[test]
+fn a_seat_older_than_recent_adds_nothing_to_the_load() {
+    let mut queue = Queue::default();
+    let limits = limits(8, 16);
+    let busy = reading(Pressure::Normal, 14.0);
+    let at = Instant::now();
+    queue.seat("seated", Lane::Normal, 2, at, &limits);
+    let waiting = queue.push("waiting", Lane::Normal);
+    let old = at + RECENT + Duration::from_secs(1);
+    assert_eq!(queue.admit(Some(&busy), &limits, old), [(waiting, 2)]);
+}
+
+#[test]
+fn a_seat_counts_at_most_the_threads_of_one_grant() {
+    let mut queue = Queue::default();
+    let limits = limits(8, 16);
+    let busy = reading(Pressure::Normal, 13.0);
+    let at = Instant::now();
+    queue.seat("seated", Lane::Normal, usize::MAX, at, &limits);
+    let waiting = queue.push("waiting", Lane::Normal);
+    // A load of 13 and one grant's 2 threads project 15 of 16 cores.
+    assert_eq!(queue.admit(Some(&busy), &limits, at), [(waiting, 2)]);
+}
+
+#[test]
+fn seated_jobs_list_in_the_order_they_started() {
+    let mut queue = Queue::default();
+    let limits = limits(4, 16);
+    let at = Instant::now();
+    queue.push("granted", Lane::Normal);
+    queue.admit(None, &limits, at + Duration::from_secs(5));
+    queue.seat(
+        "late",
+        Lane::Normal,
+        1,
+        at + Duration::from_secs(9),
+        &limits,
+    );
+    queue.seat("early", Lane::Normal, 1, at, &limits);
+    assert_eq!(
+        queue.running().copied().collect::<Vec<_>>(),
+        ["early", "granted", "late"]
+    );
+}
+
+#[test]
 fn the_running_jobs_list_when_they_started() {
     let mut queue = Queue::default();
     let limits = limits(2, 16);

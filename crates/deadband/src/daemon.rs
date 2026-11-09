@@ -29,6 +29,7 @@ use crate::reclaim::{self, Reclaimed, Resource, Watch};
 
 mod bind;
 mod reading;
+mod seat;
 mod settings;
 #[cfg(test)]
 mod tests;
@@ -106,15 +107,20 @@ impl State {
         }
     }
 
+    /// Returns the limits that the daemon admits jobs within.
+    const fn limits(&self) -> Limits {
+        Limits {
+            max_jobs: self.settings.max_jobs,
+            cores: self.settings.cores,
+            reserve_lanes: self.reserve_lanes,
+        }
+    }
+
     /// Starts every waiting job that the admission rule lets start, and
     /// writes the grant to each one's client. A client that cannot take
     /// the grant is gone, so its job leaves the queue and frees its place.
     fn grant(&mut self) {
-        let limits = Limits {
-            max_jobs: self.settings.max_jobs,
-            cores: self.settings.cores,
-            reserve_lanes: self.reserve_lanes,
-        };
+        let limits = self.limits();
         loop {
             let started = self
                 .queue
@@ -320,6 +326,11 @@ fn connection(shared: &Shared, stream: UnixStream) {
             let timeline = lock(shared).timeline(Instant::now());
             let _ = write_line(&mut &stream, &Reply::Timeline(timeline));
         }
+        Ok(Some(Request::Seat { job, jobs, ran_ms })) => {
+            if stream.set_read_timeout(None).is_ok() {
+                seat::seat(shared, stream, &mut reader, job, jobs, ran_ms);
+            }
+        }
         Ok(Some(Request::Done { .. }) | None) | Err(_) => {}
     }
 }
@@ -354,6 +365,12 @@ fn ask(shared: &Shared, stream: UnixStream, reader: &mut BufReader<UnixStream>, 
         }
         id
     };
+    finish(shared, reader, id);
+}
+
+/// Waits for the end of the job numbered `id` on its connection, removes
+/// the job, and starts the jobs that its place lets start.
+fn finish(shared: &Shared, reader: &mut BufReader<UnixStream>, id: JobId) {
     let exit = read_end(reader);
     let mut state = lock(shared);
     state.record(id, Some(exit));

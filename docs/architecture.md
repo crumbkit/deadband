@@ -42,7 +42,7 @@ status.
 | admission | One public call, `admit`, that does what `deadband run` does before it starts a job: it chooses the lane, asks the daemon, waits, and returns the job's lease and variables. It writes no log, so a program that embeds deadband passes a callback. |
 | daemon | Listens on the socket, samples the probe once a second, and grants waiting jobs as admit allows. It remembers the last 64 jobs that ended, in memory only, for the timeline request. |
 | serve | One public call, `run_daemon`, that does what `deadband daemon` does before it prints a failure: it binds the socket, reads the reclaim config and serves. |
-| client | Asks the daemon to admit a job or to list its jobs, and gives the reason to start at once when the daemon cannot be asked. |
+| client | Asks the daemon to admit a job or to list its jobs, and gives the reason to start at once when the daemon cannot be asked. A granted job's lease has one thread that tells the next daemon the job still runs when the connection closes. |
 | protocol | The messages over the socket, one JSON object per line. |
 | socket | Finds the socket's path from the environment, and lists the variables deadband reads. |
 | job | The only module that starts a process: the job that `deadband run` was given, and the reclaimers that the daemon's config file names. |
