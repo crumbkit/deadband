@@ -144,6 +144,9 @@ asking the daemon, because the job that started it already holds a place.
 Without this, a build that runs its tests through `deadband run` would wait
 for a place that it holds itself.
 
+`DEADBAND_HELD` and `DEADBAND_BYPASS` each take effect when the variable is
+set to a value that is neither empty nor `0`.
+
 `DEADBAND_BYPASS=1` makes `deadband run` run its job at once without asking
 the daemon and without setting its threads or its priority.
 
