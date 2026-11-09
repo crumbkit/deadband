@@ -181,11 +181,32 @@ fn status_lists_the_daemons_running_and_waiting_jobs() {
     assert!(
         out.ends_with(
             "daemon: 1 running, 1 waiting, at most 1 at once\n\
+             tests waits because: the daemon already runs 1 job, its most at once\n\
              running: build (pid 5): make build\n\
              waiting: tests (pid 5): make tests\n"
         ),
         "{out}"
     );
+}
+
+#[test]
+fn status_prints_no_reason_once_the_waiting_job_has_started() {
+    let test = Test::new(Fixed);
+    test.start_daemon(1);
+    let (first, reply) = ask(&test.machine.socket, "build");
+    assert_eq!(reply, Reply::Granted { jobs: 4 });
+    let (second, reply) = ask(&test.machine.socket, "tests");
+    assert!(matches!(reply, Reply::Queued { ahead: 0, .. }), "{reply:?}");
+    let (_, out, _) = test.run(&["status"]);
+    assert!(out.contains("tests waits because: "), "{out}");
+    drop(first);
+    let mut reader = BufReader::new(second);
+    let granted = read_line::<Reply>(&mut reader).expect("the reply reads");
+    assert_eq!(granted, Some(Reply::Granted { jobs: 4 }));
+    let (code, out, err) = test.run(&["status"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("running: tests"), "{out}");
+    assert!(!out.contains("waits because"), "{out}");
 }
 
 #[test]

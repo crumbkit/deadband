@@ -170,6 +170,7 @@ impl State {
             max_jobs: self.settings.max_jobs.get(),
             running: self.queue.running().map(|each| each.job.clone()).collect(),
             waiting: self.queue.waiting().map(|each| each.job.clone()).collect(),
+            held: self.queue.held(),
             reclaim: self.reclaimed.clone(),
         }
     }

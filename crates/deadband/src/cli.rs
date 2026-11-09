@@ -136,6 +136,9 @@ impl fmt::Display for Status {
             jobs.waiting.len(),
             jobs.max_jobs
         )?;
+        if let (Some(job), Some(hold)) = (jobs.waiting.first(), &jobs.held) {
+            write!(f, "\n{} waits because: {hold}", job.label)?;
+        }
         let running = jobs.running.iter().map(|job| ("running", job));
         for (state, job) in running.chain(jobs.waiting.iter().map(|job| ("waiting", job))) {
             write!(

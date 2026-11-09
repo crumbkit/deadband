@@ -235,6 +235,7 @@ fn admit_starts_the_job_when_the_daemon_answers_with_something_else() {
         max_jobs: 1,
         running: Vec::new(),
         waiting: Vec::new(),
+        held: None,
         reclaim: None,
     })]);
     let (result, lines) = admitted(&socket, &Environment::default(), None);

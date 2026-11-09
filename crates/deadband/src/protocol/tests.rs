@@ -52,6 +52,7 @@ fn each_reply_is_one_json_line() {
         max_jobs: 1,
         running: vec![job()],
         waiting: Vec::new(),
+        held: None,
         reclaim: None,
     });
     assert!(line(&jobs).starts_with("{\"jobs\":{\"max_jobs\":1,\"running\":[{"));
@@ -115,4 +116,16 @@ fn a_job_without_a_lane_waits_in_the_normal_lane() {
         panic!("the line is an ask");
     };
     assert_eq!(job.lane, Lane::Normal);
+}
+
+#[test]
+fn a_jobs_reply_from_a_daemon_that_sends_no_hold_reads_as_no_hold() {
+    let text = "{\"jobs\":{\"max_jobs\":1,\"running\":[],\"waiting\":[]}}\n";
+    let reply = read_line::<Reply>(&mut BufReader::new(text.as_bytes()))
+        .expect("the line reads")
+        .expect("a reply");
+    assert!(
+        matches!(reply, Reply::Jobs(Jobs { held: None, .. })),
+        "{reply:?}"
+    );
 }

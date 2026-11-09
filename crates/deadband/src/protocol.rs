@@ -79,7 +79,7 @@ pub enum Reply {
 }
 
 /// The daemon's running and waiting jobs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Jobs {
     /// The most jobs that the daemon lets run at once.
     pub max_jobs: usize,
@@ -87,6 +87,10 @@ pub struct Jobs {
     pub running: Vec<Job>,
     /// The waiting jobs, the oldest first.
     pub waiting: Vec<Job>,
+    /// Why the first waiting job does not start yet, or `null` when no job
+    /// waits or the daemon does not know.
+    #[serde(default)]
+    pub held: Option<Hold>,
     /// The last reclaim, or `null` when the daemon has run none.
     #[serde(default)]
     pub reclaim: Option<Reclaimed>,

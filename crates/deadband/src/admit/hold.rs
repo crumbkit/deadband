@@ -3,13 +3,14 @@
 
 use std::fmt;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{DISK_CRITICAL_BYTES, DISK_CRITICAL_PERCENT, GIB};
 use crate::probe::Pressure;
 
 /// Why a waiting job does not start yet.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "hold", rename_all = "snake_case")]
 pub enum Hold {
     /// The most jobs run already.
@@ -59,7 +60,8 @@ impl fmt::Display for Hold {
             }
             Self::Lane { places } => write!(
                 f,
-                "the job's lane already runs {places} jobs, and the last place stays open for the other lane"
+                "the job's lane already runs {places} {}, and the last place stays open for the other lane",
+                if *places == 1 { "job" } else { "jobs" }
             ),
             Self::Disk {
                 free_bytes,
