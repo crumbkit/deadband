@@ -158,8 +158,35 @@ fn end_tells_the_daemon_the_exit_code_of_a_granted_job() {
     result.end(Some(7));
     assert_eq!(
         received.recv_timeout(WAIT).expect("the daemon is told"),
-        Request::Done { exit_code: Some(7) }
+        Request::Done {
+            exit_code: Some(7),
+            signal: None
+        }
     );
+}
+
+#[test]
+fn end_status_tells_the_daemon_the_signal_that_ended_a_granted_job() {
+    use std::os::unix::process::ExitStatusExt;
+    let (socket, received) = scripted(vec![Reply::Granted { jobs: 2 }]);
+    let (result, _) = admitted(&socket, &Environment::default(), None);
+    let _ = received.recv_timeout(WAIT).expect("the ask arrives");
+    result.end_status(std::process::ExitStatus::from_raw(15));
+    assert_eq!(
+        received.recv_timeout(WAIT).expect("the daemon is told"),
+        Request::Done {
+            exit_code: None,
+            signal: Some(15)
+        }
+    );
+}
+
+#[test]
+fn end_status_without_a_lease_tells_nobody_and_returns() {
+    use std::os::unix::process::ExitStatusExt;
+    let socket = socket_path();
+    let (result, _) = admitted(&socket, &Environment::default(), None);
+    result.end_status(std::process::ExitStatus::from_raw(0));
 }
 
 #[test]

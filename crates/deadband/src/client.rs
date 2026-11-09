@@ -6,13 +6,15 @@
 //! in one line.
 
 use std::fmt;
-use std::io::{self, BufReader, ErrorKind};
+use std::io::{self, BufReader, ErrorKind, Read};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::process::ExitStatus;
+use std::time::{Duration, Instant};
 
 use crate::admit::Hold;
-use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
+use crate::protocol::{Job, Jobs, Reply, Request, Timeline, read_line, write_line};
 
 #[cfg(test)]
 mod tests;
@@ -50,8 +52,20 @@ impl Lease {
     /// Tells the daemon that the job ended with `exit_code` and closes the
     /// connection. A daemon that cannot be told sees the connection close,
     /// which frees the job's place as well.
-    pub fn end(mut self, exit_code: Option<i32>) {
-        let _ = write_line(&mut self.stream, &Request::Done { exit_code });
+    pub fn end(self, exit_code: Option<i32>) {
+        self.send_done(exit_code, None);
+    }
+
+    /// Tells the daemon how the job ended, the exit code or the signal, and
+    /// closes the connection, as [`Lease::end`] does.
+    pub fn end_status(self, status: ExitStatus) {
+        self.send_done(status.code(), status.signal());
+    }
+
+    /// Writes the `Done` line. A failed write closes the connection all the
+    /// same when `self` drops.
+    fn send_done(mut self, exit_code: Option<i32>, signal: Option<i32>) {
+        let _ = write_line(&mut self.stream, &Request::Done { exit_code, signal });
     }
 }
 
@@ -125,7 +139,7 @@ fn connect(path: &Path) -> Result<UnixStream, Unasked> {
 }
 
 /// Reads one reply from `reader`, saying why when none arrives.
-fn reply(reader: &mut BufReader<UnixStream>, waited: Duration) -> Result<Reply, Unasked> {
+fn reply(reader: &mut BufReader<impl Read>, waited: Duration) -> Result<Reply, Unasked> {
     match read_line::<Reply>(reader) {
         Ok(Some(reply)) => Ok(reply),
         Ok(None) => Err(Unasked::Closed),
@@ -171,12 +185,53 @@ fn try_ask(
     match reply(&mut reader, answer_within)? {
         Reply::Granted { jobs } => return Ok(Lease { stream, jobs }),
         Reply::Queued { ahead, held } => queued(ahead, held),
-        Reply::Jobs(_) => return Err(garbled(ErrorKind::InvalidData.into())),
+        Reply::Jobs(_) | Reply::Timeline(_) => return Err(wrong_reply()),
     }
     stream.set_read_timeout(None).map_err(garbled)?;
     match reply(&mut reader, answer_within)? {
         Reply::Granted { jobs } => Ok(Lease { stream, jobs }),
-        Reply::Queued { .. } | Reply::Jobs(_) => Err(garbled(ErrorKind::InvalidData.into())),
+        Reply::Queued { .. } | Reply::Jobs(_) | Reply::Timeline(_) => Err(wrong_reply()),
+    }
+}
+
+/// A connection whose reads all end at one moment, so a daemon that sends
+/// a reply a byte at a time cannot extend the wait.
+struct Deadline {
+    /// The connection.
+    stream: UnixStream,
+    /// When the reads end.
+    at: Instant,
+}
+
+impl Read for Deadline {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let left = self.at.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(ErrorKind::TimedOut.into());
+        }
+        // macOS refuses this call once the peer has closed. The read then
+        // returns at once, so the refusal costs nothing.
+        let _ = self.stream.set_read_timeout(Some(left));
+        self.stream.read(buffer)
+    }
+}
+
+/// Sends `request` to the daemon at `path` and reads one reply, which must
+/// arrive whole within `answer_within`.
+fn request(path: &Path, request: &Request, answer_within: Duration) -> Result<Reply, Unasked> {
+    let mut stream = connect(path)?;
+    let at = Instant::now() + answer_within;
+    stream
+        .set_read_timeout(Some(answer_within))
+        .map_err(|error| Unasked::Garbled { error })?;
+    write_line(&mut stream, request).map_err(|_| Unasked::Closed)?;
+    reply(&mut BufReader::new(Deadline { stream, at }), answer_within)
+}
+
+/// Returns the error of a reply of the wrong kind.
+fn wrong_reply() -> Unasked {
+    Unasked::Garbled {
+        error: ErrorKind::InvalidData.into(),
     }
 }
 
@@ -186,15 +241,20 @@ fn try_ask(
 ///
 /// Returns why the daemon could not be asked.
 pub fn jobs(path: &Path, answer_within: Duration) -> Result<Jobs, Unasked> {
-    let mut stream = connect(path)?;
-    let garbled = |error| Unasked::Garbled { error };
-    stream
-        .set_read_timeout(Some(answer_within))
-        .map_err(garbled)?;
-    write_line(&mut stream, &Request::Status).map_err(|_| Unasked::Closed)?;
-    let mut reader = BufReader::new(stream);
-    match reply(&mut reader, answer_within)? {
+    match request(path, &Request::Status, answer_within)? {
         Reply::Jobs(jobs) => Ok(jobs),
-        Reply::Granted { .. } | Reply::Queued { .. } => Err(garbled(ErrorKind::InvalidData.into())),
+        _ => Err(wrong_reply()),
+    }
+}
+
+/// Asks the daemon at `path` for the jobs that `deadband top` draws.
+///
+/// # Errors
+///
+/// Returns why the daemon could not be asked.
+pub fn timeline(path: &Path, answer_within: Duration) -> Result<Timeline, Unasked> {
+    match request(path, &Request::Timeline, answer_within)? {
+        Reply::Timeline(timeline) => Ok(timeline),
+        _ => Err(wrong_reply()),
     }
 }

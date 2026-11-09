@@ -308,15 +308,17 @@ impl<J> Queue<J> {
     }
 
     /// Removes the job numbered `id`, whether it waits or runs, and returns
-    /// it, or `None` when the queue does not hold it.
-    pub fn remove(&mut self, id: JobId) -> Option<J> {
+    /// it with when it started, which is `None` for a job that still
+    /// waited. Returns `None` when the queue does not hold it.
+    pub fn remove(&mut self, id: JobId) -> Option<(J, Option<Instant>)> {
         for waiting in [&mut self.fast, &mut self.normal] {
             if let Some(index) = waiting.iter().position(|(each, _)| *each == id) {
-                return waiting.remove(index).map(|(_, job)| job);
+                return waiting.remove(index).map(|(_, job)| (job, None));
             }
         }
         let index = self.running.iter().position(|each| each.id == id)?;
-        Some(self.running.remove(index).job)
+        let started = self.running.remove(index);
+        Some((started.job, Some(started.at)))
     }
 
     /// Returns the running job numbered `id`.
@@ -343,6 +345,12 @@ impl<J> Queue<J> {
     /// Returns the running jobs in the order they started.
     pub fn running(&self) -> impl Iterator<Item = &J> {
         self.running.iter().map(|each| &each.job)
+    }
+
+    /// Returns the running jobs in the order they started, each with when
+    /// it started.
+    pub fn running_since(&self) -> impl Iterator<Item = (&J, Instant)> {
+        self.running.iter().map(|each| (&each.job, each.at))
     }
 
     /// Returns the waiting jobs in the order they start: the fast lane,

@@ -16,6 +16,8 @@ use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
+mod timeline;
+
 /// How long a test waits for a reply that it expects.
 const REPLY_WITHIN: Duration = Duration::from_secs(10);
 
@@ -200,7 +202,10 @@ fn a_second_job_waits_until_the_first_job_says_it_ended() {
     assert_eq!(first.reply(), granted(1));
     let mut second = Client::ask(&path, "b");
     assert_eq!(second.reply(), queued(0, 1));
-    first.send(&Request::Done { exit_code: Some(0) });
+    first.send(&Request::Done {
+        exit_code: Some(0),
+        signal: None,
+    });
     assert_eq!(second.reply(), granted(1));
 }
 
@@ -272,7 +277,10 @@ fn status_reports_the_hold_that_follows_the_machine_and_none_once_the_queue_drai
     let mut third = Client::ask(&path, "c");
     assert_eq!(third.reply(), queued(0, 2));
     assert_eq!(jobs(&path).held, Some(Hold::Full { max_jobs: 2 }));
-    first.send(&Request::Done { exit_code: Some(0) });
+    first.send(&Request::Done {
+        exit_code: Some(0),
+        signal: None,
+    });
     assert_eq!(third.reply(), granted(2));
     let drained = jobs(&path);
     assert_eq!(drained.held, None);
@@ -363,9 +371,15 @@ fn a_waiting_fast_job_starts_before_a_normal_job_that_waited_longer() {
     assert_eq!(normal.reply(), queued(0, 1));
     let mut fast = Client::ask_in(&path, "fast", Lane::Fast);
     assert_eq!(fast.reply(), queued(0, 1));
-    first.send(&Request::Done { exit_code: Some(0) });
+    first.send(&Request::Done {
+        exit_code: Some(0),
+        signal: None,
+    });
     assert_eq!(fast.reply(), Reply::Granted { jobs: 17 });
-    fast.send(&Request::Done { exit_code: Some(0) });
+    fast.send(&Request::Done {
+        exit_code: Some(0),
+        signal: None,
+    });
     assert_eq!(normal.reply(), granted(1));
 }
 
@@ -454,7 +468,10 @@ fn a_waiting_client_that_disconnects_leaves_the_queue_and_the_next_moves_up() {
         listed = jobs(&path);
     }
     assert_eq!(listed.waiting, vec![job("c")]);
-    first.send(&Request::Done { exit_code: Some(0) });
+    first.send(&Request::Done {
+        exit_code: Some(0),
+        signal: None,
+    });
     assert_eq!(third.reply(), granted(1));
 }
 

@@ -9,11 +9,10 @@
 //! [`Reply::Granted`] to that job's client. The daemon never starts, stops
 //! or signals a job; each client runs its own job.
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, BufReader, Write};
-use std::num::NonZeroUsize;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -22,19 +21,23 @@ use std::time::{Duration, Instant};
 use rustix::io::Errno;
 
 use self::reading::{priority_active, read_machine};
+use self::timeline::Ended;
 use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
 use crate::probe::{Pressure, Probe};
-use crate::protocol::{Job, Jobs, Reply, Request, read_line, write_line};
+use crate::protocol::{Exit, Job, Jobs, Label, Reply, Request, read_line, write_line};
 use crate::reclaim::{self, Reclaimed, Resource, Watch};
 
 mod bind;
 mod reading;
+mod settings;
 #[cfg(test)]
 mod tests;
+mod timeline;
 
 pub use self::bind::{
     Bound, DAEMON_RUNNING, SOCKET_UNUSABLE, Unbound, bind, lock_path, raise_descriptor_limit,
 };
+pub use self::settings::{Settings, default_max_jobs};
 
 /// How often the daemon samples the probe.
 pub const SAMPLE_EVERY: Duration = Duration::from_secs(1);
@@ -55,60 +58,6 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 /// Where the daemon writes its log lines, which several threads share.
 pub type Log = Arc<Mutex<dyn Write + Send>>;
 
-/// How the daemon admits jobs.
-#[derive(Debug, Clone)]
-pub struct Settings {
-    /// The most jobs that run at once.
-    pub max_jobs: NonZeroUsize,
-    /// The number of logical cores, or `None` when it is unknown.
-    pub cores: Option<NonZeroUsize>,
-    /// The home directory, whose disk the daemon reads, or `None` when it
-    /// is unknown and the disk holds no job.
-    pub home: Option<PathBuf>,
-    /// The priority file. While it holds an entry, each lane leaves one
-    /// place open for the other.
-    pub priority_file: Option<PathBuf>,
-    /// How often the daemon samples the probe.
-    pub sample_every: Duration,
-    /// How long the daemon waits for a new connection's first line.
-    pub first_line_within: Duration,
-    /// The reclaimers and when the daemon asks them.
-    pub reclaim: reclaim::Config,
-}
-
-impl Settings {
-    /// Returns the settings with `max_jobs`, `cores`, `home` and
-    /// `priority_file`, the default sampling interval, [`SAMPLE_EVERY`],
-    /// the default wait for a first line, [`FIRST_LINE_WITHIN`], and no
-    /// reclaimer.
-    #[must_use]
-    pub fn new(
-        max_jobs: NonZeroUsize,
-        cores: Option<NonZeroUsize>,
-        home: Option<PathBuf>,
-        priority_file: Option<PathBuf>,
-    ) -> Self {
-        Self {
-            max_jobs,
-            cores,
-            home,
-            priority_file,
-            sample_every: SAMPLE_EVERY,
-            first_line_within: FIRST_LINE_WITHIN,
-            reclaim: reclaim::Config::default(),
-        }
-    }
-}
-
-/// Returns the default maximum number of jobs: a quarter of the logical
-/// cores that `cores` gives, rounded up, and at least 1. With 14 cores it
-/// is 4 jobs of 3 threads each.
-#[must_use]
-pub fn default_max_jobs(cores: Option<NonZeroUsize>) -> NonZeroUsize {
-    let quarter = cores.map_or(1, |cores| cores.get().div_ceil(4));
-    NonZeroUsize::new(quarter).unwrap_or(NonZeroUsize::MIN)
-}
-
 /// A job that waits or runs, with the connection to its client.
 #[derive(Debug)]
 struct Waiter {
@@ -116,6 +65,10 @@ struct Waiter {
     job: Job,
     /// The connection that the daemon writes the grant to.
     stream: UnixStream,
+    /// The job's label as `deadband top` shows it.
+    label: Label,
+    /// When the job asked to start.
+    queued: Instant,
 }
 
 /// What the threads of the daemon share.
@@ -132,9 +85,27 @@ struct State {
     watch: Watch,
     /// The last reclaim, for `deadband status`.
     reclaimed: Option<Reclaimed>,
+    /// When the daemon started.
+    up: Instant,
+    /// The jobs that have ended, the oldest first.
+    ended: VecDeque<Ended>,
 }
 
 impl State {
+    /// Returns the state of a daemon that starts now and has no job.
+    fn new(settings: Settings, reading: Option<Reading>, reserve_lanes: bool) -> Self {
+        Self {
+            queue: Queue::default(),
+            reading,
+            reserve_lanes,
+            settings,
+            watch: Watch::default(),
+            reclaimed: None,
+            up: Instant::now(),
+            ended: VecDeque::new(),
+        }
+    }
+
     /// Starts every waiting job that the admission rule lets start, and
     /// writes the grant to each one's client. A client that cannot take
     /// the grant is gone, so its job leaves the queue and frees its place.
@@ -158,7 +129,7 @@ impl State {
                     .running_job(id)
                     .is_some_and(|waiter| write_line(&mut &waiter.stream, &granted).is_ok());
                 if !delivered {
-                    self.queue.remove(id);
+                    self.record(id, None);
                 }
             }
         }
@@ -226,14 +197,7 @@ pub fn serve<P: Probe + Send + 'static>(
 ) -> io::Error {
     let reading = read_machine(&probe, &settings, log, None);
     let reserve_lanes = priority_active(settings.priority_file.as_deref());
-    let shared: Shared = Arc::new(Mutex::new(State {
-        queue: Queue::default(),
-        reading,
-        reserve_lanes,
-        settings,
-        watch: Watch::default(),
-        reclaimed: None,
-    }));
+    let shared: Shared = Arc::new(Mutex::new(State::new(settings, reading, reserve_lanes)));
     // The sampler stops when `serve` returns and drops `_stop`.
     let (_stop, stopped) = mpsc::channel::<()>();
     let sampler = Arc::clone(&shared);
@@ -350,6 +314,12 @@ fn connection(shared: &Shared, stream: UnixStream) {
             let jobs = lock(shared).jobs();
             let _ = write_line(&mut &stream, &Reply::Jobs(jobs));
         }
+        Ok(Some(Request::Timeline)) => {
+            // The write has its timeout and happens after the lock is
+            // released, so a client that does not read holds up no job.
+            let timeline = lock(shared).timeline(Instant::now());
+            let _ = write_line(&mut &stream, &Reply::Timeline(timeline));
+        }
         Ok(Some(Request::Done { .. }) | None) | Err(_) => {}
     }
 }
@@ -361,6 +331,8 @@ fn ask(shared: &Shared, stream: UnixStream, reader: &mut BufReader<UnixStream>, 
     let Ok(grant_stream) = stream.try_clone() else {
         return;
     };
+    let queued = Instant::now();
+    let label = Label::new(&job.label);
     let id: JobId = {
         let mut state = lock(shared);
         let lane = job.lane;
@@ -368,6 +340,8 @@ fn ask(shared: &Shared, stream: UnixStream, reader: &mut BufReader<UnixStream>, 
             Waiter {
                 job,
                 stream: grant_stream,
+                label,
+                queued,
             },
             lane,
         );
@@ -380,14 +354,20 @@ fn ask(shared: &Shared, stream: UnixStream, reader: &mut BufReader<UnixStream>, 
         }
         id
     };
+    let exit = read_end(reader);
+    let mut state = lock(shared);
+    state.record(id, Some(exit));
+    state.grant();
+}
+
+/// Reads the job's connection until its client says how the job ended. A
+/// connection that closes or sends a line the daemon cannot read leaves the
+/// end unknown.
+fn read_end(reader: &mut BufReader<UnixStream>) -> Exit {
     while let Ok(Some(request)) = read_line::<Request>(reader) {
-        // `Done` carries the job's exit code, which the daemon does not use
-        // yet; the ledger records it with the job's cost.
-        if let Request::Done { .. } = request {
-            break;
+        if let Request::Done { exit_code, signal } = request {
+            return Exit::reported(exit_code, signal);
         }
     }
-    let mut state = lock(shared);
-    state.queue.remove(id);
-    state.grant();
+    Exit::Lost
 }
