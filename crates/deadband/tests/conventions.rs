@@ -55,7 +55,7 @@ const SUITE: Suite<'_> = Suite::new(|| (Cli::command(), TOOL))
     )
     .skip(
         Check::Examples,
-        "The `run` example would start a build and the `daemon` example does not exit, so none of the three examples can run as they stand.",
+        "The `status` examples print live values, the `run` example would start a build and the `daemon` example does not exit, so no example has fixed output.",
     )
     .skip(
         Check::CommandReference,

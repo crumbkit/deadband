@@ -22,7 +22,7 @@
     {
       "rule": "suite/skip",
       "applies_to": "Check::Examples",
-      "reason": "The `run` example would start a build and the `daemon` example does not exit, so none of the three examples can run as they stand.",
+      "reason": "The `status` examples print live values, the `run` example would start a build and the `daemon` example does not exit, so no example has fixed output.",
       "costs": [
         "No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention."
       ],
