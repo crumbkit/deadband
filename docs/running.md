@@ -432,5 +432,8 @@ The new daemon does not count every job. A new daemon can admit a job in the
 moment before the running jobs have told it about themselves, at most about
 100 ms per retry after it starts listening. The jobs that were waiting on the
 earlier daemon start at once when the connection closes, and the new daemon
-does not count them. In both cases the machine can run more than
-`--max-jobs` jobs until those jobs end.
+does not count them. Jobs that started while no daemon listened are not
+counted either, because they never held a place. The first restart onto this
+release counts nothing from clients of an older binary, because those clients
+never tell a new daemon about their jobs. In all of these cases the machine
+can run more than `--max-jobs` jobs until those jobs end.

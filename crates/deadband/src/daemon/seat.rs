@@ -10,7 +10,12 @@ use crate::protocol::{Job, Label};
 
 /// Counts `job` as running since `ran_ms` ago on the connection `stream`,
 /// and removes it when its client says it ended or closes the connection.
-/// A `ran_ms` that the clock cannot subtract counts from now.
+/// On Linux and macOS an `Instant` holds signed seconds, so subtracting any
+/// `ran_ms` succeeds, and a claim of `u64::MAX` becomes a very large age that
+/// only shows in `top`. A clock that cannot subtract the age makes
+/// `checked_sub` return `None`, and the job then counts from now. The plain
+/// subtraction `now - duration` panics in that case, and a client must not
+/// be able to panic the daemon.
 pub(super) fn seat(
     shared: &Shared,
     stream: UnixStream,

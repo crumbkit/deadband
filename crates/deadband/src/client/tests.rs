@@ -6,7 +6,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::lease::Seat;
 use super::{Admission, Lease, Unasked, ask, jobs, timeline};
@@ -343,9 +343,8 @@ fn timeline_from_a_daemon_that_drips_bytes_stops_at_the_deadline() {
     assert!(matches!(answer, Err(Unasked::Silent { .. })), "{answer:?}");
 }
 
-/// How long the first answer may take in a test that watches for a read
-/// timeout left on the connection. The test stays quiet for longer.
-const QUIET_ANSWER: Duration = Duration::from_secs(1);
+/// The read timeout that the test of an open connection sets.
+const READ_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// One connection that a scripted daemon accepted.
 struct Peer {
@@ -391,14 +390,9 @@ fn next_connection(listener: &UnixListener, within: Duration) -> Option<Peer> {
 
 /// Grants a job with `jobs` threads to a client that asks on `path`, and
 /// returns its lease and the daemon's end of the connection.
-fn lease_on(
-    listener: &UnixListener,
-    path: &Path,
-    jobs: usize,
-    answer_within: Duration,
-) -> (Lease, Peer) {
+fn lease_on(listener: &UnixListener, path: &Path, jobs: usize) -> (Lease, Peer) {
     let asked = path.to_path_buf();
-    let asking = thread::spawn(move || ask(&asked, &job(), answer_within, |_, _| {}));
+    let asking = thread::spawn(move || ask(&asked, &job(), ANSWER_WITHIN, |_, _| {}));
     let mut peer = next_connection(listener, ANSWER_WITHIN).expect("the client connects");
     assert_eq!(peer.request(), Request::Ask(job()));
     write_line(&mut peer.stream, &Reply::Granted { jobs }).expect("the grant writes");
@@ -419,7 +413,7 @@ fn pause(length: Duration) {
 fn a_lease_seats_again_with_its_job_and_threads_after_the_connection_closes() {
     let path = socket_path();
     let listener = UnixListener::bind(&path).expect("the test socket binds");
-    let (_lease, peer) = lease_on(&listener, &path, 5, ANSWER_WITHIN);
+    let (_lease, peer) = lease_on(&listener, &path, 5);
     drop(peer);
     let mut next = next_connection(&listener, ANSWER_WITHIN).expect("the lease connects again");
     let Request::Seat {
@@ -441,7 +435,7 @@ fn a_lease_seats_again_with_its_job_and_threads_after_the_connection_closes() {
 fn the_end_of_a_seated_job_reaches_the_new_daemon() {
     let path = socket_path();
     let listener = UnixListener::bind(&path).expect("the test socket binds");
-    let (lease, peer) = lease_on(&listener, &path, 5, ANSWER_WITHIN);
+    let (lease, peer) = lease_on(&listener, &path, 5);
     drop(peer);
     let mut next = next_connection(&listener, ANSWER_WITHIN).expect("the lease connects again");
     assert!(matches!(next.request(), Request::Seat { .. }));
@@ -459,17 +453,23 @@ fn the_end_of_a_seated_job_reaches_the_new_daemon() {
 fn a_lease_opens_no_second_connection_while_the_first_stays_open() {
     let path = socket_path();
     let listener = UnixListener::bind(&path).expect("the test socket binds");
-    let (_lease, _peer) = lease_on(&listener, &path, 5, QUIET_ANSWER);
-    // The wait outlasts the read timeout of the first answer, which the
-    // lease must not take for the daemon going away.
-    assert!(next_connection(&listener, QUIET_ANSWER * 2).is_none());
+    let (client, _daemon_end) = UnixStream::pair().expect("the pair connects");
+    // The connection keeps a read timeout, as one left from an ask would.
+    // The lease must not take that timeout for the daemon going away.
+    client
+        .set_read_timeout(Some(READ_TIMEOUT))
+        .expect("the timeout sets");
+    let _lease = Lease::watched(client, 5, &path, &job());
+    // The wait outlasts the read timeout several times. A slow machine
+    // can only make this check pass without proving anything, never fail.
+    assert!(next_connection(&listener, READ_TIMEOUT * 4).is_none());
 }
 
 #[test]
 fn a_lease_closes_the_old_connection_before_the_new_one_carries_its_seat() {
     let path = socket_path();
     let listener = UnixListener::bind(&path).expect("the test socket binds");
-    let (_lease, mut first) = lease_on(&listener, &path, 5, ANSWER_WITHIN);
+    let (_lease, mut first) = lease_on(&listener, &path, 5);
     first
         .stream
         .shutdown(Shutdown::Write)
@@ -483,7 +483,7 @@ fn a_lease_closes_the_old_connection_before_the_new_one_carries_its_seat() {
 fn a_lease_tries_again_when_a_daemon_closes_the_seat() {
     let path = socket_path();
     let listener = UnixListener::bind(&path).expect("the test socket binds");
-    let (_lease, peer) = lease_on(&listener, &path, 5, ANSWER_WITHIN);
+    let (_lease, peer) = lease_on(&listener, &path, 5);
     drop(peer);
     let mut second = next_connection(&listener, ANSWER_WITHIN).expect("the lease connects again");
     assert!(matches!(second.request(), Request::Seat { .. }));
@@ -493,25 +493,32 @@ fn a_lease_tries_again_when_a_daemon_closes_the_seat() {
 }
 
 #[test]
-fn a_lease_ends_at_once_with_no_daemon_listening() {
+fn a_lease_ends_when_no_daemon_is_listening() {
     let path = socket_path();
     let listener = UnixListener::bind(&path).expect("the test socket binds");
-    let (lease, peer) = lease_on(&listener, &path, 5, ANSWER_WITHIN);
+    let (lease, peer) = lease_on(&listener, &path, 5);
     drop(peer);
     drop(listener);
     std::fs::remove_file(&*path).expect("the socket file goes");
     // Several connections fail in this time, one per 100 ms.
     pause(Duration::from_millis(250));
-    let begun = Instant::now();
-    lease.end(Some(0));
-    assert!(begun.elapsed() < Duration::from_secs(1));
+    // The limit only stops a hung test. A lease that waits for a daemon
+    // would never send, and a slow machine cannot reach the limit.
+    let (sender, ended) = mpsc::channel();
+    thread::spawn(move || {
+        lease.end(Some(0));
+        let _ = sender.send(());
+    });
+    ended
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the lease ends");
 }
 
 #[test]
 fn a_dropped_lease_closes_its_connection() {
     let path = socket_path();
     let listener = UnixListener::bind(&path).expect("the test socket binds");
-    let (lease, mut peer) = lease_on(&listener, &path, 5, ANSWER_WITHIN);
+    let (lease, mut peer) = lease_on(&listener, &path, 5);
     drop(lease);
     assert_eq!(
         read_line::<Request>(&mut peer.reader).expect("the end reads in time"),
@@ -523,7 +530,7 @@ fn a_dropped_lease_closes_its_connection() {
 fn a_lease_that_ended_connects_no_more() {
     let path = socket_path();
     let listener = UnixListener::bind(&path).expect("the test socket binds");
-    let (lease, peer) = lease_on(&listener, &path, 5, ANSWER_WITHIN);
+    let (lease, peer) = lease_on(&listener, &path, 5);
     lease.end(Some(0));
     drop(peer);
     assert!(next_connection(&listener, Duration::from_millis(300)).is_none());

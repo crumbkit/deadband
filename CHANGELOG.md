@@ -11,4 +11,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A `deadband run` whose daemon goes away connects again every 100 ms and
   tells the next daemon that its job is already running. The new daemon
   counts that job at once, so a restart no longer admits a second full set
-  of jobs on top of the ones that run.
+  of jobs on top of the ones that run. The new daemon does not count jobs that
+  were waiting, jobs that started while no daemon listened, or jobs of clients
+  from an older binary, so the first restart onto this release still counts
+  nothing from those clients.
