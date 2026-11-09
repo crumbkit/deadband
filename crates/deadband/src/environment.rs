@@ -40,13 +40,13 @@ pub const VARIABLES: &[Variable] = &[
     Variable {
         name: HELD,
         purpose: "marks a job that a granted job started, so it runs at once without asking",
-        form: "any value; `deadband run` sets it to 1 for the job it runs",
+        form: "any value but empty or 0; `deadband run` sets it to 1 for the job it runs",
         absent: "deadband run asks the daemon",
     },
     Variable {
         name: BYPASS,
         purpose: "skips admission, so the job runs at once without asking",
-        form: "1",
+        form: "any value but empty or 0",
         absent: "deadband run asks the daemon",
     },
     Variable {
@@ -96,7 +96,7 @@ pub const VARIABLES: &[Variable] = &[
 /// What `deadband run` and the daemon read from the environment.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Environment {
-    /// `DEADBAND_HELD` is set: the job runs inside a granted job.
+    /// `DEADBAND_HELD` is set to anything but 0: the job runs inside a granted job.
     pub held: bool,
     /// `DEADBAND_BYPASS` is set to anything but 0: the job skips admission.
     pub bypass: bool,
@@ -116,8 +116,9 @@ impl Environment {
     /// directory. An empty variable counts as absent.
     pub fn read(read: impl Fn(&str) -> Option<OsString>, cwd: Option<PathBuf>) -> Self {
         let set = |name: &str| read(name).filter(|value| !value.is_empty());
-        let held = set(HELD).is_some();
-        let bypass = set(BYPASS).is_some_and(|value| value != "0");
+        let switched_on = |name: &str| set(name).is_some_and(|value| value != "0");
+        let held = switched_on(HELD);
+        let bypass = switched_on(BYPASS);
         let home = set("HOME").map(PathBuf::from);
         let config = set("XDG_CONFIG_HOME")
             .map(PathBuf::from)
