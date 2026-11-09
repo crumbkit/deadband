@@ -50,7 +50,8 @@ status.
 | environment | Reads the variables that `deadband run` uses, and gives a granted job its parallelism variables. |
 | priority | Chooses a job's lane from the priority file. |
 | throttle | The only module that changes the priority of a job. `deadband run` lowers its own priority to nice 5 before it starts a normal-lane job, and the job inherits it. |
-| cli | The commands `deadband run`, `status` and `daemon`, built on crumbkit. [running.md](running.md) says how to install and run them. |
+| cli | The commands `deadband run`, `status`, `daemon` and `top`, built on crumbkit. [running.md](running.md) says how to install and run them. |
+| tui | `deadband top`, behind the default-on Cargo feature `tui`: the terminal guard, the poll loop, a pure model and a ratatui view. It reads the daemon once a second through a request of its own, and draws its load graph from the local probe. |
 
 ## Rules that shape the code
 
@@ -129,7 +130,6 @@ owner of the jobserver and of signals.
 | ledger | Stores each finished job's label, metadata, duration and measured CPU and memory in SQLite, and gives a learned cost per label. |
 | jobserver | Runs one shared jobserver pipe, so all cargo processes together start at most a set number of compiler processes. admit raises and lowers the ceiling. |
 | sink | The `HistorySink` trait that receives a record of each finished job. The first sink writes records to a board with `board put`. |
-| tui | `deadband top`: live load, the queue, running jobs and their learned costs, drawn with ratatui. |
 
 Three built modules would also grow. The admit rule would additionally
 require that live headroom covers the label's learned cost. The client would

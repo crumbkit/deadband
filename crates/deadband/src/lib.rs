@@ -16,6 +16,8 @@ pub mod socket;
 #[cfg(test)]
 mod testing;
 pub mod throttle;
+#[cfg(feature = "tui")]
+pub mod tui;
 
 /// The name that deadband uses for itself.
 pub const NAME: &str = "deadband";

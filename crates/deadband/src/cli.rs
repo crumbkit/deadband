@@ -20,6 +20,8 @@ use crate::daemon::{DAEMON_RUNNING, Log, SOCKET_UNUSABLE};
 use crate::environment::Environment;
 use crate::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Probe, Sample, Unreadable};
 use crate::protocol::Jobs;
+#[cfg(feature = "tui")]
+use crate::tui::{TOP_NOT_A_TERMINAL, TOP_TERMINAL_FAILED};
 
 mod commands;
 #[cfg(test)]
@@ -55,6 +57,9 @@ pub enum Command {
     Run(RunArgs),
     /// Run the daemon that admits jobs, in the foreground.
     Daemon(DaemonArgs),
+    /// Show the last ten minutes of jobs, load and holds in the terminal.
+    #[cfg(feature = "tui")]
+    Top,
 }
 
 /// The arguments of `deadband run`.
@@ -169,6 +174,10 @@ pub const EXIT_MACHINE: u8 = 3;
 /// The exit code of a daemon that could not listen on its socket.
 pub const EXIT_DAEMON: u8 = 4;
 
+/// The exit code of a `deadband top` that has no terminal or lost it.
+#[cfg(feature = "tui")]
+pub const EXIT_TOP: u8 = 5;
+
 /// The exit code of a `deadband run` whose program was found but could not
 /// start, as `env` and `timeout` report it.
 pub const EXIT_NOT_STARTED: u8 = 126;
@@ -203,6 +212,14 @@ pub const TOOL: Tool = Tool::new()
                 )])
                 .effects(Effects::additive())
                 .prints_no_result(),
+            #[cfg(feature = "tui")]
+            Leaf::new(&["top"])
+                .examples(&[Example::new(
+                    &[],
+                    "Show the last ten minutes of jobs in the terminal",
+                )])
+                .effects(Effects::read_only())
+                .prints_no_result(),
         ]),
     )
     .failures(
@@ -220,6 +237,10 @@ pub const TOOL: Tool = Tool::new()
             Exit::new(EXIT_NOT_FOUND, "the program given to `run` was not found.")
                 .commands(&[&["run"]])
                 .failures(&[&JOB_NOT_FOUND]),
+            #[cfg(feature = "tui")]
+            Exit::new(EXIT_TOP, "`top` has no terminal to draw on, or lost it.")
+                .commands(&[&["top"]])
+                .failures(&[&TOP_NOT_A_TERMINAL, &TOP_TERMINAL_FAILED]),
         ]),
     );
 
@@ -236,6 +257,8 @@ pub fn run<P: Probe + Clone + Send + 'static>(machine: &Machine<P>) -> ExitCode 
         Command::Daemon(args) => {
             commands::daemon(&mut Sink::standard(), &mut output, machine, &args)
         }
+        #[cfg(feature = "tui")]
+        Command::Top => commands::top(&mut Sink::standard(), &mut output, machine),
     };
     crumbkit::events::ended(exit, None)
 }
@@ -256,6 +279,8 @@ pub fn run_to<O: Write, W: Write, T: Into<OsString>, P: Probe + Clone + Send + '
         Command::Status => crumbkit::finish_to(sink, output, STATUS, status(machine)),
         Command::Run(args) => commands::run(sink, &mut output, machine, args),
         Command::Daemon(args) => commands::daemon(sink, &mut output, machine, &args),
+        #[cfg(feature = "tui")]
+        Command::Top => commands::top(sink, &mut output, machine),
     }
 }
 

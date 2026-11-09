@@ -14,6 +14,12 @@ path = "src/main.rs"
 # that rustdoc gives the library docs.
 doc = false
 
+[features]
+default = ["tui"]
+# `deadband top`. A program that embeds the deadband library sets
+# `default-features = false`, so it does not inherit ratatui.
+tui = ["dep:ratatui"]
+
 [dependencies]
 # clap parses the command line. These are the user-facing features that a
 # binary chooses: help, usage lines and the context of a refusal.
@@ -41,6 +47,13 @@ basic-toml = "0.1.10"
 # humantime reads the ages in the config file, such as "60s", and writes
 # the time of the last reclaim. crumbkit already depends on it.
 humantime = { version = "2.4.0", default-features = false }
+
+# ratatui draws `deadband top`, and its crossterm feature owns the terminal.
+# The eval /evals/deadband-top-terminal-library chose it over ratatui-core
+# with crossterm and over hand-written ANSI: it adds 0.27 MiB of stripped
+# binary, and the crates the view needs are maintained in one place. Only the
+# `tui` feature brings it in.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"], optional = true }
 
 # libc calls getloadavg and sysctlbyname, which read the load average, the
 # memory pressure level and swap use on macOS. A measured comparison chose

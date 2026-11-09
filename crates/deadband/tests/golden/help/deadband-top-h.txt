@@ -1,0 +1,13 @@
+Show the last ten minutes of jobs, load and holds in the terminal
+
+Usage: deadband top [OPTIONS]
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Examples:
+  deadband top
+
+Effects: read-only, closed-world.
+Output: no result on standard output, and --json prints a failure as JSON.
+Global flags: --json. `deadband top --help` describes them.

@@ -1,8 +1,9 @@
 # Running deadband
 
-deadband has three commands. `deadband daemon` admits jobs, `deadband run`
-asks the daemon before it starts a job, and `deadband status` shows the
-machine and the daemon's jobs.
+deadband has four commands. `deadband daemon` admits jobs, `deadband run`
+asks the daemon before it starts a job, `deadband status` shows the
+machine and the daemon's jobs, and `deadband top` draws the last ten minutes
+in the terminal.
 
 ## Installing
 
@@ -62,6 +63,24 @@ the disk starts once free space is back above both limits. A job counts as runni
 job prints one line on standard error that says why it waits and how many
 jobs start before it. An unreadable disk holds no job, and the daemon's log
 says why.
+
+## Watching the last ten minutes
+
+`deadband top` opens a read-only view in the terminal. Each job is one row
+that shows when it waited, when it ran and how it ended, and the view holds a
+line for the load and a line for what held jobs, on one time axis. Press `q`
+or Ctrl-C to quit. The terminal must be at least 80 columns by 16 lines.
+
+The rows come from the daemon, which remembers the last 64 jobs that ended,
+in memory only, so a restart forgets them. The load and the holds come from
+the view's own polls, once a second, so they start empty when the view opens.
+A job marked `lost` ended without saying how, for example when its
+`deadband run` was killed. Each job shows at most its label, its lane and
+its times; the view shows no command line. A program that embeds the
+deadband library sets `default-features = false` to leave the view out.
+
+A SIGTERM or SIGKILL sent to `deadband top` leaves the terminal in raw mode.
+Run `reset` to restore it.
 
 ## Threads
 

@@ -1,0 +1,28 @@
+
+ This terminal is 60 x 12.
+ deadband top needs at least 80 x 16. Widen it, or press q.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

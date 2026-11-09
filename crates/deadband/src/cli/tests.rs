@@ -477,3 +477,16 @@ fn daemon_refuses_to_start_while_another_daemon_answers_on_its_socket() {
     assert_eq!(out, "");
     assert!(err.contains("code:  deadband::daemon::running"), "{err}");
 }
+
+#[cfg(feature = "tui")]
+#[test]
+fn top_with_json_refuses_with_not_a_terminal_and_names_status() {
+    let (code, out, err) = Test::new(Fixed).run(&["top", "--json"]);
+    assert_eq!(code, crate::cli::EXIT_TOP);
+    let printed = out + &err;
+    assert!(
+        printed.contains("deadband::top::not_a_terminal"),
+        "{printed}"
+    );
+    assert!(printed.contains("deadband status"), "{printed}");
+}

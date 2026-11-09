@@ -22,6 +22,6 @@ suite/skip: Check::Twins
 
 deadband has 1 declaration.
 
-root-verbs: deadband status, deadband run, deadband daemon
+root-verbs: deadband status, deadband run, deadband daemon, deadband top
   Declares: Each command sits directly under the root as a verb.
-  Reason: People type `deadband status`, `deadband run` and `deadband daemon` as one verb, and deadband has no resource to put them under.
+  Reason: People type `deadband status`, `deadband run`, `deadband daemon` and `deadband top` as one verb, and deadband has no resource to put them under.
