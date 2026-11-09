@@ -78,13 +78,12 @@ impl Failure for Unbound {
 
     fn recovery(&self) -> Recovery {
         match self {
-            Self::Running { .. } => Recovery::None {
-                reason: "one daemon serves each socket, and the running one already admits jobs"
-                    .to_owned(),
-            },
-            Self::NotSocket { .. } | Self::Socket { .. } => Recovery::None {
-                reason: "the socket's directory must exist and be writable, and nothing but a socket may be at its path; DEADBAND_SOCKET names another path".to_owned(),
-            },
+            Self::Running { .. } => Recovery::none(
+                "one daemon serves each socket, and the running one already admits jobs",
+            ),
+            Self::NotSocket { .. } | Self::Socket { .. } => Recovery::none(
+                "the socket's directory must exist and be writable, and nothing but a socket may be at its path; DEADBAND_SOCKET names another path",
+            ),
         }
     }
 }

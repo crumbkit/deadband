@@ -1,0 +1,14 @@
+Run the daemon that admits jobs, in the foreground
+
+Usage: deadband daemon [OPTIONS]
+
+Options:
+      --max-jobs <N>  The most jobs that run at once. The default is a quarter of the logical cores, rounded up, and at least 1
+  -h, --help          Print help (see more with '--help')
+
+Examples:
+  deadband daemon --max-jobs 2
+
+Effects: additive, not idempotent, closed-world.
+Output: no result on standard output, and --json prints a failure as JSON.
+Global flags: --json. `deadband daemon --help` describes them.

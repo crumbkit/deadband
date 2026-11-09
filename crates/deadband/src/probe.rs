@@ -207,12 +207,10 @@ impl Failure for Unreadable {
 
     fn recovery(&self) -> Recovery {
         match self {
-            Self::Unsupported => Recovery::None {
-                reason: "deadband has no probe for this platform yet".to_owned(),
-            },
-            Self::Value { .. } => Recovery::None {
-                reason: "this macOS gives the value in a form deadband does not know, so a retry reads the same form".to_owned(),
-            },
+            Self::Unsupported => Recovery::none("deadband has no probe for this platform yet"),
+            Self::Value { .. } => Recovery::none(
+                "this macOS gives the value in a form deadband does not know, so a retry reads the same form",
+            ),
             Self::Load | Self::Sysctl { .. } => Recovery::Retry,
         }
     }

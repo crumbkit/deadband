@@ -53,10 +53,7 @@ impl Failure for NotStarted {
     }
 
     fn recovery(&self) -> Recovery {
-        Recovery::None {
-            reason: "the command after `--` must name a program on PATH that this user may run"
-                .to_owned(),
-        }
+        Recovery::none("the command after `--` must name a program on PATH that this user may run")
     }
 }
 

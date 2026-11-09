@@ -1,0 +1,15 @@
+Keep a busy machine usable while many heavy jobs compete for it
+
+Usage: deadband [OPTIONS] <COMMAND>
+
+Commands:
+  status  Print the machine's load, memory pressure and swap, and the daemon's jobs
+  run     Wait until the daemon admits a job, then run it
+  daemon  Run the daemon that admits jobs, in the foreground
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Global flags: --json, --fields <FIELD>, --long, --full. `deadband --help` describes them.
+Topics: exit-codes. `deadband help <TOPIC>` prints one.
+Next: deadband <COMMAND> -h

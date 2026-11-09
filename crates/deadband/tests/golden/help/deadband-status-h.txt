@@ -1,0 +1,13 @@
+Print the machine's load, memory pressure and swap, and the daemon's jobs
+
+Usage: deadband status [OPTIONS]
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Examples:
+  deadband status
+  deadband status --json
+
+Effects: read-only, closed-world.
+Global flags: --json. `deadband status --help` describes them.

@@ -1,0 +1,34 @@
+Wait until the daemon admits a job, then run it.
+
+`run` exits with the job's exit status, or with 128 plus the signal's number when a signal ended the job. It exits with 127 when the program is not found and with 126 when it is found but cannot start, as `env` and `timeout` do.
+
+Usage: deadband run [OPTIONS] -- <COMMAND>...
+
+Arguments:
+  <COMMAND>...
+          The command to run, after `--`
+
+Options:
+      --label <LABEL>
+          The label that `deadband status` shows for the job. The default is the program's name
+
+      --lane <LANE>
+          The lane the job waits in. Waiting fast jobs start first and get one more thread, and normal jobs run at nice 5. The default is the fast lane when the priority file matches the job, and the normal lane otherwise
+
+          Possible values:
+          - fast:   Priority work
+          - normal: Every other job
+
+      --json
+          Print the result as a JSON document. The default prints text.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  deadband run --label tests -- cargo test
+          Run cargo test once the daemon admits it
+
+Effects: additive, not idempotent, open-world.
+Writes: applies all items or none.
+Output: no result on standard output, and --json prints a failure as JSON.

@@ -12,15 +12,6 @@
     },
     {
       "rule": "suite/skip",
-      "applies_to": "Check::Grammar",
-      "reason": "The commands `status`, `run` and `daemon` sit directly under `deadband`; a later change decides whether they move under a resource.",
-      "costs": [
-        "No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention."
-      ],
-      "budget": null
-    },
-    {
-      "rule": "suite/skip",
       "applies_to": "Check::PathWeights",
       "reason": "The help paths have no weight budget yet; a later change measures them and sets one.",
       "costs": [
@@ -30,26 +21,8 @@
     },
     {
       "rule": "suite/skip",
-      "applies_to": "Check::HelpGoldens",
-      "reason": "The help pages have no golden files yet; a later change writes them.",
-      "costs": [
-        "No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention."
-      ],
-      "budget": null
-    },
-    {
-      "rule": "suite/skip",
       "applies_to": "Check::Examples",
-      "reason": "`deadband status` prints the live load, memory pressure and swap of the machine, so its output has no fixed golden file.",
-      "costs": [
-        "No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention."
-      ],
-      "budget": null
-    },
-    {
-      "rule": "suite/skip",
-      "applies_to": "Check::OutputBudget",
-      "reason": "The check runs the golden examples, which deadband does not have.",
+      "reason": "The `run` example would start a build and the `daemon` example does not exit, so none of the three examples can run as they stand.",
       "costs": [
         "No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention."
       ],
@@ -58,7 +31,7 @@
     {
       "rule": "suite/skip",
       "applies_to": "Check::CommandReference",
-      "reason": "deadband has no checked-in command reference yet.",
+      "reason": "The check runs `deadband commands list`, which deadband does not mount.",
       "costs": [
         "No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention."
       ],
@@ -72,6 +45,14 @@
         "No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention."
       ],
       "budget": null
+    }
+  ],
+  "declarations": [
+    {
+      "declaration": "root-verbs",
+      "applies_to": "deadband status, deadband run, deadband daemon",
+      "declares": "Each command sits directly under the root as a verb.",
+      "reason": "People type `deadband status`, `deadband run` and `deadband daemon` as one verb, and deadband has no resource to put them under."
     }
   ]
 }
