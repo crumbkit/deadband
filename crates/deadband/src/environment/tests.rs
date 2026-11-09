@@ -47,12 +47,24 @@ fn a_job_inside_a_granted_job_is_held_and_one_that_asks_to_bypass_bypasses() {
 
 #[test]
 fn an_empty_or_zero_variable_neither_holds_nor_bypasses() {
-    let empty = Environment::read(
-        environment(&[("DEADBAND_HELD", ""), ("DEADBAND_BYPASS", "0")]),
+    for value in ["", "0"] {
+        let read = Environment::read(
+            environment(&[("DEADBAND_HELD", value), ("DEADBAND_BYPASS", value)]),
+            None,
+        );
+        assert!(!read.held, "DEADBAND_HELD={value:?} must not hold");
+        assert!(!read.bypass, "DEADBAND_BYPASS={value:?} must not bypass");
+    }
+}
+
+#[test]
+fn a_variable_with_any_other_value_holds_or_bypasses() {
+    let read = Environment::read(
+        environment(&[("DEADBAND_HELD", "yes"), ("DEADBAND_BYPASS", "yes")]),
         None,
     );
-    assert!(!empty.held);
-    assert!(!empty.bypass);
+    assert!(read.held);
+    assert!(read.bypass);
 }
 
 #[test]
