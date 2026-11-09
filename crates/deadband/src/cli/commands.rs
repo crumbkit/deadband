@@ -133,3 +133,19 @@ pub(super) fn daemon<O: Write, W: Write, P: Probe + Clone + Send + 'static>(
     output.print_failure(sink, &failure);
     output.failure_exit(failure.code())
 }
+
+/// Runs `deadband top` until the person quits, or prints why it could not.
+#[cfg(feature = "tui")]
+pub(super) fn top<O: Write, W: Write, P: Probe>(
+    sink: &mut Sink<O, W>,
+    output: &mut Run,
+    machine: &Machine<P>,
+) -> u8 {
+    match crate::tui::run(machine, output.is_json()) {
+        Ok(code) => code,
+        Err(failure) => {
+            output.print_failure(sink, &failure);
+            output.failure_exit(failure.code())
+        }
+    }
+}

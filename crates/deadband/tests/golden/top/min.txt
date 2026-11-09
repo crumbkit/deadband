@@ -1,0 +1,16 @@
+ deadband  last 10 minutes · 12 more jobs not shown               HELD · DISK
+
+ job                   -10m    -8m     -6m     -4m     -2m   now  state
+ multiverse-review     │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  wait 21m
+ crumbkit-tool         │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  wait 17m
+ multiverse-review     │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  wait 15m
+ typed-references      │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  wait 10m
+────────────────────────────────────────────────────────────────────────────────
+ load   6.2
+ cores  14              ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                        ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀
+                        ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+ held by                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+        ▀ open   ▀ full   ▀ load   ▀ memory   ▀ disk     ░ waiting    █ running
+ waiting because: free disk is 26 GiB, 2% of the disk, under 20 GiB or 3%
+ q quit

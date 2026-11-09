@@ -6,6 +6,7 @@ Commands:
   status  Print the machine's load, memory pressure and swap, and the daemon's jobs
   run     Wait until the daemon admits a job, then run it
   daemon  Run the daemon that admits jobs, in the foreground
+  top     Show the last ten minutes of jobs, load and holds in the terminal
 
 Options:
       --json

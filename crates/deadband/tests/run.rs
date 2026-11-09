@@ -316,3 +316,20 @@ mod macos {
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
+
+#[cfg(feature = "tui")]
+#[test]
+fn top_refuses_a_pipe_and_names_status() {
+    let socket = socket("top-pipe");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test runs the built binary with its output piped, as a pipeline would"
+    )]
+    let output = deadband(&socket.0, &["top"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(5));
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(err.contains("deadband status"), "{err}");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains('\u{1b}'));
+}

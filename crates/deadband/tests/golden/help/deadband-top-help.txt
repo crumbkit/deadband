@@ -1,0 +1,17 @@
+Show the last ten minutes of jobs, load and holds in the terminal
+
+Usage: deadband top [OPTIONS]
+
+Options:
+      --json
+          Print the result as a JSON document. The default prints text.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  deadband top
+          Show the last ten minutes of jobs in the terminal
+
+Effects: read-only, closed-world.
+Output: no result on standard output, and --json prints a failure as JSON.

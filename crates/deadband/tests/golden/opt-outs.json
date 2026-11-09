@@ -50,9 +50,9 @@
   "declarations": [
     {
       "declaration": "root-verbs",
-      "applies_to": "deadband status, deadband run, deadband daemon",
+      "applies_to": "deadband status, deadband run, deadband daemon, deadband top",
       "declares": "Each command sits directly under the root as a verb.",
-      "reason": "People type `deadband status`, `deadband run` and `deadband daemon` as one verb, and deadband has no resource to put them under."
+      "reason": "People type `deadband status`, `deadband run`, `deadband daemon` and `deadband top` as one verb, and deadband has no resource to put them under."
     }
   ]
 }

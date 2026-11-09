@@ -1,0 +1,28 @@
+ deadband  last 10 minutes                                                                                  NO DAEMON
+
+ job                   -10m            -8m             -6m             -4m             -2m           now  state
+
+
+
+
+
+                                           The deadband daemon is not running.
+                                          Jobs start at once while it is down.
+
+                                             Start it with: deadband daemon
+
+                                                 Retrying every second…
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ load   7.0
+ cores  14              ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                                                                       ⢠
+                                                                                                       ⢸
+ held by                ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                        ▀ open   ▀ full   ▀ load   ▀ memory   ▀ disk     ░ waiting    █ running
+
+ q quit

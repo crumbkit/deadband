@@ -5,10 +5,16 @@
 //! They live in an integration test because the recovery check runs the
 //! built binary, whose path cargo sets only for integration tests.
 
+// The golden files list `deadband top`, so these checks run only with the
+// default features. A build without them leaves the checks out, and a second
+// set of golden files would replace that limit.
+#![cfg(feature = "tui")]
+
 use clap::CommandFactory as _;
 use crumbkit_test::{Allow, Check, Examples, Recoveries, Rule, Suite, Unprovoked};
 use deadband::cli::{Cli, TOOL};
 use deadband::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED};
+use deadband::tui::{TOP_NOT_A_TERMINAL, TOP_TERMINAL_FAILED};
 
 /// deadband's opt-outs from crumbkit's conventions, which every check reads.
 const ALLOW: &[Allow] = &[
@@ -18,8 +24,8 @@ const ALLOW: &[Allow] = &[
         "run passes on its job's exit status, and gives 126 and 127 their env and timeout meanings for a program that cannot start or is not found",
     ),
     Allow::root_verbs(
-        &["status", "run", "daemon"],
-        "People type `deadband status`, `deadband run` and `deadband daemon` as one verb, and deadband has no resource to put them under.",
+        &["status", "run", "daemon", "top"],
+        "People type `deadband status`, `deadband run`, `deadband daemon` and `deadband top` as one verb, and deadband has no resource to put them under.",
     ),
 ];
 
@@ -36,12 +42,25 @@ const UNPROVOKED: &[Unprovoked<'_>] = &[
         &MACHINE_UNSUPPORTED,
         "Only a platform other than macOS provokes it, so whether `deadband status` provokes it depends on the machine the test runs on.",
     ),
+    Unprovoked::new(
+        &TOP_NOT_A_TERMINAL,
+        "Its recovery is `deadband status`, which succeeds only on macOS, so following it depends on the machine the test runs on. The refusal and the recovery it names are asserted in `cli/tests.rs` and `tests/run.rs`.",
+    ),
+    Unprovoked::new(
+        &TOP_TERMINAL_FAILED,
+        "Only a terminal that fails while the view draws provokes it, and no command line makes a terminal fail.",
+    ),
 ];
 
 /// The settings of deadband's recovery check.
-const RECOVERIES: Recoveries<'_> =
-    Recoveries::new(EXAMPLES, &[&[&MACHINE_UNREADABLE, &MACHINE_UNSUPPORTED]])
-        .unprovoked(UNPROVOKED);
+const RECOVERIES: Recoveries<'_> = Recoveries::new(
+    EXAMPLES,
+    &[
+        &[&MACHINE_UNREADABLE, &MACHINE_UNSUPPORTED],
+        &[&TOP_NOT_A_TERMINAL, &TOP_TERMINAL_FAILED],
+    ],
+)
+.unprovoked(UNPROVOKED);
 
 /// Everything the checks read, which `conventions!` expands to one test for
 /// each check.
