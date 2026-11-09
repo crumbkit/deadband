@@ -474,7 +474,7 @@ fn the_queue_starts_the_next_job_when_a_running_job_is_removed() {
         [(first, 16)]
     );
     assert!(queue.admit(Some(&calm()), &limits(1, 16), now).is_empty());
-    assert_eq!(queue.remove(first), Some("first"));
+    assert_eq!(queue.remove(first).map(|(job, _)| job), Some("first"));
     assert_eq!(
         queue.admit(Some(&calm()), &limits(1, 16), now),
         [(second, 16)]
@@ -491,9 +491,9 @@ fn a_removed_waiting_job_never_starts_and_the_jobs_behind_it_move_up() {
     let third = queue.push("third", Lane::Normal);
     queue.admit(Some(&calm()), &limits(1, 16), now);
     assert_eq!(queue.ahead_of(third), Some(1));
-    assert_eq!(queue.remove(second), Some("second"));
+    assert_eq!(queue.remove(second).map(|(job, _)| job), Some("second"));
     assert_eq!(queue.ahead_of(third), Some(0));
-    assert_eq!(queue.remove(first), Some("first"));
+    assert_eq!(queue.remove(first).map(|(job, _)| job), Some("first"));
     assert_eq!(
         queue.admit(Some(&calm()), &limits(1, 16), now),
         [(third, 16)]
@@ -550,5 +550,43 @@ fn each_hold_says_why_in_one_line() {
         }
         .to_string(),
         "free disk is 12 GiB, 1% of the disk, under 20 GiB or 3%"
+    );
+}
+
+#[test]
+fn removing_a_running_job_returns_when_it_started() {
+    let mut queue = Queue::default();
+    let limits = limits(2, 16);
+    let at = Instant::now();
+    let id = queue.push("job", Lane::Normal);
+    queue.admit(None, &limits, at);
+    assert_eq!(queue.remove(id), Some(("job", Some(at))));
+}
+
+#[test]
+fn removing_a_waiting_job_returns_no_start() {
+    let mut queue = Queue::default();
+    let id = queue.push("job", Lane::Normal);
+    assert_eq!(queue.remove(id), Some(("job", None)));
+}
+
+#[test]
+fn removing_a_job_the_queue_does_not_hold_returns_nothing() {
+    let mut queue: Queue<&str> = Queue::default();
+    let id = queue.push("job", Lane::Normal);
+    queue.remove(id);
+    assert_eq!(queue.remove(id), None);
+}
+
+#[test]
+fn the_running_jobs_list_when_they_started() {
+    let mut queue = Queue::default();
+    let limits = limits(2, 16);
+    let at = Instant::now();
+    queue.push("job", Lane::Normal);
+    queue.admit(None, &limits, at);
+    assert_eq!(
+        queue.running_since().collect::<Vec<_>>(),
+        vec![(&"job", at)]
     );
 }

@@ -17,7 +17,7 @@ use crate::admit::{GIB, Lane};
 use crate::daemon::{Log, Settings, bind, serve};
 use crate::environment::Environment;
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
-use crate::protocol::{Job, Reply, Request, read_line, write_line};
+use crate::protocol::{Exit, Job, JobState, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
 mod reclaim;
@@ -396,6 +396,53 @@ fn run_says_in_one_line_why_its_job_waits() {
     assert_eq!(
         test.log(),
         "deadband: the job waits because the daemon already runs 1 job, its most at once, and no other job waits ahead of it\n"
+    );
+}
+
+/// Runs `sh -c script` through a daemon and returns its row on the timeline.
+fn ended_row(script: &str) -> JobState {
+    let test = Test::new(Fixed);
+    test.start_daemon(1);
+    test.run(&["run", "--label", "a", "--", "sh", "-c", script]);
+    let begun = std::time::Instant::now();
+    loop {
+        let timeline = crate::client::timeline(&test.machine.socket, REPLY_WITHIN)
+            .expect("the daemon answers");
+        let state = timeline.jobs.first().map(|row| row.state);
+        if let Some(state @ (JobState::Finished { .. } | JobState::Left { .. })) = state {
+            return state;
+        }
+        assert!(begun.elapsed() < REPLY_WITHIN, "{timeline:?}");
+    }
+}
+
+#[test]
+fn run_tells_the_daemon_the_signal_that_ended_its_job() {
+    let state = ended_row("kill -9 $$");
+    assert!(
+        matches!(
+            state,
+            JobState::Finished {
+                exit: Exit::Signalled { signal: 9 },
+                ..
+            }
+        ),
+        "{state:?}"
+    );
+}
+
+#[test]
+fn run_tells_the_daemon_the_exit_code_of_its_job() {
+    let state = ended_row("exit 3");
+    assert!(
+        matches!(
+            state,
+            JobState::Finished {
+                exit: Exit::Exited { code: 3 },
+                ..
+            }
+        ),
+        "{state:?}"
     );
 }
 

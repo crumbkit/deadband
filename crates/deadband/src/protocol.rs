@@ -6,7 +6,8 @@
 //! [`Reply::Granted`], which carries the job's threads, keeps the connection open while its job runs, and
 //! sends [`Request::Done`] when the job ends. The daemon counts the job as
 //! running until that line arrives or the connection closes. `status` sends
-//! [`Request::Status`] and reads [`Reply::Jobs`].
+//! [`Request::Status`] and reads [`Reply::Jobs`]. `top` sends
+//! [`Request::Timeline`] once a second and reads [`Reply::Timeline`].
 
 use std::io::{self, BufRead, Read, Write};
 
@@ -19,6 +20,9 @@ use crate::reclaim::Reclaimed;
 
 #[cfg(test)]
 mod tests;
+mod timeline;
+
+pub use self::timeline::{Ago, Exit, JobRecord, JobState, LABEL_BYTES, Label, Timeline};
 
 /// The longest line, in bytes, that either side reads. A longer line is
 /// refused as malformed, so a peer cannot make the reader hold an unbounded
@@ -53,7 +57,13 @@ pub enum Request {
         /// The job's exit code, or `None` when a signal ended it or it did
         /// not start.
         exit_code: Option<i32>,
+        /// The signal that ended the job, or `None` when no signal did. An
+        /// older client sends no signal, and an older daemon ignores it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signal: Option<i32>,
     },
+    /// Asks for the jobs that `deadband top` draws.
+    Timeline,
 }
 
 /// What the daemon answers.
@@ -76,6 +86,8 @@ pub enum Reply {
     },
     /// The running and waiting jobs.
     Jobs(Jobs),
+    /// The jobs that `deadband top` draws.
+    Timeline(Timeline),
 }
 
 /// The daemon's running and waiting jobs.

@@ -96,8 +96,10 @@ pub(super) fn run<O: Write, W: Write, P>(
     let admitted = admission::admit(&asked, &mut notify);
     admitted.lower_priority(&mut notify);
     let ended = job::run(&args.command, admitted.variables());
-    let exit_code = ended.as_ref().ok().and_then(|status| status.code());
-    admitted.end(exit_code);
+    match &ended {
+        Ok(status) => admitted.end_status(*status),
+        Err(_) => admitted.end(None),
+    }
     finish(sink, output, program, ended)
 }
 

@@ -24,6 +24,7 @@
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::process::ExitStatus;
 
 use crate::admit::{Hold, Lane, Limits};
 use crate::client::{self, ANSWER_WITHIN, Admission, Lease};
@@ -119,6 +120,14 @@ impl Admitted {
     pub fn end(self, exit_code: Option<i32>) {
         if let Some(lease) = self.lease {
             lease.end(exit_code);
+        }
+    }
+
+    /// Tells the daemon how the job ended, the exit code or the signal. It
+    /// does nothing when the job holds no lease.
+    pub fn end_status(self, status: ExitStatus) {
+        if let Some(lease) = self.lease {
+            lease.end_status(status);
         }
     }
 }
