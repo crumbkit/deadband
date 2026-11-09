@@ -7,9 +7,10 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Args, CommandFactory, Parser, Subcommand};
-use crumbkit::help::{Effects, Example, Exit, Guide, Leaf};
-use crumbkit::{Document, Prose, Sink, ViewFlags};
+use clap::{Args, Parser, Subcommand};
+use crumbkit::help::{Effects, Example, Help, Leaf};
+use crumbkit::tool::{Exit, Failures};
+use crumbkit::{Document, Prose, Sink, Tool, ViewFlags};
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -176,52 +177,56 @@ pub const EXIT_NOT_STARTED: u8 = 126;
 /// and `timeout` report it.
 pub const EXIT_NOT_FOUND: u8 = 127;
 
-/// deadband's guide: the examples, effects and document of each command,
-/// and the exit codes with the failures that produce them.
-pub const GUIDE: Guide = Guide::new()
-    .leaves(&[
-        Leaf::new(&["status"])
-            .examples(&[
-                Example::new(&[], "Print the machine's load, memory pressure and swap"),
-                Example::new(&["--json"], "Print the same sample as a JSON document"),
-            ])
-            .effects(Effects::read_only())
-            .document(STATUS),
-        Leaf::new(&["run"])
-            .examples(&[Example::new(
-                &["--label", "tests", "--", "cargo", "test"],
-                "Run cargo test once the daemon admits it",
-            )])
-            .effects(Effects::additive().all_or_none().open_world())
-            .prints_no_result(),
-        Leaf::new(&["daemon"])
-            .examples(&[Example::new(
-                &["--max-jobs", "2"],
-                "Admit jobs while at most 2 run at once",
-            )])
-            .effects(Effects::additive())
-            .prints_no_result(),
-    ])
-    .exits(&[
-        Exit::new(EXIT_MACHINE, "deadband could not read the machine.")
-            .failures(&[&MACHINE_UNREADABLE, &MACHINE_UNSUPPORTED]),
-        Exit::new(EXIT_DAEMON, "the daemon could not listen on its socket.")
-            .failures(&[&DAEMON_RUNNING, &SOCKET_UNUSABLE]),
-        Exit::new(
-            EXIT_NOT_STARTED,
-            "the program given to `run` was found but could not start.",
-        )
-        .commands(&[&["run"]])
-        .failures(&[&JOB_NOT_STARTED]),
-        Exit::new(EXIT_NOT_FOUND, "the program given to `run` was not found.")
+/// deadband's tool record: the examples, effects and document of each
+/// command, and the exit codes with the failures that produce them.
+pub const TOOL: Tool = Tool::new()
+    .help(
+        Help::new().leaves(&[
+            Leaf::new(&["status"])
+                .examples(&[
+                    Example::new(&[], "Print the machine's load, memory pressure and swap"),
+                    Example::new(&["--json"], "Print the same sample as a JSON document"),
+                ])
+                .effects(Effects::read_only())
+                .document(STATUS),
+            Leaf::new(&["run"])
+                .examples(&[Example::new(
+                    &["--label", "tests", "--", "cargo", "test"],
+                    "Run cargo test once the daemon admits it",
+                )])
+                .effects(Effects::additive().all_or_none().open_world())
+                .prints_no_result(),
+            Leaf::new(&["daemon"])
+                .examples(&[Example::new(
+                    &["--max-jobs", "2"],
+                    "Admit jobs while at most 2 run at once",
+                )])
+                .effects(Effects::additive())
+                .prints_no_result(),
+        ]),
+    )
+    .failures(
+        Failures::new().exits(&[
+            Exit::new(EXIT_MACHINE, "deadband could not read the machine.")
+                .failures(&[&MACHINE_UNREADABLE, &MACHINE_UNSUPPORTED]),
+            Exit::new(EXIT_DAEMON, "the daemon could not listen on its socket.")
+                .failures(&[&DAEMON_RUNNING, &SOCKET_UNUSABLE]),
+            Exit::new(
+                EXIT_NOT_STARTED,
+                "the program given to `run` was found but could not start.",
+            )
             .commands(&[&["run"]])
-            .failures(&[&JOB_NOT_FOUND]),
-    ]);
+            .failures(&[&JOB_NOT_STARTED]),
+            Exit::new(EXIT_NOT_FOUND, "the program given to `run` was not found.")
+                .commands(&[&["run"]])
+                .failures(&[&JOB_NOT_FOUND]),
+        ]),
+    );
 
 /// Parses the process's command line, runs the command against `machine`
 /// and prints the result to standard output and standard error.
 pub fn run<P: Probe + Clone + Send + 'static>(machine: &Machine<P>) -> ExitCode {
-    let (cli, mut output) = match crumbkit::parse::<Cli>(Cli::command(), &GUIDE) {
+    let (cli, mut output) = match crumbkit::parse::<Cli>(&TOOL) {
         Ok(parsed) => parsed,
         Err(stop) => return stop.exit_code(),
     };
@@ -242,7 +247,7 @@ pub fn run_to<O: Write, W: Write, T: Into<OsString>, P: Probe + Clone + Send + '
     machine: &Machine<P>,
     args: impl IntoIterator<Item = T>,
 ) -> u8 {
-    let parsed = crumbkit::parse_to::<Cli, _, _, _, _>(sink, Cli::command(), &GUIDE, args);
+    let parsed = crumbkit::parse_to::<Cli>(sink, &TOOL, args);
     let (cli, mut output) = match parsed {
         Ok(parsed) => parsed,
         Err(stop) => return stop.exit(),

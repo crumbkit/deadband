@@ -1,5 +1,5 @@
 //! Tests of the `deadband` commands, run against fake probes and real
-//! sockets, and of the command's crumbkit conventions.
+//! sockets.
 
 use std::io::BufReader;
 use std::num::NonZeroUsize;
@@ -10,20 +10,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use clap::CommandFactory;
-use crumbkit::{Code, Sink};
-use crumbkit_test::{Allow, Rule};
+use crumbkit::Sink;
 
-use super::{
-    Cli, EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_FOUND, EXIT_NOT_STARTED, GUIDE, JOB_NOT_FOUND,
-    JOB_NOT_STARTED, Machine, run_to,
-};
+use super::{EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_FOUND, EXIT_NOT_STARTED, Machine, run_to};
 use crate::admit::{GIB, Lane};
-use crate::daemon::{DAEMON_RUNNING, Log, SOCKET_UNUSABLE, Settings, bind, serve};
+use crate::daemon::{Log, Settings, bind, serve};
 use crate::environment::Environment;
-use crate::probe::{
-    Disk, MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Pressure, Probe, Sample, Unreadable,
-};
+use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::{Job, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
@@ -436,39 +429,4 @@ fn daemon_refuses_to_start_while_another_daemon_answers_on_its_socket() {
     assert_eq!(code, EXIT_DAEMON);
     assert_eq!(out, "");
     assert!(err.contains("code:  deadband::daemon::running"), "{err}");
-}
-
-#[test]
-fn the_guide_gives_each_command_an_example_its_effects_and_its_document() {
-    crumbkit_test::check_guide(&Cli::command(), &GUIDE, &[]);
-    crumbkit_test::check_effects(&Cli::command(), &GUIDE, &[]);
-    crumbkit_test::check_document_ids(&Cli::command(), &GUIDE, &[]);
-}
-
-#[test]
-fn every_document_schema_matches_its_golden_file() {
-    crumbkit_test::check_schema_goldens(&Cli::command(), &GUIDE, "tests/golden/schemas");
-}
-
-#[test]
-fn every_exit_code_is_declared_with_its_failures() {
-    let allow = [Allow::new(
-        Rule::ShellExitCode,
-        "run",
-        "run passes on its job's exit status, and gives 126 and 127 their env and timeout meanings for a program that cannot start or is not found",
-    )];
-    crumbkit_test::check_exit_codes(&Cli::command(), &GUIDE, &allow);
-}
-
-#[test]
-fn every_failure_code_is_distinct_and_printable() {
-    let codes: &[&Code] = &[
-        &MACHINE_UNREADABLE,
-        &MACHINE_UNSUPPORTED,
-        &DAEMON_RUNNING,
-        &SOCKET_UNUSABLE,
-        &JOB_NOT_STARTED,
-        &JOB_NOT_FOUND,
-    ];
-    crumbkit_test::check_codes(&GUIDE, &[codes]);
 }

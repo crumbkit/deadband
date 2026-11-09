@@ -1,0 +1,33 @@
+deadband has 8 opt-outs from the conventions.
+
+exit-codes/shell-code: deadband run
+  Reason: run passes on its job's exit status, and gives 126 and 127 their env and timeout meanings for a program that cannot start or is not found
+  Cost: An agent cannot tell the code from the one a shell reports, such as 126 when the shell cannot run the tool or 127 when it cannot find it.
+
+suite/skip: Check::Grammar
+  Reason: The commands `status`, `run` and `daemon` sit directly under `deadband`; a later change decides whether they move under a resource.
+  Cost: No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention.
+
+suite/skip: Check::PathWeights
+  Reason: The help paths have no weight budget yet; a later change measures them and sets one.
+  Cost: No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention.
+
+suite/skip: Check::HelpGoldens
+  Reason: The help pages have no golden files yet; a later change writes them.
+  Cost: No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention.
+
+suite/skip: Check::Examples
+  Reason: `deadband status` prints the live load, memory pressure and swap of the machine, so its output has no fixed golden file.
+  Cost: No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention.
+
+suite/skip: Check::OutputBudget
+  Reason: The check runs the golden examples, which deadband does not have.
+  Cost: No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention.
+
+suite/skip: Check::CommandReference
+  Reason: deadband has no checked-in command reference yet.
+  Cost: No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention.
+
+suite/skip: Check::Twins
+  Reason: The twin pairs of deadband's codes are not written yet; a later change writes them.
+  Cost: No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention.

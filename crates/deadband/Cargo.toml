@@ -20,7 +20,7 @@ doc = false
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 # crumbkit holds the command-line conventions: parsing, `--json` documents
 # and failures with stable codes (the cli profile of the Rust standards).
-crumbkit = "0.1.0"
+crumbkit = "0.2"
 # serde and schemars derive the JSON form and the JSON Schema of the sample
 # that `deadband status --json` prints. crumbkit already depends on both.
 serde = { version = "1.0.229", default-features = false, features = ["std", "derive"] }
@@ -49,9 +49,10 @@ humantime = { version = "2.4.0", default-features = false }
 libc = "0.2.191"
 
 [dev-dependencies]
-# crumbkit-test checks the command's guide, effects, documents, schemas,
-# exit codes, failure codes and recoveries against crumbkit's conventions.
-crumbkit-test = "0.1.0"
+# crumbkit-test checks the command's tool record, effects, documents,
+# schemas, exit codes, failure codes and recoveries against crumbkit's
+# conventions.
+crumbkit-test = "0.2"
 
 [lints]
 workspace = true

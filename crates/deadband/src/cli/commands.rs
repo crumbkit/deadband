@@ -6,7 +6,7 @@ use std::fmt;
 use std::io::{self, Write};
 use std::path::Path;
 
-use crumbkit::{Code, Failure, Output, Recovery, Sink};
+use crumbkit::{Code, Failure, Recovery, Run, Sink};
 
 use super::{DaemonArgs, Machine, RunArgs};
 use crate::admission::{self, Asked};
@@ -69,7 +69,7 @@ impl Failure for NotStarted {
 /// bypass, starts at once without asking.
 pub(super) fn run<O: Write, W: Write, P>(
     sink: &mut Sink<O, W>,
-    output: &mut Output,
+    output: &mut Run,
     machine: &Machine<P>,
     args: RunArgs,
 ) -> u8 {
@@ -108,7 +108,7 @@ pub(super) fn run<O: Write, W: Write, P>(
 /// could not start and returns that failure's exit code.
 fn finish<O: Write, W: Write>(
     sink: &mut Sink<O, W>,
-    output: &mut Output,
+    output: &mut Run,
     program: OsString,
     ended: io::Result<std::process::ExitStatus>,
 ) -> u8 {
@@ -126,7 +126,7 @@ fn finish<O: Write, W: Write>(
 /// until accepting a connection fails, which it prints as a failure.
 pub(super) fn daemon<O: Write, W: Write, P: Probe + Clone + Send + 'static>(
     sink: &mut Sink<O, W>,
-    output: &mut Output,
+    output: &mut Run,
     machine: &Machine<P>,
     args: &DaemonArgs,
 ) -> u8 {
