@@ -2,13 +2,25 @@ Keep a busy machine usable while many heavy jobs compete for it
 
 Usage: deadband [OPTIONS] <COMMAND>
 
-Commands:
-  status    Print the machine's load, memory pressure and swap, and the daemon's jobs
-  run       Wait until the daemon admits a job, then run it
-  daemon    Run the daemon that admits jobs, in the foreground
-  top       Show the last ten minutes of jobs, load and holds in the terminal
-  commands  Explore deadband's commands
-  schemas   Explore the JSON documents that deadband prints and the files it reads
+Run a heavy job when the machine has room
+  run         Wait until the daemon admits a job, then run it
+
+See the machine and its jobs
+  status      Print the machine's load, memory pressure and swap, and the daemon's jobs
+  top         Show the last ten minutes of jobs, load and holds in the terminal
+
+Admit jobs
+  daemon      Run the daemon that admits jobs, in the foreground
+
+Explore the commands
+  commands    Explore deadband's commands
+  schemas     Explore the JSON documents that deadband prints and the files it reads
+
+Install deadband's skill
+  skills      Give coding agents deadband's skill
+
+Set up shell completion
+  completion  Set up deadband's completion in a shell
 
 Options:
       --json

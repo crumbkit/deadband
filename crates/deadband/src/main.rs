@@ -10,6 +10,12 @@ use deadband::cli::Machine;
 /// Reads the environment once (BASE-6), runs the command and returns its
 /// exit code, so destructors run before the process ends (BASE-7).
 fn main() -> ExitCode {
+    // A shell's completion request ends the run here, before the run reads
+    // anything else. deadband parses against `Cli::command()`, so completion
+    // offers what parsing accepts.
+    if let Some(code) = crumbkit::complete(<deadband::cli::Cli as clap::CommandFactory>::command) {
+        return code;
+    }
     #[expect(
         clippy::disallowed_methods,
         reason = "the entry point reads the environment once, for the variables that deadband::socket::VARIABLES lists"

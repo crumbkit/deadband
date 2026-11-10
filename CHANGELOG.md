@@ -8,6 +8,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `deadband skills install` writes deadband's agent skill into each agent
+  skills directory that exists, `~/.claude/skills`, `~/.agents/skills` and
+  `$CODEX_HOME/skills`, or into the directory that `--dir` names.
+  `deadband skills check` exits with 1 when an installed copy is missing or
+  differs from the installed deadband's, and `deadband skills print` prints
+  the skill. The skill is crates/deadband/skill/SKILL.md, embedded in the
+  binary.
+- `deadband completion install` writes deadband's shell completion where the
+  shell loads it, for bash, zsh and fish, with `--shell` naming the shell when
+  `SHELL` does not. `deadband completion check` exits with 1 when the
+  installed file is missing or differs, and `deadband completion print`
+  prints the registration script. deadband also answers a shell's completion
+  request, which a shell makes by running deadband with `COMPLETE` set to its
+  name. deadband now builds on crumbkit 0.3.1.
 - The daemon detects a job that has shown no activity for 5 minutes and says
   so in `deadband status`, which then exits 1, in `deadband top`, and on the
   standard error of the waiting `deadband run`. The `stuck_after`,

@@ -1,0 +1,14 @@
+Set up deadband's completion in a shell
+
+Usage: deadband completion [OPTIONS] <COMMAND>
+
+Commands:
+  install  Install deadband's completion where the shell loads it
+  check    Check that deadband's installed completion file matches this deadband
+  print    Print deadband's completion registration script for a shell
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Global flags: --json, --fields <FIELD>, --long, --full. `deadband completion --help` describes them.
+Next: deadband completion <COMMAND> -h

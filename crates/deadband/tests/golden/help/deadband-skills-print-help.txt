@@ -1,0 +1,16 @@
+Print deadband's skill
+
+Usage: deadband skills print [OPTIONS]
+
+Options:
+      --json
+          Print the result as a JSON document. The default prints text.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  deadband skills print
+          Print deadband's skill
+
+Effects: read-only, closed-world.

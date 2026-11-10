@@ -1,0 +1,14 @@
+Give coding agents deadband's skill
+
+Usage: deadband skills [OPTIONS] <COMMAND>
+
+Commands:
+  install  Install deadband's skill into each agent skills directory that exists
+  check    Check that each installed copy of deadband's skill matches this deadband
+  print    Print deadband's skill
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Global flags: --json, --fields <FIELD>, --long, --full. `deadband skills --help` describes them.
+Next: deadband skills <COMMAND> -h

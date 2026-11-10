@@ -70,6 +70,16 @@ jobs:
         run: cargo doc --locked --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      # The skill's command lines must parse against deadband's command tree,
+      # and its generated sections must match what the command tree now says.
+      # install-action offers no cargo-crumbkit binary, so cargo builds the
+      # pinned release.
+      - name: install cargo-crumbkit
+        run: cargo install cargo-crumbkit --version 0.3.1 --locked
+      - name: skill check
+        run: cargo crumbkit skill check --bin deadband
+      - name: skill draft
+        run: cargo crumbkit skill draft --bin deadband --check
 
   # The macOS reader of the probe compiles only on macOS, so this job
   # compiles, lints and tests it (rust-standards.toml, `lanes`).
