@@ -49,6 +49,8 @@ pub(in crate::tui) enum Status {
         /// How long the job ran.
         ran: Duration,
     },
+    /// The job has shown no activity for this long.
+    Stuck(Duration),
     /// The job's client left.
     Left {
         /// How long the job waited.
@@ -72,6 +74,8 @@ pub(in crate::tui) struct Row {
     pub(in crate::tui) mark: Option<u16>,
     /// The text at the right.
     pub(in crate::tui) status: Status,
+    /// The columns of each period with no activity.
+    pub(in crate::tui) stuck: Vec<Range<u16>>,
 }
 
 /// The rows that fit on the screen.
@@ -135,6 +139,22 @@ pub(super) fn row(record: &JobRecord, elapsed: Duration, axis: Axis) -> Row {
             (waited, 0..0, mark(ended), status)
         }
     };
+    let stuck = record
+        .stuck
+        .iter()
+        .map(|period| {
+            let last = period.until.map_or_else(
+                || axis.column(Duration::ZERO),
+                |until| axis.column(age(until)) - 1,
+            );
+            axis.span(axis.column(age(period.since)), last)
+        })
+        .filter(|columns| !columns.is_empty())
+        .collect();
+    let status = match (status, record.stuck.last()) {
+        (Status::Running(_), Some(period)) if record.is_stuck() => Status::Stuck(age(period.since)),
+        (status, _) => status,
+    };
     Row {
         label: record.label.as_str().to_owned(),
         fast: record.lane == Lane::Fast,
@@ -142,5 +162,6 @@ pub(super) fn row(record: &JobRecord, elapsed: Duration, axis: Axis) -> Row {
         ran,
         mark,
         status,
+        stuck,
     }
 }

@@ -6,6 +6,7 @@ use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 use crumbkit::help::{Effects, Example, Help, Leaf};
@@ -19,7 +20,8 @@ use crate::client::{self, ANSWER_WITHIN};
 use crate::daemon::{DAEMON_RUNNING, Log, SOCKET_UNUSABLE};
 use crate::environment::Environment;
 use crate::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Probe, Sample, Unreadable};
-use crate::protocol::Jobs;
+use crate::protocol::{Job, Jobs};
+use crate::stuck::quiet_text;
 #[cfg(feature = "tui")]
 use crate::tui::{TOP_NOT_A_TERMINAL, TOP_TERMINAL_FAILED};
 
@@ -27,7 +29,8 @@ mod commands;
 #[cfg(test)]
 mod tests;
 
-pub use self::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED, NotStarted};
+use self::commands::Flagged;
+pub use self::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED, JOB_STUCK, JOB_UNREADABLE, NotStarted};
 
 /// Keep a busy machine usable while many heavy jobs compete for it.
 #[derive(Debug, Parser)]
@@ -142,10 +145,29 @@ impl fmt::Display for Status {
             jobs.waiting.len(),
             jobs.max_jobs
         )?;
+        for stuck in &jobs.stuck {
+            write!(
+                f,
+                "\nstuck: {} (pid {}): no CPU, new process or disk use for {}",
+                stuck.label,
+                stuck.pid,
+                quiet_text(Duration::from_secs(stuck.quiet_seconds))
+            )?;
+        }
+        if let (false, Some(busiest)) = (jobs.stuck.is_empty(), &jobs.busiest) {
+            write!(f, "\n{busiest}")?;
+        }
+        if jobs.unreadable {
+            f.write_str(
+                "\ndeadband could not read the jobs' processes, so it cannot say whether any job is stuck",
+            )?;
+        }
         if let (Some(job), Some(hold)) = (jobs.waiting.first(), &jobs.held) {
             write!(f, "\n{} waits because: {hold}", job.label)?;
         }
-        let running = jobs.running.iter().map(|job| ("running", job));
+        let is_stuck = |job: &&Job| jobs.stuck.iter().any(|stuck| stuck.pid == job.pid);
+        let (stuck, others): (Vec<_>, Vec<_>) = jobs.running.iter().partition(is_stuck);
+        let running = stuck.into_iter().chain(others).map(|job| ("running", job));
         for (state, job) in running.chain(jobs.waiting.iter().map(|job| ("waiting", job))) {
             write!(
                 f,
@@ -289,5 +311,11 @@ pub fn run_to<O: Write, W: Write, T: Into<OsString>, P: Probe + Clone + Send + '
 fn status<P: Probe>(machine: &Machine<P>) -> Result<Prose<Status>, Unreadable> {
     let sample = machine.probe.sample()?;
     let daemon = client::jobs(&machine.socket, ANSWER_WITHIN).ok();
-    Ok(Prose::new(Status { sample, daemon }))
+    let failures = daemon
+        .as_ref()
+        .and_then(Flagged::of)
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    Ok(Prose::with_failures(Status { sample, daemon }, failures))
 }

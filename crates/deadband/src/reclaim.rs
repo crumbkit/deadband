@@ -18,6 +18,8 @@ use std::time::Duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::stuck;
+
 #[cfg(test)]
 mod tests;
 mod watch;
@@ -67,6 +69,8 @@ pub struct Config {
     pub memory: String,
     /// The disk a reclaim asks for, such as `20G`.
     pub disk: String,
+    /// The keys that say how the daemon detects stuck jobs.
+    pub stuck: stuck::Config,
 }
 
 impl Default for Config {
@@ -77,6 +81,7 @@ impl Default for Config {
             timeout: DEFAULT_TIMEOUT,
             memory: "4G".to_owned(),
             disk: "20G".to_owned(),
+            stuck: stuck::Config::default(),
         }
     }
 }
@@ -96,6 +101,13 @@ struct File {
     /// `Config::reclaimers`.
     #[serde(default)]
     reclaim: Vec<Reclaimer>,
+    /// `stuck::Config::after`, or `"off"`.
+    stuck_after: Option<String>,
+    /// `stuck::Config::ignore`.
+    #[serde(default)]
+    stuck_ignore: Vec<String>,
+    /// `stuck::Config::on_stuck`.
+    on_stuck: Option<Vec<String>>,
 }
 
 /// Returns the age that `value` gives, or `default` when it is `None`.
@@ -125,7 +137,8 @@ impl Config {
     /// Returns, in one line, why the text is not a config: a TOML error,
     /// an unknown key, an age or size that does not parse, a
     /// `reclaim_after` under [`MIN_AFTER`], a zero `reclaim_timeout`, or a
-    /// reclaimer with an empty command.
+    /// reclaimer with an empty command, or a stuck key that
+    /// [`stuck::Config::parse`] refuses.
     pub fn parse(text: &str) -> Result<Self, String> {
         let file: File = basic_toml::from_str(text).map_err(|error| one_line(&error))?;
         if let Some(empty) = file.reclaim.iter().find(|each| each.command.is_empty()) {
@@ -149,6 +162,11 @@ impl Config {
             timeout,
             memory: size(file.reclaim_memory, defaults.memory)?,
             disk: size(file.reclaim_disk, defaults.disk)?,
+            stuck: stuck::Config::parse(
+                file.stuck_after.as_deref(),
+                &file.stuck_ignore,
+                file.on_stuck,
+            )?,
         })
     }
 

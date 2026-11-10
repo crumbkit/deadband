@@ -11,6 +11,7 @@ use std::ffi::CStr;
 use std::fmt;
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 
 use crumbkit::{Code, Failure, Recovery};
 use schemars::JsonSchema;
@@ -19,7 +20,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(target_os = "macos")]
 #[expect(
     unsafe_code,
-    reason = "crates/deadband/src/probe/macos.rs calls getloadavg and sysctlbyname; rust-standards.toml's unsafe decision states its invariant"
+    reason = "crates/deadband/src/probe/macos.rs calls getloadavg, sysctlbyname and libproc; rust-standards.toml's unsafe decision states its invariant"
 )]
 mod macos;
 // The parsing of the sysctl values runs on every platform, so the tests
@@ -58,6 +59,49 @@ pub trait Probe {
     ///
     /// Returns the error of a reading that failed, such as a missing path.
     fn disk(&self, path: &Path) -> io::Result<Disk>;
+
+    /// Reads each process of the tree under `root`, `root` included, with
+    /// its CPU time and disk bytes. A process that exits while the tree is
+    /// read is left out, and a child whose usage this user may not read
+    /// reads as zero. A probe that reads no trees returns
+    /// [`TreeUnreadable::Unsupported`], which flags no job.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeUnreadable`] when the tree cannot be read.
+    fn tree(&self, root: u32) -> Result<Vec<ProcessUse>, TreeUnreadable> {
+        let _ = root;
+        Err(TreeUnreadable::Unsupported)
+    }
+}
+
+/// One process of a job's tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessUse {
+    /// The process's ID.
+    pub pid: u32,
+    /// The CPU time the process has used.
+    pub cpu: Duration,
+    /// The bytes the process has read from and written to disk.
+    pub disk_bytes: u64,
+}
+
+/// Why a process tree could not be read.
+#[derive(Debug)]
+pub enum TreeUnreadable {
+    /// deadband reads process trees only on macOS.
+    Unsupported,
+    /// A call to read the process table failed.
+    Failed(io::Error),
+}
+
+impl fmt::Display for TreeUnreadable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unsupported => f.write_str("deadband reads process trees only on macOS"),
+            Self::Failed(error) => write!(f, "the process table could not be read: {error}"),
+        }
+    }
 }
 
 /// The space of one disk.
@@ -150,6 +194,11 @@ impl Probe for System {
             free_bytes: disk.f_bavail.saturating_mul(disk.f_frsize),
             total_bytes: disk.f_blocks.saturating_mul(disk.f_frsize),
         })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn tree(&self, root: u32) -> Result<Vec<ProcessUse>, TreeUnreadable> {
+        macos::tree(root)
     }
 }
 

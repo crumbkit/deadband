@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use super::OutsideJobs;
 use crate::admit::{Hold, Lane};
 
 /// The most bytes that a [`Label`] holds.
@@ -64,6 +65,12 @@ impl Ago {
     #[cfg(test)]
     pub(crate) const fn from_millis(millis: u64) -> Self {
         Self(millis)
+    }
+
+    /// Returns the age that `duration` gives.
+    #[must_use]
+    pub fn from_duration(duration: Duration) -> Self {
+        Self(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
     }
 
     /// Returns the age as a duration.
@@ -142,6 +149,30 @@ pub struct JobRecord {
     pub queued: Ago,
     /// Where the job is in its life.
     pub state: JobState,
+    /// The job's last four periods with no activity, the oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stuck: Vec<StuckPeriod>,
+}
+
+/// One span of time in which a job showed no activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StuckPeriod {
+    /// The job's last activity before the period.
+    pub since: Ago,
+    /// When activity came back, or `None` while the job stays stuck.
+    pub until: Option<Ago>,
+}
+
+impl JobRecord {
+    /// Reports whether the job is stuck now.
+    #[must_use]
+    pub fn is_stuck(&self) -> bool {
+        matches!(self.state, JobState::Running { .. })
+            && self
+                .stuck
+                .last()
+                .is_some_and(|period| period.until.is_none())
+    }
 }
 
 /// What `deadband top` asks the daemon for.
@@ -158,4 +189,11 @@ pub struct Timeline {
     /// Why the first waiting job does not start yet, or `null` when no job
     /// waits or the daemon does not know.
     pub held: Option<Hold>,
+    /// The processes outside the jobs while a job is stuck, or `null` when
+    /// no job is stuck or the daemon could not read them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub busiest: Option<OutsideJobs>,
+    /// Whether the daemon's latest read of a job's processes failed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unreadable: bool,
 }

@@ -18,7 +18,7 @@ mod lease;
 #[cfg(test)]
 mod tests;
 
-pub use self::lease::Lease;
+pub use self::lease::{Lease, Notices};
 
 /// How long a client waits for the daemon's first answer before it counts
 /// the daemon as not answering.
@@ -127,7 +127,19 @@ pub fn ask(
     answer_within: Duration,
     queued: impl FnOnce(usize, Option<Hold>),
 ) -> Admission {
-    match try_ask(path, job, answer_within, queued) {
+    ask_noticed(path, job, answer_within, queued, None)
+}
+
+/// Asks as [`ask`] does, and passes each line about the job's activity to
+/// `notices` while the job runs.
+pub fn ask_noticed(
+    path: &Path,
+    job: &Job,
+    answer_within: Duration,
+    queued: impl FnOnce(usize, Option<Hold>),
+    notices: Option<&Notices>,
+) -> Admission {
+    match try_ask(path, job, answer_within, queued, notices) {
         Ok(lease) => Admission::Granted(lease),
         Err(unasked) => Admission::Open(unasked),
     }
@@ -139,6 +151,7 @@ fn try_ask(
     job: &Job,
     answer_within: Duration,
     queued: impl FnOnce(usize, Option<Hold>),
+    notices: Option<&Notices>,
 ) -> Result<Lease, Unasked> {
     let mut stream = connect(path)?;
     let garbled = |error| Unasked::Garbled { error };
@@ -148,14 +161,14 @@ fn try_ask(
     write_line(&mut stream, &Request::Ask(job.clone())).map_err(|_| Unasked::Closed)?;
     let mut reader = BufReader::new(stream.try_clone().map_err(garbled)?);
     match reply(&mut reader, answer_within)? {
-        Reply::Granted { jobs } => return Ok(Lease::watched(stream, jobs, path, job)),
+        Reply::Granted { jobs } => return Ok(Lease::watched(stream, jobs, path, job, notices)),
         Reply::Queued { ahead, held } => queued(ahead, held),
-        Reply::Jobs(_) | Reply::Timeline(_) => return Err(wrong_reply()),
+        _ => return Err(wrong_reply()),
     }
     stream.set_read_timeout(None).map_err(garbled)?;
     match reply(&mut reader, answer_within)? {
-        Reply::Granted { jobs } => Ok(Lease::watched(stream, jobs, path, job)),
-        Reply::Queued { .. } | Reply::Jobs(_) | Reply::Timeline(_) => Err(wrong_reply()),
+        Reply::Granted { jobs } => Ok(Lease::watched(stream, jobs, path, job, notices)),
+        _ => Err(wrong_reply()),
     }
 }
 

@@ -1,7 +1,8 @@
-//! The sysctls that the macOS reader reads, and the parsing of their values
-//! in safe code that runs on every platform.
+//! The sysctls that the macOS reader reads, the parsing of their values, and
+//! the scaling of Mach clock ticks, in safe code that runs on every platform.
 
 use std::ffi::CStr;
+use std::time::Duration;
 
 use super::{Pressure, Unreadable};
 
@@ -28,6 +29,16 @@ pub(crate) struct Swap {
     pub(crate) used_bytes: u64,
     /// The bytes of swap the machine has.
     pub(crate) total_bytes: u64,
+}
+
+/// Returns the duration of `ticks` of the Mach clock, whose timebase is
+/// `numer` over `denom` nanoseconds a tick.
+pub(crate) fn ticks(ticks: u64, numer: u32, denom: u32) -> Duration {
+    let nanos = u128::from(ticks)
+        .saturating_mul(u128::from(numer))
+        .checked_div(u128::from(denom))
+        .unwrap_or(0);
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
 /// Reads the value of `kern.memorystatus_vm_pressure_level`: 1 is normal, 2

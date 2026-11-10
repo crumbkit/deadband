@@ -5,7 +5,8 @@ use std::time::Instant;
 
 use super::{State, Waiter};
 use crate::admit::{JobId, Lane};
-use crate::protocol::{Ago, Exit, JobRecord, JobState, Label, Timeline};
+use crate::protocol::{Ago, Exit, JobRecord, JobState, Jobs, Label, StuckPeriod, Timeline};
+use crate::stuck::Period;
 
 /// The most ended jobs that the daemon remembers. The 65th evicts the
 /// oldest. The list lives in memory only, so a restart forgets it.
@@ -28,6 +29,20 @@ pub(super) struct Ended {
     /// How the job ended, with when it started, or `None` when it left
     /// before it ran.
     run: Option<(Instant, Exit)>,
+    /// The job's last periods with no activity.
+    stuck: Vec<Period>,
+}
+
+/// Returns `period` as ages at `now`. A period still open at `closed` ends
+/// there.
+fn stuck_period(period: &Period, closed: Option<Instant>, now: Instant) -> StuckPeriod {
+    StuckPeriod {
+        since: Ago::between(period.since, now),
+        until: period
+            .until
+            .or(closed)
+            .map(|until| Ago::between(until, now)),
+    }
 }
 
 impl Ended {
@@ -47,6 +62,11 @@ impl Ended {
             lane: self.lane,
             queued: Ago::between(self.queued, now),
             state,
+            stuck: self
+                .stuck
+                .iter()
+                .map(|period| stuck_period(period, Some(self.ended), now))
+                .collect(),
         }
     }
 }
@@ -59,11 +79,27 @@ impl Waiter {
             lane: self.job.lane,
             queued: Ago::between(self.queued, now),
             state,
+            stuck: Vec::new(),
         }
     }
 }
 
 impl State {
+    /// Returns the running and waiting jobs.
+    pub(super) fn jobs(&self) -> Jobs {
+        let now = Instant::now();
+        Jobs {
+            max_jobs: self.settings.max_jobs.get(),
+            running: self.queue.running().map(|each| each.job.clone()).collect(),
+            waiting: self.queue.waiting().map(|each| each.job.clone()).collect(),
+            held: self.queue.held(),
+            reclaim: self.reclaimed.clone(),
+            stuck: self.stuck_jobs(now),
+            busiest: self.stuck.busiest().cloned(),
+            unreadable: self.stuck.unreadable(),
+        }
+    }
+
     /// Takes the job numbered `id` out of the queue and remembers how it
     /// ended. `exit` is `None` when the job's client could not take its
     /// grant. A job that the queue no longer holds is recorded already, so
@@ -77,6 +113,7 @@ impl State {
         }
         self.ended.push_back(Ended {
             lane: waiter.job.lane,
+            stuck: self.stuck.end(waiter.job.pid),
             label: waiter.label,
             queued: waiter.queued,
             ended: Instant::now(),
@@ -90,7 +127,14 @@ impl State {
     pub(super) fn timeline(&self, now: Instant) -> Timeline {
         let running = self.queue.running_since().map(|(waiter, started)| {
             let started = Ago::between(started, now);
-            waiter.row(now, JobState::Running { started })
+            let mut row = waiter.row(now, JobState::Running { started });
+            row.stuck = self
+                .stuck
+                .periods(waiter.job.pid)
+                .iter()
+                .map(|period| stuck_period(period, None, now))
+                .collect();
+            row
         });
         let waiting = self
             .queue
@@ -103,6 +147,8 @@ impl State {
             jobs: running.chain(waiting).chain(ended).take(MAX_ROWS).collect(),
             hidden: known.saturating_sub(MAX_ROWS),
             held: self.queue.held(),
+            busiest: self.stuck.busiest().cloned(),
+            unreadable: self.stuck.unreadable(),
         }
     }
 }

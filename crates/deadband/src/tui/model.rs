@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::admit::Hold;
 use crate::client::Unasked;
-use crate::protocol::Timeline;
+use crate::protocol::{OutsideJobs, Timeline};
 
 mod rows;
 #[cfg(test)]
@@ -237,22 +237,24 @@ impl Model {
         }
     }
 
-    /// Returns the rows at `now` for at most `capacity` lines. Live jobs
-    /// take their lines first, as the reply lists them, and the rows then
-    /// run from the oldest queued to the newest.
+    /// Returns the rows at `now` for at most `capacity` lines. Stuck jobs
+    /// take their lines first, then the other live jobs as the reply lists
+    /// them. The stuck jobs are listed first, and the rows then run from the
+    /// oldest queued to the newest.
     pub(super) fn rows(&self, now: Instant, axis: Axis, capacity: usize) -> Rows {
         let Some(latest) = &self.latest else {
             return Rows::default();
         };
         let elapsed = now.saturating_duration_since(latest.at);
-        let in_window: Vec<_> = latest
+        let mut in_window: Vec<_> = latest
             .timeline
             .jobs
             .iter()
             .filter(|record| in_window(record, elapsed))
             .collect();
+        in_window.sort_by_key(|record| !record.is_stuck());
         let mut chosen: Vec<_> = in_window.iter().take(capacity).copied().collect();
-        chosen.sort_by_key(|record| Reverse(record.queued.duration()));
+        chosen.sort_by_key(|record| (!record.is_stuck(), Reverse(record.queued.duration())));
         Rows {
             rows: chosen
                 .into_iter()
@@ -311,6 +313,31 @@ impl Model {
     pub(super) fn restarted(&self) -> Option<Duration> {
         let latest = self.latest.as_ref().filter(|_| self.restarted)?;
         Some(latest.timeline.up.duration())
+    }
+
+    /// Returns how many jobs are stuck, as the last reply said.
+    pub(super) fn stuck_count(&self) -> usize {
+        self.latest.as_ref().map_or(0, |latest| {
+            latest
+                .timeline
+                .jobs
+                .iter()
+                .filter(|record| record.is_stuck())
+                .count()
+        })
+    }
+
+    /// Returns what the last reply said of the processes outside the jobs.
+    pub(super) fn busiest(&self) -> Option<&OutsideJobs> {
+        self.latest.as_ref()?.timeline.busiest.as_ref()
+    }
+
+    /// Reports whether the last reply said that the jobs' processes could
+    /// not be read.
+    pub(super) fn unreadable(&self) -> bool {
+        self.latest
+            .as_ref()
+            .is_some_and(|latest| latest.timeline.unreadable)
     }
 
     /// Returns how many samples the model holds.

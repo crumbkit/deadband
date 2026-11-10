@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 
 use super::model::{Absence, Axis, Gate, Model, Phase, Row, Status};
-use crate::protocol::Exit;
+use crate::protocol::{Exit, Label, OutsideJobs};
 
 mod graph;
 #[cfg(test)]
@@ -99,7 +99,8 @@ pub(super) fn draw(buffer: &mut Buffer, model: &Model, now: Instant) {
     let width = columns - AXIS_X - RIGHT;
     let axis = Axis::new(width);
     let rows_end = lines - BOTTOM;
-    let capacity = usize::from(rows_end - ROWS_Y);
+    let note = activity_note(model);
+    let capacity = usize::from(rows_end - ROWS_Y) - usize::from(note.is_some());
     let rows = model.rows(now, axis, capacity);
     header(buffer, model, &phase, rows.unseen);
     axis_labels(buffer, axis, width);
@@ -110,6 +111,15 @@ pub(super) fn draw(buffer: &mut Buffer, model: &Model, now: Instant) {
         for (y, row) in (ROWS_Y..rows_end).zip(&rows.rows) {
             draw_row(buffer, y, row, width);
         }
+        if let Some((text, style)) = note {
+            put(
+                buffer,
+                1,
+                rows_end - 1,
+                &fit(&text, usize::from(columns - 2)),
+                style,
+            );
+        }
     }
     put(
         buffer,
@@ -118,10 +128,48 @@ pub(super) fn draw(buffer: &mut Buffer, model: &Model, now: Instant) {
         &"─".repeat(usize::from(columns)),
         fg(LINE),
     );
-    graph::draw(buffer, model, now, rows_end + 1, AXIS_X, width);
+    let no_activity = rows.rows.iter().any(|row| !row.stuck.is_empty());
+    graph::draw(
+        buffer,
+        model,
+        now,
+        rows_end + 1,
+        (AXIS_X, width),
+        no_activity,
+    );
     reason(buffer, model, &phase, lines - 2);
     put(buffer, 1, lines - 1, "q", bold(TEAL));
     put(buffer, 3, lines - 1, "quit", fg(DIM));
+}
+
+/// Returns the line above the rule and its style: the count of stuck jobs
+/// with the busiest process outside the jobs, or that activity is unknown.
+fn activity_note(model: &Model) -> Option<(String, Style)> {
+    let count = model.stuck_count();
+    if count > 0 {
+        let jobs = if count == 1 {
+            "1 job shows no activity".to_owned()
+        } else {
+            format!("{count} jobs show no activity")
+        };
+        let hint = match model.busiest() {
+            Some(OutsideJobs::Busy { name, cpu_percent }) => {
+                let clean = OutsideJobs::Busy {
+                    name: Label::new(name).as_str().to_owned(),
+                    cpu_percent: *cpu_percent,
+                };
+                format!(" · {clean}")
+            }
+            Some(OutsideJobs::Quiet) | None => String::new(),
+        };
+        return Some((format!("{jobs}{hint}"), bold(RED)));
+    }
+    model.unreadable().then(|| {
+        (
+            "activity unknown: deadband could not read the jobs' processes".to_owned(),
+            fg(DIM),
+        )
+    })
 }
 
 /// Says what size the terminal has and what the view needs.
@@ -188,7 +236,15 @@ fn header(buffer: &mut Buffer, model: &Model, phase: &Phase, unseen: usize) {
     put(buffer, 0, 0, " deadband ", bold(INK).bg(TEAL));
     let (text, color) = pill(model, phase);
     let pill_x = buffer.area.width - 2 - u16::try_from(text.chars().count()).unwrap_or(0);
-    let room = usize::from(pill_x.saturating_sub(12));
+    let count = model.stuck_count();
+    let stuck = (count > 0).then(|| format!(" {count} STUCK "));
+    let stuck_width = stuck.as_ref().map_or(0, |label| {
+        u16::try_from(label.chars().count()).unwrap_or(0) + 1
+    });
+    if let Some(label) = &stuck {
+        put(buffer, pill_x - stuck_width, 0, label, bold(INK).bg(RED));
+    }
+    let room = usize::from(pill_x.saturating_sub(12 + stuck_width));
     put(
         buffer,
         11,
@@ -228,7 +284,10 @@ fn grid(buffer: &mut Buffer, axis: Axis, rows_end: u16) {
 
 /// Draws one job's row.
 fn draw_row(buffer: &mut Buffer, y: u16, row: &Row, width: u16) {
-    let live = matches!(row.status, Status::Waiting(_) | Status::Running(_));
+    let live = matches!(
+        row.status,
+        Status::Waiting(_) | Status::Running(_) | Status::Stuck(_)
+    );
     let label_style = if live { bold(HI) } else { fg(DIM) };
     put(buffer, 1, y, &fit(&row.label, LABEL_WIDTH), label_style);
     let lane = if row.fast {
@@ -244,11 +303,19 @@ fn draw_row(buffer: &mut Buffer, y: u16, row: &Row, width: u16) {
     for column in row.ran.clone() {
         put(buffer, AXIS_X + column, y, glyph, fg(lane));
     }
+    for column in row.stuck.iter().flat_map(Clone::clone) {
+        put(buffer, AXIS_X + column, y, "▓", fg(RED));
+    }
     let (text, color, sign) = status_text(row.status);
     if let (Some(column), Some((sign, sign_color))) = (row.mark, sign) {
         put(buffer, AXIS_X + column, y, sign, bold(sign_color));
     }
-    put(buffer, AXIS_X + width + 2, y, &text, fg(color));
+    let style = if matches!(row.status, Status::Stuck(_)) {
+        bold(color)
+    } else {
+        fg(color)
+    };
+    put(buffer, AXIS_X + width + 2, y, &text, style);
 }
 
 /// Returns the text at the right of a row, its colour, and the sign after
@@ -257,6 +324,7 @@ fn status_text(status: Status) -> (String, Color, Option<(&'static str, Color)>)
     match status {
         Status::Waiting(age) => (format!("wait {}", short(age)), AMBER, None),
         Status::Running(age) => (format!("run {}", short(age)), TEAL, None),
+        Status::Stuck(quiet) => (format!("stuck {}", short(quiet)), RED, None),
         Status::Left { waited } => (format!("left {}", short(waited)), DIM, Some(("·", DIM))),
         Status::Finished { exit, ran } => {
             let (words, color, sign) = match exit {

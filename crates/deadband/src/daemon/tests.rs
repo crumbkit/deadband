@@ -17,6 +17,7 @@ use crate::protocol::{Job, JobState, Jobs, Reply, Request, read_line, write_line
 use crate::testing::{TestSocket, socket_path};
 
 mod timeline;
+mod watch;
 
 /// How long a test waits for a reply that it expects.
 const REPLY_WITHIN: Duration = Duration::from_secs(10);
@@ -107,6 +108,7 @@ fn start(max_jobs: usize, dial: &Dial) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
         sample_every: SAMPLE_EVERY,
         first_line_within: FIRST_LINE_WITHIN,
         reclaim: crate::reclaim::Config::default(),
+        watching: crate::daemon::Watching::default(),
     };
     let probe = dial.clone();
     // The closure takes the whole `Bound`, so its lock lives as long as the
@@ -161,6 +163,7 @@ fn job(label: &str) -> Job {
         pid: 7,
         command: format!("make {label}"),
         lane: Lane::Normal,
+        watched: false,
     }
 }
 
@@ -337,6 +340,9 @@ fn status_lists_the_running_and_the_waiting_jobs() {
             waiting: vec![job("b")],
             held: Some(Hold::Full { max_jobs: 1 }),
             reclaim: None,
+            stuck: Vec::new(),
+            busiest: None,
+            unreadable: false,
         }
     );
 }

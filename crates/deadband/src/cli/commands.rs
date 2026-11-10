@@ -5,14 +5,16 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::Arc;
 
 use crumbkit::{Code, Failure, Recovery, Run, Sink};
 
 use super::{DaemonArgs, Machine, RunArgs};
-use crate::admission::{self, Asked};
+use crate::admission::{self, Asked, Notices};
 use crate::daemon::note;
 use crate::job;
 use crate::probe::Probe;
+use crate::protocol::Jobs;
 use crate::serve;
 
 /// The code of a program given to `run` that was found but could not start.
@@ -20,6 +22,64 @@ pub const JOB_NOT_STARTED: Code = Code::new("deadband", "job", "not_started");
 
 /// The code of a program given to `run` that was not found.
 pub const JOB_NOT_FOUND: Code = Code::new("deadband", "job", "not_found");
+
+/// The code of a `status` that lists at least one stuck job.
+pub const JOB_STUCK: Code = Code::new("deadband", "job", "stuck");
+
+/// The code of a `status` whose daemon could not read the jobs' processes.
+pub const JOB_UNREADABLE: Code = Code::new("deadband", "job", "unreadable");
+
+/// What makes `status` exit 1 about the daemon's jobs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Flagged {
+    /// This many jobs show no activity.
+    Stuck(usize),
+    /// The daemon could not read the jobs' processes.
+    Unreadable,
+}
+
+impl Flagged {
+    /// Returns what `jobs` flags. A stuck job comes before a failed read.
+    pub(super) const fn of(jobs: &Jobs) -> Option<Self> {
+        if !jobs.stuck.is_empty() {
+            Some(Self::Stuck(jobs.stuck.len()))
+        } else if jobs.unreadable {
+            Some(Self::Unreadable)
+        } else {
+            None
+        }
+    }
+}
+
+impl fmt::Display for Flagged {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stuck(1) => f.write_str("1 job shows no activity"),
+            Self::Stuck(count) => write!(f, "{count} jobs show no activity"),
+            Self::Unreadable => f.write_str("deadband could not read the jobs' processes"),
+        }
+    }
+}
+
+impl std::error::Error for Flagged {}
+
+impl Failure for Flagged {
+    fn code(&self) -> &'static Code {
+        match self {
+            Self::Stuck(_) => &JOB_STUCK,
+            Self::Unreadable => &JOB_UNREADABLE,
+        }
+    }
+
+    fn recovery(&self) -> Recovery {
+        match self {
+            Self::Stuck(_) => Recovery::none(
+                "deadband leaves a stuck job running; a job that waits on purpose belongs in stuck_ignore in config.toml",
+            ),
+            Self::Unreadable => Recovery::Retry,
+        }
+    }
+}
 
 /// A command given to `run` that could not start.
 #[derive(Debug)]
@@ -84,6 +144,8 @@ pub(super) fn run<O: Write, W: Write, P>(
         .map(|word| word.to_string_lossy())
         .collect();
     let command = words.join(" ");
+    let log = Arc::clone(&machine.log);
+    let notices = Notices::new(move |line| note(&log, format_args!("{line}")));
     let asked = Asked {
         socket: &machine.socket,
         environment: &machine.environment,
@@ -91,6 +153,7 @@ pub(super) fn run<O: Write, W: Write, P>(
         label: &label,
         command: &command,
         lane: args.lane,
+        notices: Some(&notices),
     };
     let mut notify = |line: &str| note(&machine.log, format_args!("{line}"));
     let admitted = admission::admit(&asked, &mut notify);

@@ -48,6 +48,12 @@ basic-toml = "0.1.10"
 # the time of the last reclaim. crumbkit already depends on it.
 humantime = { version = "2.4.0", default-features = false }
 
+# regex-lite matches a job's command line against the `stuck_ignore` list of
+# the daemon's config file. The eval /evals/deadband-commands-regex chose it
+# for the same kind of list: it adds one crate and about 142 KB of binary, and
+# its refusals read as one line.
+regex-lite = "0.1.9"
+
 # ratatui draws `deadband top`, and its crossterm feature owns the terminal.
 # The eval /evals/deadband-top-terminal-library chose it over ratatui-core
 # with crossterm and over hand-written ANSI: it adds 0.27 MiB of stripped

@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use super::{Admitted, Asked, admit};
+use super::{Admitted, Asked, Notices, admit};
 use crate::admit::Lane;
 use crate::environment::{Environment, HELD};
 use crate::protocol::{Reply, Request, read_line, write_line};
@@ -121,6 +121,7 @@ fn admitted(
         label: "build",
         command: "make all",
         lane,
+        notices: None,
     };
     let mut lines = Vec::new();
     let result = admit(&asked, &mut |line: &str| lines.push(line.to_owned()));
@@ -264,6 +265,9 @@ fn admit_starts_the_job_when_the_daemon_answers_with_something_else() {
         waiting: Vec::new(),
         held: None,
         reclaim: None,
+        stuck: Vec::new(),
+        busiest: None,
+        unreadable: false,
     })]);
     let (result, lines) = admitted(&socket, &Environment::default(), None);
     let [line] = lines.as_slice() else {
@@ -434,4 +438,38 @@ fn lower_priority_without_a_lane_leaves_the_priority_alone() {
     let lines = lowered(None, &environment);
     assert!(lines.is_empty(), "{lines:?}");
     assert_eq!(own_priority().expect("the priority reads"), before);
+}
+
+/// Admits a job on a scripted daemon that grants it, and returns the job
+/// the daemon received.
+fn asked_job(notices: Option<&Notices>) -> Request {
+    let (socket, received) = scripted(vec![Reply::Granted { jobs: 2 }]);
+    let environment = Environment::default();
+    let asked = Asked {
+        socket: &socket,
+        environment: &environment,
+        cores: cores(8),
+        label: "build",
+        command: "make all",
+        lane: None,
+        notices,
+    };
+    let admitted = admit(&asked, &mut |_: &str| {});
+    drop(admitted);
+    received
+        .recv_timeout(Duration::from_secs(10))
+        .expect("a request")
+}
+
+#[test]
+fn a_caller_that_passes_notices_asks_for_a_watched_job() {
+    let notices = Notices::new(|_| {});
+    let request = asked_job(Some(&notices));
+    assert!(matches!(request, Request::Ask(job) if job.watched));
+}
+
+#[test]
+fn a_caller_that_passes_no_notices_asks_for_an_unwatched_job() {
+    let request = asked_job(None);
+    assert!(matches!(request, Request::Ask(job) if !job.watched));
 }

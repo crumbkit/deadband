@@ -2,7 +2,8 @@
 //! counted when the daemon goes away.
 //!
 //! A lease holds one connection to the daemon. One detached thread blocks
-//! reading that connection. When the read returns, the daemon has gone or
+//! reading that connection and passes each line about the job's activity to
+//! the lease's [`Notices`]. When the read ends, the daemon has gone or
 //! closed the connection, so the thread drops the connection, which frees
 //! any place the old daemon still counts, and tries once per
 //! [`RETRY_EVERY`] to connect and send [`Request::Seat`]. A new daemon then
@@ -17,7 +18,8 @@
 //! watcher, and a watcher that cannot start leaves a lease that nothing
 //! watches.
 
-use std::io;
+use std::fmt;
+use std::io::{self, BufReader};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
@@ -28,7 +30,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::connect;
-use crate::protocol::{Job, Request, write_line};
+use crate::protocol::{Job, Reply, Request, read_line, write_line};
+use crate::stuck::{active_line, still_line, stuck_line};
 
 /// How long the watcher waits before each try to reach a daemon. A daemon
 /// that never returns costs one failed connection per this length of time.
@@ -37,6 +40,30 @@ const RETRY_EVERY: Duration = Duration::from_millis(100);
 /// How long the watcher waits to write its seat. A daemon that takes no
 /// line in this time counts as gone.
 const WRITE_WITHIN: Duration = Duration::from_secs(2);
+
+/// Where the lines that say a job is stuck, or active again, go. The
+/// lease's thread calls it, so a line can arrive at any time while the job
+/// runs.
+#[derive(Clone)]
+pub struct Notices(Arc<dyn Fn(&str) + Send + Sync>);
+
+impl Notices {
+    /// Returns the notices that pass each line to `tell`.
+    pub fn new(tell: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(tell))
+    }
+
+    /// Passes `line` on.
+    fn tell(&self, line: &str) {
+        (self.0)(line);
+    }
+}
+
+impl fmt::Debug for Notices {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Notices")
+    }
+}
 
 /// A granted job's connection to the daemon.
 #[derive(Debug)]
@@ -50,7 +77,13 @@ pub struct Lease {
 impl Lease {
     /// Returns the lease of `job`, which the daemon at `path` granted just
     /// now on `stream` with `jobs` threads, and starts its watcher.
-    pub(super) fn watched(stream: UnixStream, jobs: usize, path: &Path, job: &Job) -> Self {
+    pub(super) fn watched(
+        stream: UnixStream,
+        jobs: usize,
+        path: &Path,
+        job: &Job,
+        notices: Option<&Notices>,
+    ) -> Self {
         let clone = stream.try_clone();
         let seat = Arc::new(Seat::new(stream));
         if let Ok(read) = clone {
@@ -60,6 +93,7 @@ impl Lease {
                 job: job.clone(),
                 jobs,
                 started: Instant::now(),
+                notices: notices.cloned(),
             };
             // A thread that cannot start leaves the lease unwatched, and
             // the job runs as it would with no restart.
@@ -197,6 +231,8 @@ struct Watcher {
     jobs: usize,
     /// When the daemon granted the job.
     started: Instant,
+    /// Where the lines about the job's activity go.
+    notices: Option<Notices>,
 }
 
 impl Watcher {
@@ -208,15 +244,51 @@ impl Watcher {
             // connection. macOS refuses this call once the peer has
             // closed, and the read then returns at once.
             let _ = read.set_read_timeout(None);
-            let _ = io::copy(&mut read, &mut io::sink());
-            // Both handles of the old connection close here, so the old
-            // daemon has freed the place before a new connection opens.
-            drop(read);
+            self.listen(read);
+            // Both handles of the old connection close before this point, so
+            // the old daemon has freed the place before a new connection
+            // opens.
             self.seat.lose();
             match self.seat_again() {
                 Some(next) => read = next,
                 None => return,
             }
+        }
+    }
+
+    /// Reads the daemon's lines until the connection closes, and passes the
+    /// ones about the job's activity to the notices. A line that cannot be
+    /// parsed is ignored, and only end of file or a read error counts as the
+    /// connection closing.
+    fn listen(&self, read: UnixStream) {
+        let mut reader = BufReader::new(read);
+        loop {
+            match read_line::<Reply>(&mut reader) {
+                Ok(Some(reply)) => self.tell(&reply),
+                Err(error) if error.kind() == io::ErrorKind::InvalidData => {}
+                Ok(None) | Err(_) => return,
+            }
+        }
+    }
+
+    /// Passes the line that `reply` says to the notices, if it says one.
+    fn tell(&self, reply: &Reply) {
+        let line = match reply {
+            Reply::Stuck {
+                quiet,
+                again: false,
+                busiest,
+            } => stuck_line(quiet.duration(), busiest.as_ref()),
+            Reply::Stuck {
+                quiet,
+                again: true,
+                busiest,
+            } => still_line(quiet.duration(), busiest.as_ref()),
+            Reply::Active { quiet } => active_line(quiet.duration()),
+            _ => return,
+        };
+        if let Some(notices) = &self.notices {
+            notices.tell(&line);
         }
     }
 

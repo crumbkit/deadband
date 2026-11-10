@@ -79,8 +79,57 @@ A job marked `lost` ended without saying how, for example when its
 its times; the view shows no command line. A program that embeds the
 deadband library sets `default-features = false` to leave the view out.
 
+A stuck job moves to the top of the rows, and a red `▓` bar covers each
+period in which it showed no activity, also after the job recovers or ends,
+while that period is in the window. The state column reads `stuck 46m`, a red
+`2 STUCK` label sits left of the hold label, and one line above the rule gives
+the count and the busiest process outside the jobs.
+
 A SIGTERM or SIGKILL sent to `deadband top` leaves the terminal in raw mode.
 Run `reset` to restore it.
+
+## Stuck jobs
+
+The daemon watches the process tree of each job that `deadband run` started.
+A job counts as stuck after `stuck_after`, 5 minutes by default, in which its
+whole tree used under 1 second of CPU in total, read and wrote under 1 MiB of
+disk, and no process in the tree started or ended. deadband never ends,
+pauses or signals a stuck job, and the job keeps its place. Its exit code and
+its output do not change.
+
+`deadband status` lists each stuck job first, names the busiest process
+outside the jobs when it uses at least 50% of one core, and exits 1 with the
+failure code `deadband::job::stuck`. It also exits 1, with
+`deadband::job::unreadable`, when the daemon could not read a job's
+processes on macOS. A platform with no process reader exits 0 and says
+nothing about stuck jobs.
+
+The waiting `deadband run` prints one line on standard error when its job
+becomes stuck, every 10 minutes while it stays stuck, and when it is active
+again.
+
+A job that waits on purpose, such as one that waits for a container, shows
+no activity and is flagged. Add its command to `stuck_ignore`. These three
+optional keys sit at the top of the daemon's config file, which the next
+section describes. An invalid value in any of them has the same effect as an
+unreadable file: the daemon logs one line, runs no reclaimer and no
+`on_stuck`, and detects stuck jobs with the defaults.
+
+```toml
+stuck_after = "5m"            # at least 1m; "off" turns detection off
+stuck_ignore = ["^docker "]   # a job whose command line matches any of these regular expressions is not watched
+on_stuck = ["/usr/local/bin/tell-me"] # run once when a job becomes stuck
+```
+
+`on_stuck` runs once each time a job becomes stuck, on a thread of its own.
+It reads one JSON object on standard input, with the job's `label`, its
+`quiet_seconds`, and `busiest`, which is `null` when `/bin/ps` could not be
+read, `{"state":"quiet"}` when no process outside the jobs reaches 50% of one
+core, and otherwise `{"state":"busy","name":"syspolicyd","cpu_percent":470}`.
+deadband discards its output. A failure is one log line, and a command still
+running after 60 seconds is logged once and left running, because deadband
+never signals it. At most 8 run at once; a job that becomes stuck while 8 run
+gets none, and the log says so.
 
 ## Threads
 
@@ -299,6 +348,7 @@ let asked = Asked {
     label: "tests",
     command: "cargo nextest run",
     lane: None,
+    notices: None,
 };
 let mut notify = |line: &str| eprintln!("deadband: {line}");
 let admitted = admit(&asked, &mut notify);
