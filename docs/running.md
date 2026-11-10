@@ -141,7 +141,9 @@ Nothing in deadband reads the file, and nothing leaves the machine.
 The file is `deadband/jobs.jsonl` in `$XDG_STATE_HOME`, or
 `~/.local/state/deadband/jobs.jsonl` when `XDG_STATE_HOME` is not set. Its
 directory has mode 0700 and the file has mode 0600. A daemon started with
-`DEADBAND_SOCKET` set records nothing.
+`DEADBAND_SOCKET` set records nothing. The daemon that writes the file holds a
+lock on `jobs.lock` in the same directory, and a second daemon that finds the
+lock held records nothing, logs one line and still admits its jobs.
 
 When the file passes 64 MiB, the daemon renames it to `jobs.1.jsonl`, replacing
 any earlier one, and starts a new file. The two files together hold about

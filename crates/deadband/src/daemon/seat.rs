@@ -8,7 +8,7 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 use super::{Shared, State, Waiter, lock};
-use crate::admit::{JobId, Lane};
+use crate::admit::JobId;
 use crate::history::{Arrival, Tally};
 use crate::probe::ChildUsage;
 use crate::protocol::{Exit, Job, Label, Reply, Request, read_line, write_line};
@@ -45,7 +45,7 @@ pub(super) fn ask(
     let id: JobId = {
         let mut state = lock(shared);
         let lane = job.lane;
-        let ahead = state.ahead_in(lane);
+        let ahead = state.queue.ahead_in(lane);
         let id = state.queue.push(
             Waiter {
                 job,
@@ -121,16 +121,6 @@ fn read_end(reader: &mut BufReader<UnixStream>) -> (Exit, Option<ChildUsage>) {
 }
 
 impl State {
-    /// Returns how many waiting jobs would start before a new job in
-    /// `lane`: a fast job waits behind the fast jobs, and a normal job
-    /// behind every job.
-    fn ahead_in(&self, lane: Lane) -> usize {
-        self.queue
-            .waiting()
-            .filter(|each| lane == Lane::Normal || each.job.lane == Lane::Fast)
-            .count()
-    }
-
     /// Places `job` among the running jobs, started at `at`. The job has
     /// no record of how long it waited, so it counts as asking when it
     /// started.

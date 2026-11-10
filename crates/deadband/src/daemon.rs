@@ -38,6 +38,7 @@ mod tests;
 mod timeline;
 mod watch;
 
+pub(crate) use self::bind::take_lock;
 pub use self::bind::{
     Bound, DAEMON_RUNNING, SOCKET_UNUSABLE, Unbound, bind, lock_path, raise_descriptor_limit,
 };

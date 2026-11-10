@@ -366,6 +366,16 @@ impl<J> Queue<J> {
         self.waiting_ids().position(|each| each == id)
     }
 
+    /// Returns how many waiting jobs start before a job that joins `lane`
+    /// now, in the order that [`Queue::waiting`] gives.
+    #[must_use]
+    pub fn ahead_in(&self, lane: Lane) -> usize {
+        match lane {
+            Lane::Fast => self.fast.len(),
+            Lane::Normal => self.fast.len() + self.normal.len(),
+        }
+    }
+
     /// Returns the numbers of the waiting jobs in the order they start.
     fn waiting_ids(&self) -> impl Iterator<Item = JobId> + '_ {
         self.fast.iter().chain(&self.normal).map(|(id, _)| *id)

@@ -649,29 +649,93 @@ fn a_directory_that_cannot_be_made_is_logged_once_and_the_recovery_is_logged_onc
     assert_eq!(lines_of(&state.join(FILE)).len(), 1);
 }
 
+/// Returns a recorder whose channel holds `capacity` lines, its channel's
+/// end, and its log.
+fn recorder(
+    capacity: usize,
+) -> (
+    Recorder,
+    std::sync::mpsc::Receiver<Line>,
+    Arc<Mutex<Vec<u8>>>,
+) {
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let log: Log = written.clone();
+    let (recorder, lines) = Recorder::channel(capacity, log);
+    (recorder, lines, written)
+}
+
 #[test]
 fn a_recorder_with_room_hands_on_every_line_and_drops_none() {
-    let (recorder, lines) = Recorder::channel(2);
+    let (recorder, lines, log) = recorder(2);
     recorder.send(machine(1));
     recorder.send(machine(2));
     assert_eq!(recorder.dropped(), 0);
     assert_eq!(lines.try_iter().count(), 2);
+    assert!(logged(&log).is_empty());
 }
 
 #[test]
-fn a_recorder_whose_channel_is_full_drops_the_line_and_counts_it_without_waiting() {
-    let (recorder, lines) = Recorder::channel(2);
+fn a_recorder_whose_channel_is_full_drops_the_line_and_counts_it_without_waiting_or_logging() {
+    let (recorder, lines, log) = recorder(2);
     for at_ms in 0..3 {
         recorder.send(machine(at_ms));
     }
     assert_eq!(recorder.dropped(), 1);
     assert_eq!(lines.try_iter().count(), 2);
+    assert!(logged(&log).is_empty());
 }
 
 #[test]
-fn a_recorder_whose_writer_is_gone_counts_the_line_as_dropped() {
-    let (recorder, lines) = Recorder::channel(2);
+fn a_recorder_whose_writer_is_gone_counts_each_line_as_dropped_and_logs_one_line_once() {
+    let (recorder, lines, log) = recorder(2);
     drop(lines);
     recorder.send(machine(1));
-    assert_eq!(recorder.dropped(), 1);
+    recorder.clone().send(machine(2));
+    assert_eq!(recorder.dropped(), 2);
+    let lines = logged(&log);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("stopped"), "{lines:?}");
+}
+
+#[test]
+fn a_second_writer_on_the_same_directory_records_nothing_and_logs_one_line() {
+    let scratch = Scratch::new();
+    let (mut first, first_log) = writer(scratch.path(), 1024 * 1024);
+    first.append(&machine(1));
+    let (mut second, second_log) = writer(scratch.path(), 10);
+    second.append(&machine(2));
+    second.append(&machine(3));
+    first.append(&machine(4));
+    let lines = lines_of(&scratch.path().join(FILE));
+    let at: Vec<&Value> = lines.iter().map(|line| &line["at_ms"]).collect();
+    assert_eq!(at, [1, 4]);
+    assert!(!scratch.path().join(ROTATED_FILE).exists());
+    let said = logged(&second_log);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("another daemon"), "{said:?}");
+    assert!(logged(&first_log).is_empty());
+}
+
+#[test]
+fn a_writer_records_once_the_writer_that_held_the_directory_is_gone() {
+    let scratch = Scratch::new();
+    let (mut first, _) = writer(scratch.path(), 1024 * 1024);
+    first.append(&machine(1));
+    drop(first);
+    let (mut second, log) = writer(scratch.path(), 1024 * 1024);
+    second.append(&machine(2));
+    assert_eq!(lines_of(&scratch.path().join(FILE)).len(), 2);
+    assert!(logged(&log).is_empty());
+}
+
+#[test]
+fn a_fresh_writer_on_a_directory_that_holds_only_the_rotated_file_starts_a_new_file() {
+    let scratch = Scratch::new();
+    let rotated = scratch.path().join(ROTATED_FILE);
+    write_file(&rotated, "{\"old\":1}\n").expect("the file writes");
+    let (mut writer, log) = writer(scratch.path(), 1024 * 1024);
+    writer.append(&machine(1));
+    assert_eq!(lines_of(&scratch.path().join(FILE))[0]["at_ms"], 1);
+    assert_eq!(lines_of(&rotated), [serde_json::json!({"old": 1})]);
+    assert!(logged(&log).is_empty());
 }

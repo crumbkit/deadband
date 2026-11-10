@@ -162,9 +162,12 @@ Each daemon appends one line of JSON for every job that ends, and one line
 about the machine every 60 seconds, to a private file on that machine.
 [running.md](running.md) gives the file's place and format.
 
-The daemon is the only writer, and the socket lock guarantees one daemon per
-socket. A daemon started with `DEADBAND_SOCKET` set records nothing, so test
-daemons do not write to the file. The client adds the two things that only it
+The daemon is the only writer. Its writer thread takes an exclusive lock on
+`jobs.lock` in the state directory before it opens the file and holds it while
+the daemon runs, so one daemon writes each state directory even when two
+daemons listen on different sockets. A daemon that finds the lock held records
+nothing and logs one line. A daemon started with `DEADBAND_SOCKET` set records
+nothing, so test daemons do not write to the file. The client adds the two things that only it
 knows, its working directory on `Ask` and the usage of the job's children on
 `Done`. The working directory is shortened to 1 KiB by the client.
 
@@ -173,7 +176,8 @@ reads the config's `warm_dirs` before it takes the queue lock. Later, while it
 holds the lock, the daemon builds the record and hands it to one writer thread
 with `try_send` on a channel of 256 entries, so the daemon never waits for the
 disk. A line that finds the channel full is dropped, and a counter that each
-machine line reports goes up.
+machine line reports goes up. If the writer thread has stopped, the first line
+that cannot reach it is logged once.
 
 The kind rule holds no knowledge of any tool. It keeps up to the first three
 plain lowercase words of the command, with the program reduced to its file

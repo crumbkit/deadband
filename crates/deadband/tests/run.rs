@@ -531,10 +531,16 @@ mod history {
         job.env("XDG_STATE_HOME", home.state());
         let run = output(job);
         assert!(run.status.success(), "{run:?}");
-        assert!(
-            !home.state().exists(),
-            "the daemon made its state directory"
-        );
+        // A daemon on the default socket records into the same state
+        // directory. Had the first daemon recorded, its writer would hold the
+        // file's lock, and the second daemon would record nothing.
+        let _second = Daemon::started(home.command(&["daemon", "--max-jobs", "1"]));
+        let run = output(home.command(&["run", "--label", "second", "--", "true"]));
+        assert!(run.status.success(), "{run:?}");
+        let line = first_line(&home.file());
+        assert_eq!(line["label"], "second", "{line}");
+        let text = std::fs::read_to_string(home.file()).expect("the file reads");
+        assert_eq!(text.lines().count(), 1, "{text}");
     }
 
     #[test]

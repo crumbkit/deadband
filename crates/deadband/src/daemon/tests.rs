@@ -14,8 +14,8 @@ use serde_json::Value;
 
 use super::{Log, Settings, Unbound, bind, default_max_jobs, lock_path, serve};
 use crate::admit::{GIB, Hold, Lane};
+use crate::history::FILE;
 use crate::history::tests::{Scratch, lines_of, write_file};
-use crate::history::{FILE, ROTATED_FILE};
 use crate::probe::{ChildUsage, Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::{Job, JobState, Jobs, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
@@ -824,8 +824,9 @@ fn an_unwritable_history_still_admits_every_job_and_the_log_says_so_once() {
     let scratch = Scratch::new();
     let blocker = scratch.path().join("blocker");
     write_file(&blocker, "").expect("the file writes");
-    let (path, log) = recording(1, &blocker.join("deadband"));
-    for label in ["a", "b", "c"] {
+    let state = blocker.join("deadband");
+    let (path, log) = recording(1, &state);
+    let run = |label: &str| {
         let mut client = Client::ask(&path, label);
         assert_eq!(client.reply(), granted(1));
         client.send(&Request::Done {
@@ -834,18 +835,76 @@ fn an_unwritable_history_still_admits_every_job_and_the_log_says_so_once() {
             usage: None,
         });
         until_running(&path, 0);
+    };
+    for label in ["a", "b", "c"] {
+        run(label);
     }
+    // The writer takes lines in order, so once the line of `d` is in the
+    // file, the writer has handled the three that failed before it.
+    std::fs::remove_file(&blocker).expect("the blocker goes");
+    run("d");
+    let lines = lines_until(&state, "job", 1);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["label"], "d");
+    let text = String::from_utf8(log.lock().expect("locks").clone()).expect("UTF-8");
+    let said: Vec<&str> = text.lines().collect();
+    assert_eq!(said.len(), 2, "{text}");
+    assert!(said[0].contains("could not write job history"), "{text}");
+    assert!(said[1].contains("written again"), "{text}");
+}
+
+#[test]
+fn a_second_daemon_on_the_same_history_records_nothing_logs_one_line_and_admits_its_job() {
+    let scratch = Scratch::new();
+    let (first, first_log) = recording(1, scratch.path());
+    let mut client = Client::ask(&first, "a");
+    assert_eq!(client.reply(), granted(1));
+    drop(client);
+    lines_until(scratch.path(), "job", 1);
+    let (second, second_log) = recording(1, scratch.path());
     let begun = Instant::now();
     let text = loop {
-        let text = String::from_utf8(log.lock().expect("locks").clone()).expect("UTF-8");
+        let text = String::from_utf8(second_log.lock().expect("locks").clone()).expect("UTF-8");
         if !text.is_empty() {
             break text;
         }
-        assert!(begun.elapsed() < REPLY_WITHIN, "the log stayed empty");
+        assert!(
+            begun.elapsed() < REPLY_WITHIN,
+            "the second daemon's log stayed empty"
+        );
     };
+    let mut client = Client::ask(&second, "b");
+    assert_eq!(client.reply(), granted(1));
+    drop(client);
+    until_running(&second, 0);
+    let mut client = Client::ask(&first, "c");
+    assert_eq!(client.reply(), granted(1));
+    drop(client);
+    let labels: Vec<Value> = lines_until(scratch.path(), "job", 2)
+        .into_iter()
+        .map(|line| line["label"].clone())
+        .collect();
+    assert_eq!(labels, ["a", "c"]);
     assert_eq!(text.lines().count(), 1, "{text}");
-    assert!(text.contains("job history"), "{text}");
-    assert!(!scratch.path().join(ROTATED_FILE).exists());
+    assert!(text.contains("another daemon"), "{text}");
+    assert!(first_log.lock().expect("locks").is_empty());
+}
+
+#[test]
+fn a_fast_job_records_only_the_fast_jobs_ahead_of_it() {
+    let scratch = Scratch::new();
+    let (path, _log) = recording(1, scratch.path());
+    let mut first = Client::ask(&path, "a");
+    assert_eq!(first.reply(), granted(1));
+    let mut normal = Client::ask(&path, "b");
+    assert_eq!(normal.reply(), queued(0, 1));
+    let mut fast = Client::ask_in(&path, "c", Lane::Fast);
+    assert_eq!(fast.reply(), queued(0, 1));
+    drop(fast);
+    let line = lines_until(scratch.path(), "job", 1).remove(0);
+    assert_eq!(line["label"], "c");
+    assert_eq!(line["lane"], "fast");
+    assert_eq!(line["ahead"], 0);
 }
 
 #[test]

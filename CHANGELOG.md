@@ -16,7 +16,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Each daemon appends one line of JSON for every job that ends, and one line
   about the machine every 60 seconds, to `deadband/jobs.jsonl` in
   `$XDG_STATE_HOME`, or in `~/.local/state`. A recording failure never holds a
-  job. A daemon started with `DEADBAND_SOCKET` set records nothing.
+  job. A daemon started with `DEADBAND_SOCKET` set records nothing, and a
+  second daemon on the same state directory records nothing and logs one line.
 - `deadband status --json` shows each job's working directory in an optional
   `cwd` field.
 - The config file accepts `warm_dirs`, the directories under a job's checkout
