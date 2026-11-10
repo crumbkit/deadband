@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::writer::Writer;
 use super::{
     Arrival, Departure, FILE, JobEnd, JobLine, Line, MachineLine, Place, ROTATED_FILE, Recorder,
-    Tally, VERSION, kind, options,
+    Tally, VERSION, WORKSPACE_MARKER, kind, options,
 };
 use crate::admit::Lane;
 use crate::daemon::Log;
@@ -100,6 +100,8 @@ fn job_in(command: &str, cwd: Option<&Path>) -> Job {
         lane: Lane::Normal,
         watched: false,
         cwd: cwd.map(|cwd| cwd.display().to_string()),
+        workspace: None,
+        short: None,
     }
 }
 
@@ -309,8 +311,91 @@ fn a_directory_inside_a_main_checkout_names_it_as_repo_and_checkout() {
             repo: Some("deadband".to_owned()),
             checkout: Some("deadband".to_owned()),
             warm: None,
+            workspace: None,
         }
     );
+}
+
+#[test]
+fn a_directory_inside_a_workspace_names_the_workspace_by_its_directory() {
+    let scratch = Scratch::new();
+    let workspace = directory(scratch.path(), "triage");
+    write_file(workspace.join(WORKSPACE_MARKER), "").expect("the marker writes");
+    let root = checkout(&workspace, "api");
+    let place = Place::find(&directory(&root, "src"), &[]);
+    assert_eq!(place.workspace, Some(Label::new("triage")));
+    assert_eq!(place.repo.as_deref(), Some("api"));
+}
+
+#[test]
+fn a_workspace_is_found_outside_git_and_in_the_workspace_directory_itself() {
+    let scratch = Scratch::new();
+    let workspace = directory(scratch.path(), "notes");
+    write_file(workspace.join(WORKSPACE_MARKER), "").expect("the marker writes");
+    let inner = directory(&workspace, "drafts");
+    assert_eq!(
+        Place::find(&inner, &[]).workspace,
+        Some(Label::new("notes"))
+    );
+    assert_eq!(
+        Place::find(&workspace, &[]).workspace,
+        Some(Label::new("notes"))
+    );
+    assert_eq!(Place::find(&inner, &[]).repo, None);
+}
+
+#[test]
+fn a_marker_that_is_a_directory_or_a_symbolic_link_does_not_count_and_the_walk_goes_on_up() {
+    let scratch = Scratch::new();
+    let outer = directory(scratch.path(), "outer");
+    write_file(outer.join(WORKSPACE_MARKER), "").expect("the marker writes");
+    let linked = directory(&outer, "linked");
+    std::os::unix::fs::symlink(outer.join(WORKSPACE_MARKER), linked.join(WORKSPACE_MARKER))
+        .expect("the link is made");
+    let folder = directory(&linked, "folder");
+    directory(&folder, WORKSPACE_MARKER);
+    assert_eq!(
+        Place::find(&folder, &[]).workspace,
+        Some(Label::new("outer"))
+    );
+}
+
+#[test]
+fn a_directory_outside_any_workspace_has_no_workspace() {
+    let scratch = Scratch::new();
+    let root = checkout(scratch.path(), "repo");
+    assert_eq!(Place::find(&root, &[]).workspace, None);
+}
+
+#[test]
+fn the_walk_stops_after_64_directories() {
+    let scratch = Scratch::new();
+    write_file(scratch.path().join(WORKSPACE_MARKER), "").expect("the marker writes");
+    let shallow = (0..63).fold(scratch.path().to_owned(), |path, _| path.join("d"));
+    std::fs::create_dir_all(&shallow).expect("the directories are made");
+    let name = scratch
+        .path()
+        .file_name()
+        .expect("a name")
+        .to_string_lossy();
+    assert_eq!(
+        Place::find(&shallow, &[]).workspace,
+        Some(Label::new(&name))
+    );
+    let deep = shallow.join("d");
+    std::fs::create_dir_all(&deep).expect("the directory is made");
+    assert_eq!(Place::find(&deep, &[]).workspace, None);
+}
+
+#[test]
+fn a_workspace_name_loses_its_control_characters_and_is_cut_to_64_bytes() {
+    let scratch = Scratch::new();
+    let name = format!("a\u{1b}[2J{}", "w".repeat(80));
+    let workspace = directory(scratch.path(), &name);
+    write_file(workspace.join(WORKSPACE_MARKER), "").expect("the marker writes");
+    let shown = Place::find(&workspace, &[]).workspace.expect("a workspace");
+    assert!(shown.as_str().starts_with("a [2Jw"), "{shown:?}");
+    assert_eq!(shown.as_str().len(), 64);
 }
 
 #[test]
@@ -327,6 +412,7 @@ fn a_directory_inside_a_worktree_names_its_main_checkout_and_its_own_directory()
             repo: Some("deadband".to_owned()),
             checkout: Some("job-history".to_owned()),
             warm: None,
+            workspace: None,
         }
     );
 }

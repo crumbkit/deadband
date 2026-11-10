@@ -372,6 +372,59 @@ mod macos {
     }
 
     #[test]
+    fn a_job_run_inside_a_workspace_shows_its_workspace_and_short_command_in_status() {
+        let socket = socket("workspace");
+        let socket = &socket.0;
+        let root = std::env::temp_dir().join(format!("db-it-{}-ws", std::process::id()));
+        let checkout = root.join("triage").join("api");
+        std::fs::create_dir_all(checkout.join(".git")).expect("the checkout is made");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test writes the marker that a workspace tool writes"
+        )]
+        std::fs::write(root.join("triage").join(".deadband-workspace"), "")
+            .expect("the marker writes");
+        let _daemon = Daemon::start(socket, "1");
+        let mut run = deadband(
+            socket,
+            &[
+                "run",
+                "--label",
+                "tests",
+                "--",
+                "sh",
+                "-c",
+                "echo started; cat",
+            ],
+        );
+        let mut job = run
+            .current_dir(&checkout)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the run starts");
+        assert_eq!(
+            line(job.stdout.take().expect("piped")).expect("reads"),
+            "started\n"
+        );
+        let status = deadband(socket, &["status"]).output().expect("status runs");
+        let status = String::from_utf8(status.stdout).expect("UTF-8");
+        drop(job.stdin.take().expect("piped"));
+        assert!(job.wait().expect("the run ends").success());
+        let _ = std::fs::remove_dir_all(&root);
+        let running = status
+            .lines()
+            .find(|line| line.starts_with("running: "))
+            .unwrap_or_else(|| panic!("no running line: {status}"));
+        assert!(
+            running.starts_with("running: triage · tests (pid "),
+            "{status}"
+        );
+        assert!(running.ends_with("): sh"), "{status}");
+        assert!(!status.contains("echo started"), "{status}");
+    }
+
+    #[test]
     fn with_one_place_a_fast_job_queued_after_a_normal_job_starts_first() {
         let socket = socket("lanes");
         let socket = &socket.0;

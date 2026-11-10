@@ -11,21 +11,35 @@ use super::{Shared, State, Waiter, lock};
 use crate::admit::JobId;
 use crate::history::{Arrival, Tally};
 use crate::probe::ChildUsage;
-use crate::protocol::{Exit, Job, Label, Reply, Request, read_line, write_line};
+use crate::protocol::{Exit, Job, Label, Reply, Request, Short, read_line, write_line};
 
-/// Returns what the history line needs from `job`, or `None` when the
-/// daemon records no job. The lock is released before the disk is read, so
-/// the disk never holds the queue up.
-fn arrival(shared: &Shared, job: &Job, ran_ms: Option<u64>) -> Option<Arrival> {
-    let (warm_dirs, kind_tools) = {
+/// Reads what the daemon learns from `job` when it arrives, and fills the
+/// job's workspace and short command from it. The workspace that a client
+/// names is kept, and the walk fills it only when the client named none.
+/// The short command always comes from the job's command line.
+///
+/// Returns what the history line needs, or `None` when the daemon records
+/// no job. A daemon that records no job reads no warm directory. The lock
+/// is released before the disk is read, so the disk never holds the queue
+/// up.
+fn arrive(shared: &Shared, job: &mut Job, ran_ms: Option<u64>) -> Option<Arrival> {
+    let (recording, warm_dirs, kind_tools) = {
         let state = lock(shared);
         let config = &state.settings.reclaim;
-        state
-            .recorder
-            .is_some()
-            .then(|| (config.warm_dirs.clone(), config.kind_tools.clone()))
-    }?;
-    Some(Arrival::read(job, &warm_dirs, &kind_tools, ran_ms))
+        let recording = state.recorder.is_some();
+        let warm_dirs = if recording {
+            config.warm_dirs.clone()
+        } else {
+            Vec::new()
+        };
+        (recording, warm_dirs, config.kind_tools.clone())
+    };
+    let mut arrival = Arrival::read(job, &warm_dirs, &kind_tools, ran_ms);
+    job.short = Some(Short::new(&arrival.kind));
+    if job.workspace.is_none() {
+        job.workspace = arrival.place.workspace.take();
+    }
+    recording.then_some(arrival)
 }
 
 /// Queues `job` for the client on `stream`, grants it when the admission
@@ -35,12 +49,12 @@ pub(super) fn ask(
     shared: &Shared,
     stream: UnixStream,
     reader: &mut BufReader<UnixStream>,
-    job: Job,
+    mut job: Job,
 ) {
     let Ok(grant_stream) = stream.try_clone() else {
         return;
     };
-    let arrival = arrival(shared, &job, None);
+    let arrival = arrive(shared, &mut job, None);
     let queued = Instant::now();
     let label = Label::new(&job.label);
     let id: JobId = {
@@ -82,11 +96,11 @@ pub(super) fn seat(
     shared: &Shared,
     stream: UnixStream,
     reader: &mut BufReader<UnixStream>,
-    job: Job,
+    mut job: Job,
     jobs: usize,
     ran_ms: u64,
 ) {
-    let arrival = arrival(shared, &job, Some(ran_ms));
+    let arrival = arrive(shared, &mut job, Some(ran_ms));
     let now = Instant::now();
     let at = now
         .checked_sub(Duration::from_millis(ran_ms))

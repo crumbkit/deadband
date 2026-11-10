@@ -81,8 +81,10 @@ The rows come from the daemon, which remembers the last 64 jobs that ended,
 in memory only, so a restart forgets them. The load and the holds come from
 the view's own polls, once a second, so they start empty when the view opens.
 A job marked `lost` ended without saying how, for example when its
-`deadband run` was killed. Each job shows at most its label, its lane and
-its times; the view shows no command line. A program that embeds the
+`deadband run` was killed. Each row shows the job's workspace, its label, its
+short command, its lane and its times; the view shows no full command line.
+The workspace and job columns are 16 and 26 columns wide on a terminal of 100
+columns or more, and 12 and 16 below that. A program that embeds the
 deadband library sets `default-features = false` to leave the view out.
 
 A stuck job moves to the top of the rows, and a red `▓` bar covers each
@@ -93,6 +95,54 @@ the count and the busiest process outside the jobs.
 
 A SIGTERM or SIGKILL sent to `deadband top` leaves the terminal in raw mode.
 Run `reset` to restore it.
+
+## Workspaces and short commands
+
+`deadband status` and `deadband top` name each job by its workspace and its
+label, and show its short command in place of its command line.
+
+The workspace is the name of the nearest directory, at or above the job's
+working directory, that holds a regular file named `.deadband-workspace`. A
+tool that makes workspaces, such as mxv, writes that file; its content is
+never read. The daemon walks up at most 64 directories, and a marker that is
+a directory or a symbolic link does not count. A job outside any workspace
+has none, and its row shows only its label. A program that embeds deadband
+can name the workspace in `Asked::workspace`, and the daemon then keeps that
+name. A workspace name keeps at most 64 bytes, and each control character in
+it becomes a space.
+
+The short command is the kind that the job history records: the program's
+file name, plus up to two plain lowercase subcommand words when the config's
+`kind_tools` lists the program. With `kind_tools = ["cargo"]`,
+`cargo nextest run -p api` shows as `cargo nextest run`; with the default
+empty list it shows as `cargo`. The rule stops at the first word that starts
+with `-`, so `tool --token s3cr3t deploy` shows as `tool`. It skips words with
+capitals, digits, `/`, `=` or `:`, and words longer than 32 bytes. A secret
+made only of lowercase letters, `-` and `_` can still show when it is one of
+the first two words after a listed program, such as `mysql hunter` with
+`mysql` listed. A command whose program name is not plain, such as
+`./Deploy.sh`, has an empty short command, and its row shows only its name.
+
+The name joins the workspace and the label with a middle dot, as in
+`triage · api-tests`. The label is left out when it equals the workspace, as
+for `mxv up`, or when it equals the first word of the short command, which is
+the label `deadband run` gives when `--label` is absent. A job with no
+workspace is named by its label. `deadband status` prints one line per job:
+
+```text
+running: triage · api-tests (pid 40122): cargo nextest run
+waiting: board-sync (pid 40127): cargo test
+```
+
+A line whose short command is empty ends after the pid. With a daemon older
+than this release, which sends no workspace or short command, `status` prints
+the label and the full command line as before, and `top` shows the label
+alone.
+
+`deadband status --json` prints the `deadband/status/v2` document. Each job
+carries `label`, `workspace`, `short`, `pid` and `lane`, and no `command`;
+`workspace` is absent outside a workspace, and `short` is absent from an older
+daemon.
 
 ## Stuck jobs
 
@@ -303,7 +353,7 @@ reclaim_timeout = "5m"    # how long the daemon waits for one run of a reclaimer
 reclaim_memory = "4G"     # the memory each reclaim asks for
 reclaim_disk = "20G"      # the disk each reclaim asks for
 warm_dirs = []            # directories under a job's checkout that show a warm build, such as ["target"]
-kind_tools = []           # programs whose kind in the job history keeps their subcommands
+kind_tools = []           # programs whose kind and short command keep their subcommands
 
 [[reclaim]]
 name = "workspaces"
@@ -325,7 +375,8 @@ table, the daemon never reclaims. A file that cannot be read, has an unknown
 key or breaks one of these limits turns reclaiming off, and the daemon's log
 says why in one line.
 
-`kind_tools` lists program file names, and only the job history reads it.
+`kind_tools` lists program file names. The job history and the short command
+that `status` and `top` show both read it.
 The kind of a job whose program is listed keeps up to two subcommand words,
 such as `cargo nextest run`. The kind of any other job is the program's file
 name alone, so the words after a script's name, which may be secrets, are
@@ -430,6 +481,8 @@ let asked = Asked {
     cores,
     label: "tests",
     command: "cargo nextest run",
+    // None lets the daemon find the workspace from the marker file.
+    workspace: Some("triage"),
     lane: None,
     notices: None,
 };

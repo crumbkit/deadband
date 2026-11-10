@@ -33,7 +33,7 @@ use crate::daemon;
 use crate::environment::Environment;
 use crate::priority;
 use crate::probe::ChildUsage;
-use crate::protocol::{Job, job_cwd};
+use crate::protocol::{Job, Label, job_cwd};
 use crate::throttle::{self, NORMAL_NICE};
 
 #[cfg(test)]
@@ -56,8 +56,12 @@ pub struct Asked<'a> {
     pub cores: Option<NonZeroUsize>,
     /// The label that `deadband status` shows for the job.
     pub label: &'a str,
-    /// The command text that `deadband status` shows for the job.
+    /// The command text that the daemon reads the job's short command from.
     pub command: &'a str,
+    /// The workspace that `deadband status` and `deadband top` show for the
+    /// job, or `None` to let the daemon find it by walking up from
+    /// `environment.cwd` to a directory that holds `.deadband-workspace`.
+    pub workspace: Option<&'a str>,
     /// The lane the job waits in, or `None` to take the fast lane when the
     /// priority file matches the job and the normal lane otherwise.
     pub lane: Option<Lane>,
@@ -218,6 +222,8 @@ pub fn admit(asked: &Asked<'_>, notify: &mut impl FnMut(&str)) -> Admitted {
         lane,
         watched: asked.notices.is_some(),
         cwd: environment.cwd.as_deref().map(job_cwd),
+        workspace: asked.workspace.map(Label::new),
+        short: None,
     };
     let queued = |ahead: usize, held: Option<Hold>| notify(&waits(ahead, held));
     let lease = match client::ask_noticed(asked.socket, &job, ANSWER_WITHIN, queued, asked.notices)

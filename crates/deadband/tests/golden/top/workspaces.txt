@@ -1,0 +1,22 @@
+ deadband  last 10 minutes                                                                                       OPEN
+
+ workspace        job                         -10m        -8m        -6m         -4m        -2m      now  state
+ triage           mise run lint               │     ░▒▒▒▒▒▒▒▒▒▒▒✓    │           │          │             ok 1m
+                  crumbkit-docs  cargo doc    │           │░▒▒▒▒▒▒▒✓ │           │          │             ok 1m
+ deadband-hist    suite  cargo nextest run    │           │     ░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒✗          │             exit 1 2m
+ reading-list     cargo build                 │           │          │     ░████████████████████████████  run 4m
+ triage           api-tests  cargo nextest …  │           │          │          ░░░░████████████████████  run 3m
+ starmap-fix      lint  cargo clippy        ▲ │           │          │           │       ░██████████████  run 2m
+ board-sync       cargo test                  │           │          │           │          │░░░░░░░░░░░  wait 1m
+                  tool                        │           │          │           │          │       ░░░░  wait 40s
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ load   6.4
+ cores  14                                     ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                               ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀
+                                               ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+ held by                                       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                               ▀ open   ▀ full   ▀ load   ▀ memory   ▀ disk     ░ waiting    █ running
+
+ q quit

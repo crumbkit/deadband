@@ -1,28 +1,28 @@
  deadband  last 10 minutes                                                                                HELD · LOAD
 
- job                   -10m            -8m             -6m             -4m             -2m           now  state
- crumbkit-docs         │ ░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒✓            │               │               │                  ok 1m
- board-cli-test        │     ░░░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒✓          │               │                  ok 3m
- starmap-check       ▲ │             ▒▒▒▒▒▒▒▒▒▒▒▒▒▒✓   │               │               │                  ok 1m
- deadband-suite        │               │   ░░░░░░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒✗          │                  exit 1 3m
- starmap-docs          │               │      ░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒?      │               │                  lost 1m
- mxv-build           ▲ │               │             ░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒✓               │                  ok 2m
- crumbkit-tool         │               │               │       ░░░░░░░░░░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒✓             ok 1m
- board-cli-test        │               │               │        ░░░░░░██████████████████████████████████  run 4m
- mxv-lint              │               │               │          ░░░░░░░░░░░░░·       │                  left 1m
- board-lint            │               │               │               ░░░░░░░░░░░░░░░░░░░░▒▒▒▒▒▒▒▒✓      ok 55s
- board-e2e             │               │               │               │     ░░▒▒▒▒▒▒▒▒▒✗                 signal 9 1m
- mxv-build           ▲ │               │               │               │         ░░░░░░█████████████████  run 2m
- crumbkit-tool         │               │               │               │          ░░░░░░░░░░░░░░░░░░░░░░  wait 2m
- starmap-check         │               │               │               │               │   ░░░░░░███████  run 48s
- mxv-l-deny            │               │               │               │               │   ░░░░░░░░░░░░░  wait 1m
- band-orders-red       │               │               │               │               │             ░░░  wait 18s
+ workspace        job                         -10m        -8m        -6m         -4m        -2m      now  state
+                  crumbkit-docs               │░░▒▒▒▒▒▒▒▒▒▒▒✓        │           │          │             ok 1m
+                  board-cli-test              │   ░░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒✓       │          │             ok 3m
+                  starmap-check             ▲ │         ▒▒▒▒▒▒▒▒▒▒✓  │           │          │             ok 1m
+                  deadband-suite              │           │ ░░░░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒✗       │             exit 1 3m
+                  starmap-docs                │           │    ░▒▒▒▒▒▒▒▒▒▒▒▒?    │          │             lost 1m
+                  mxv-build                 ▲ │           │        ░▒▒▒▒▒▒▒▒▒▒▒▒▒✓          │             ok 2m
+                  crumbkit-tool               │           │          │     ░░░░░░░░░▒▒▒▒▒▒▒▒▒▒▒✓          ok 1m
+                  board-cli-test              │           │          │     ░░░░█████████████████████████  run 4m
+                  mxv-lint                    │           │          │       ░░░░░░░░░·     │             left 1m
+                  board-lint                  │           │          │           ░░░░░░░░░░░░░▒▒▒▒▒▒▒✓    ok 55s
+                  board-e2e                   │           │          │           │  ░░▒▒▒▒▒▒▒✗            signal 9 1m
+                  mxv-build                 ▲ │           │          │           │      ░░░░████████████  run 2m
+                  crumbkit-tool               │           │          │           │      ░░░░░░░░░░░░░░░░  wait 2m
+                  starmap-check               │           │          │           │          │  ░░░░█████  run 48s
+                  mxv-l-deny                  │           │          │           │          │  ░░░░░░░░░  wait 1m
+                  band-orders-red             │           │          │           │          │         ░░  wait 18s
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
- load   15.9                                                    ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀
- cores  14              ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
-                        ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
-                        ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
- held by                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                        ▀ open   ▀ full   ▀ load   ▀ memory   ▀ disk     ░ waiting    █ running
+ load   15.9                                                               ⢀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀
+ cores  14                                     ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+                                               ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+                                               ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+ held by                                       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                               ▀ open   ▀ full   ▀ load   ▀ memory   ▀ disk     ░ waiting    █ running
  waiting because: the 1-minute load with the jobs started in the last minute is 18.4, over the 14 cores
  q quit

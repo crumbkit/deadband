@@ -14,7 +14,7 @@ use super::{Admitted, Asked, Notices, admit};
 use crate::admit::Lane;
 use crate::environment::{Environment, HELD};
 use crate::probe::ChildUsage;
-use crate::protocol::{Reply, Request, read_line, write_line};
+use crate::protocol::{Label, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 use crate::throttle::{NORMAL_NICE, own_priority};
 
@@ -121,6 +121,7 @@ fn admitted(
         cores: cores(8),
         label: "build",
         command: "make all",
+        workspace: None,
         lane,
         notices: None,
     };
@@ -491,6 +492,12 @@ fn lower_priority_without_a_lane_leaves_the_priority_alone() {
 /// Admits a job on a scripted daemon that grants it, and returns the job
 /// the daemon received.
 fn asked_job(notices: Option<&Notices>) -> Request {
+    asked_in(notices, None)
+}
+
+/// Admits a job that names `workspace` on a scripted daemon that grants
+/// it, and returns the job the daemon received.
+fn asked_in(notices: Option<&Notices>, workspace: Option<&str>) -> Request {
     let (socket, received) = scripted(vec![Reply::Granted { jobs: 2 }]);
     let environment = Environment::default();
     let asked = Asked {
@@ -499,6 +506,7 @@ fn asked_job(notices: Option<&Notices>) -> Request {
         cores: cores(8),
         label: "build",
         command: "make all",
+        workspace,
         lane: None,
         notices,
     };
@@ -520,4 +528,20 @@ fn a_caller_that_passes_notices_asks_for_a_watched_job() {
 fn a_caller_that_passes_no_notices_asks_for_an_unwatched_job() {
     let request = asked_job(None);
     assert!(matches!(request, Request::Ask(job) if !job.watched));
+}
+
+#[test]
+fn a_caller_that_names_a_workspace_sends_it_with_the_job() {
+    let request = asked_in(None, Some("triage"));
+    let Request::Ask(job) = request else {
+        panic!("admit sent {request:?}");
+    };
+    assert_eq!(job.workspace, Some(Label::new("triage")));
+    assert_eq!(job.short, None);
+}
+
+#[test]
+fn a_caller_that_names_no_workspace_sends_none_and_leaves_it_to_the_daemon() {
+    let request = asked_in(None, None);
+    assert!(matches!(request, Request::Ask(job) if job.workspace.is_none()));
 }

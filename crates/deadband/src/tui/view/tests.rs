@@ -1,9 +1,13 @@
 //! Golden tests of the view. The disk, load, opened, restart and small
-//! golden files were generated from the signed-off mockup's drawing code,
-//! with its time axis narrowed from 84 columns to 80 so the status fits, and
-//! its bars drawn in whole columns. They pin what the view draws. The off and
-//! min files have no state in the mockup and were read after the view drew
-//! them.
+//! golden files were first generated from the signed-off mockup's drawing
+//! code, with its time axis narrowed from 84 columns to 80 so the status
+//! fits, and its bars drawn in whole columns. They pin what the view draws.
+//! The off and min files have no state in the mockup and were read after the
+//! view drew them. When the workspace and job columns replaced the label
+//! column, every golden file was read again after the view drew it, and
+//! compared with the signed-off workspace mockup: its jobs with no workspace
+//! or short command show as that mockup's older-daemon view, and the
+//! workspaces files show its jobs from several workspaces.
 
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -11,11 +15,14 @@ use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 
 use super::{BG, draw};
 use crate::admit::{GIB, Hold, Lane};
 use crate::client::Unasked;
-use crate::protocol::{Ago, Exit, JobRecord, JobState, Label, OutsideJobs, StuckPeriod, Timeline};
+use crate::protocol::{
+    Ago, Exit, JobRecord, JobState, Label, OutsideJobs, Short, StuckPeriod, Timeline,
+};
 use crate::tui::model::Model;
 
 const CORES: usize = 14;
@@ -31,11 +38,154 @@ fn secs(seconds: u64) -> Duration {
 fn record(label: &str, lane: Lane, queued: u64, state: JobState) -> JobRecord {
     JobRecord {
         label: Label::new(label),
+        workspace: None,
+        short: None,
         lane,
         queued: ago(queued),
         state,
         stuck: Vec::new(),
     }
+}
+
+/// Returns `record` in `workspace` with the short command `short`.
+fn named(workspace: &str, short: &str, record: JobRecord) -> JobRecord {
+    JobRecord {
+        workspace: (!workspace.is_empty()).then(|| Label::new(workspace)),
+        short: Some(Short::new(short)),
+        ..record
+    }
+}
+
+/// The jobs of the workspace mockup, from several workspaces.
+fn workspace_jobs() -> Vec<JobRecord> {
+    let running = |label: &str, lane, queued: u64, started: u64| {
+        record(
+            label,
+            lane,
+            queued,
+            JobState::Running {
+                started: ago(started),
+            },
+        )
+    };
+    let ok = Exit::Exited { code: 0 };
+    vec![
+        named(
+            "reading-list",
+            "cargo build",
+            running("reading-list", Lane::Normal, 300, 290),
+        ),
+        named(
+            "triage",
+            "cargo nextest run",
+            running("api-tests", Lane::Normal, 250, 200),
+        ),
+        named(
+            "triage",
+            "mise run lint",
+            past("triage", Lane::Normal, 540, 530, 430, ok),
+        ),
+        named(
+            "",
+            "cargo doc",
+            past("crumbkit-docs", Lane::Normal, 470, 460, 390, ok),
+        ),
+        named(
+            "deadband-hist",
+            "cargo nextest run",
+            past(
+                "suite",
+                Lane::Normal,
+                420,
+                400,
+                250,
+                Exit::Exited { code: 1 },
+            ),
+        ),
+        named(
+            "starmap-fix",
+            "cargo clippy",
+            running("lint", Lane::Fast, 150, 140),
+        ),
+        named("board-sync", "cargo test", waiting("cargo", 110)),
+        named("", "tool", waiting("tool", 40)),
+    ]
+}
+
+/// Returns a model whose daemon held nothing for ten minutes and whose
+/// last reply holds `jobs`, with the time of that reply.
+fn open_model(jobs: Vec<JobRecord>) -> (Model, Instant) {
+    let mut model = Model::new(NonZeroUsize::new(CORES));
+    let now = Instant::now() + secs(600);
+    for age in (0..=599).rev() {
+        let reply = Timeline {
+            up: ago(100_000 - age),
+            jobs: if age == 0 { jobs.clone() } else { Vec::new() },
+            hidden: 0,
+            held: None,
+            busiest: None,
+            unreadable: false,
+        };
+        model.observe(now - secs(age), Ok(reply), Some(6.4));
+    }
+    (model, now)
+}
+
+#[test]
+fn jobs_from_several_workspaces_match_the_mockup_at_120_columns() {
+    let (model, now) = open_model(workspace_jobs());
+    assert_golden(
+        &render(&model, now, 120, 22),
+        include_str!("../../../tests/golden/top/workspaces.txt"),
+    );
+}
+
+#[test]
+fn jobs_from_several_workspaces_match_the_mockup_at_80_columns() {
+    let (model, now) = open_model(workspace_jobs());
+    assert_golden(
+        &render(&model, now, 80, 16),
+        include_str!("../../../tests/golden/top/workspaces-min.txt"),
+    );
+}
+
+#[test]
+fn the_label_is_bold_and_the_short_command_and_workspace_are_not() {
+    let (model, now) = open_model(vec![named(
+        "triage",
+        "cargo nextest run",
+        waiting("api-tests", 30),
+    )]);
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 120, 22));
+    draw(&mut buffer, &model, now);
+    let row = (0..120)
+        .map(|x| buffer[(x, 3)].symbol())
+        .collect::<String>();
+    assert!(
+        row.starts_with(" triage           api-tests  cargo nextest …"),
+        "{row}"
+    );
+    let label = &buffer[(18, 3)];
+    let short = &buffer[(29, 3)];
+    let workspace = &buffer[(1, 3)];
+    assert!(label.modifier.contains(Modifier::BOLD));
+    assert!(!short.modifier.contains(Modifier::BOLD));
+    assert!(!workspace.modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn a_long_job_name_is_cut_inside_its_column() {
+    let (model, now) = open_model(vec![named(
+        "a-workspace-name-longer-than-sixteen",
+        "cargo nextest run",
+        waiting("a-label-long-enough-to-fill-the-column", 30),
+    )]);
+    let text = render(&model, now, 120, 22);
+    let row = text.lines().nth(3).expect("a row");
+    assert!(
+        row.starts_with(" a-workspace-nam… a-label-long-enough-to-fi…  "),
+        "{row}"
+    );
 }
 
 fn past(label: &str, lane: Lane, queued: u64, started: u64, ended: u64, exit: Exit) -> JobRecord {
@@ -440,7 +590,7 @@ fn a_label_cut_to_its_column_ends_in_an_ellipsis() {
     };
     model.observe(now, Ok(reply), None);
     let text = render(&model, now, 120, 28);
-    assert!(text.contains(&format!(" {}… ", "a".repeat(19))), "{text}");
+    assert!(text.contains(&format!(" {}… ", "a".repeat(25))), "{text}");
 }
 
 /// Returns the text of a model whose one job has the longest state.
@@ -545,9 +695,15 @@ fn incident(columns: u16, lines: u16) -> String {
 fn a_stuck_job_is_listed_first_with_its_quiet_time() {
     let screen = incident(120, 28);
     let lines: Vec<_> = screen.lines().collect();
-    assert!(lines[3].starts_with(" board-cli-test "), "{screen}");
+    assert!(
+        lines[3].trim_start().starts_with("board-cli-test "),
+        "{screen}"
+    );
     assert!(lines[3].ends_with("stuck 46m"), "{screen}");
-    assert!(lines[4].starts_with(" mirror-git-dir "), "{screen}");
+    assert!(
+        lines[4].trim_start().starts_with("mirror-git-dir "),
+        "{screen}"
+    );
     assert!(lines[4].ends_with("stuck 7m"), "{screen}");
 }
 
@@ -555,11 +711,11 @@ fn a_stuck_job_is_listed_first_with_its_quiet_time() {
 fn a_stuck_job_shows_the_no_activity_bar_from_its_last_activity() {
     let screen = incident(120, 28);
     let lines: Vec<_> = screen.lines().collect();
-    // A quiet time over the window fills the axis.
-    assert_eq!(lines[3].matches('▓').count(), 80, "{screen}");
-    // 420 seconds of a 600 second window on 80 columns is 56 columns.
+    // A quiet time over the window fills the axis of 57 columns.
+    assert_eq!(lines[3].matches('▓').count(), 57, "{screen}");
+    // 420 seconds of a 600 second window on 57 columns is 39.9 columns.
     let bars = lines[4].matches('▓').count();
-    assert!((56..=57).contains(&bars), "{bars}: {screen}");
+    assert!((39..=40).contains(&bars), "{bars}: {screen}");
     assert!(lines[4].contains("█▓"), "{screen}");
     assert_eq!(lines[5].matches('▓').count(), 0, "{screen}");
 }
@@ -601,9 +757,18 @@ fn the_legend_gains_no_activity_while_a_row_shows_it() {
 fn the_smallest_terminal_keeps_stuck_jobs_and_the_whole_legend() {
     let screen = incident(80, 16);
     let lines: Vec<_> = screen.lines().collect();
-    assert!(lines[3].starts_with(" board-cli-test "), "{screen}");
-    assert!(lines[4].starts_with(" mirror-git-dir "), "{screen}");
-    assert!(lines[5].starts_with(" starmap-check "), "{screen}");
+    assert!(
+        lines[3].trim_start().starts_with("board-cli-test "),
+        "{screen}"
+    );
+    assert!(
+        lines[4].trim_start().starts_with("mirror-git-dir "),
+        "{screen}"
+    );
+    assert!(
+        lines[5].trim_start().starts_with("starmap-check "),
+        "{screen}"
+    );
     assert!(lines[6].starts_with(" 2 jobs show no activity"), "{screen}");
     assert!(screen.contains("▓ no activity"), "{screen}");
     assert!(lines[0].contains("2 STUCK"), "{screen}");
@@ -633,7 +798,8 @@ fn a_recovered_job_keeps_its_period_and_runs_again() {
     let screen = render(&model, now, 120, 28);
     let lines: Vec<_> = screen.lines().collect();
     assert!(lines[3].ends_with("run 50m"), "{screen}");
-    assert_eq!(lines[3].matches('▓').count(), 20, "{screen}");
+    // 150 seconds of a 600 second window on 57 columns is 14.25 columns.
+    assert_eq!(lines[3].matches('▓').count(), 14, "{screen}");
     assert!(screen.contains("▓ no activity"), "{screen}");
     assert!(!screen.contains("STUCK"), "{screen}");
     assert!(!screen.contains("show no activity"), "{screen}");
@@ -656,7 +822,8 @@ fn an_ended_job_keeps_its_period_while_it_is_in_the_window() {
     let (model, now) = model_with(&full_history(), 5000, vec![job], None, false);
     let screen = render(&model, now, 120, 28);
     let lines: Vec<_> = screen.lines().collect();
-    assert_eq!(lines[3].matches('▓').count(), 29, "{screen}");
+    // 220 seconds of a 600 second window on 57 columns is 20.9 columns.
+    assert_eq!(lines[3].matches('▓').count(), 21, "{screen}");
     assert!(lines[3].contains("ok 6m"), "{screen}");
 }
 
@@ -677,8 +844,8 @@ fn a_stuck_row_is_drawn_in_red() {
     let (model, now) = model_with(&full_history(), 5000, incident_jobs(), syspolicyd(), false);
     let mut buffer = Buffer::empty(Rect::new(0, 0, 120, 28));
     draw(&mut buffer, &model, now);
-    assert_eq!(buffer[(30, 3)].symbol(), "▓");
-    assert_eq!(buffer[(30, 3)].fg, super::RED);
+    assert_eq!(buffer[(50, 3)].symbol(), "▓");
+    assert_eq!(buffer[(50, 3)].fg, super::RED);
     assert_eq!(buffer[(106, 3)].fg, super::RED);
 }
 

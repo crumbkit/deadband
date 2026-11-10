@@ -1,5 +1,6 @@
 //! What a job's arrival tells: the kind and the option names of its command
-//! line, and the checkout that its working directory lies in.
+//! line, and the checkout and the workspace that its working directory lies
+//! in.
 //!
 //! The kind rule names no tool in code. It keeps the program's file name, and
 //! keeps subcommand words only for the programs that the config's
@@ -13,10 +14,20 @@ use std::io::Read as _;
 use std::path::Path;
 
 use super::now_ms;
-use crate::protocol::Job;
+use crate::protocol::{Job, Label};
 
 /// The most bytes of a `.git` file that the daemon reads.
 const GIT_FILE_BYTES: u64 = 4096;
+
+/// The name of the file that marks a workspace directory. A tool that makes
+/// workspaces, such as mxv, writes it, and the workspace is the name of the
+/// directory that holds it.
+pub const WORKSPACE_MARKER: &str = ".deadband-workspace";
+
+/// The most directories that the walk up from a job's working directory
+/// visits, the working directory included. A marker or a `.git` above them
+/// is not found, and the job has no workspace or checkout.
+const MAX_DEPTH: usize = 64;
 
 /// The most subcommand words that the kind of a listed tool keeps.
 const SUBCOMMANDS: usize = 2;
@@ -129,24 +140,49 @@ pub struct Place {
     /// the checkout, or `None` when `warm_dirs` is empty or the job is
     /// outside git.
     pub warm: Option<bool>,
+    /// The name of the nearest directory at or above the working directory
+    /// that holds [`WORKSPACE_MARKER`] as a regular file, or `None` when no
+    /// such directory is found.
+    pub workspace: Option<Label>,
 }
 
 impl Place {
     /// Walks up from `cwd` to the first directory that holds `.git`, and
-    /// looks for `warm_dirs` under it. A path that is relative or cannot be
-    /// read gives an empty place. This call reads the disk, so the daemon
-    /// makes it before it takes the queue lock.
+    /// looks for `warm_dirs` under it, and to the first directory that holds
+    /// [`WORKSPACE_MARKER`]. The walk visits at most 64 directories. A path
+    /// that is relative or cannot be read gives an empty place. This call
+    /// reads the disk, so the daemon makes it before it takes the queue
+    /// lock.
     #[must_use]
     pub fn find(cwd: &Path, warm_dirs: &[String]) -> Self {
         if !cwd.is_absolute() {
             return Self::default();
         }
-        let found = cwd.ancestors().find_map(|directory| {
-            let metadata = fs::symlink_metadata(directory.join(".git")).ok()?;
-            Some((directory, metadata.is_file()))
-        });
+        let mut found = None;
+        let mut workspace = None;
+        for directory in cwd.ancestors().take(MAX_DEPTH) {
+            if found.is_none()
+                && let Ok(metadata) = fs::symlink_metadata(directory.join(".git"))
+            {
+                found = Some((directory, metadata.is_file()));
+            }
+            // Only a regular file counts, and the daemon never opens it. A
+            // later tool could have the daemon read a name from the file.
+            if workspace.is_none()
+                && fs::symlink_metadata(directory.join(WORKSPACE_MARKER))
+                    .is_ok_and(|metadata| metadata.is_file())
+            {
+                workspace = final_name(directory).map(|name| Label::new(&name));
+            }
+            if found.is_some() && workspace.is_some() {
+                break;
+            }
+        }
         let Some((root, linked)) = found else {
-            return Self::default();
+            return Self {
+                workspace,
+                ..Self::default()
+            };
         };
         let checkout = final_name(root);
         let repo = linked
@@ -162,6 +198,7 @@ impl Place {
             repo,
             checkout,
             warm,
+            workspace,
         }
     }
 }

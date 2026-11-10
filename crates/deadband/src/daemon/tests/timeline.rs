@@ -13,7 +13,7 @@ use crate::probe::Pressure;
 use crate::protocol::{Exit, JobRecord, JobState, Label, Reply, Request, Timeline};
 
 /// Asks the daemon at `path` for its timeline.
-fn timeline(path: &Path) -> Timeline {
+pub(super) fn timeline(path: &Path) -> Timeline {
     let mut client = Client::connect(path);
     client.send(&Request::Timeline);
     match client.reply() {
@@ -25,7 +25,7 @@ fn timeline(path: &Path) -> Timeline {
 /// Asks the daemon until `done` accepts its timeline. The daemon records a
 /// job on the thread of that job's connection, and each request is an
 /// observable round trip.
-fn timeline_until(path: &Path, done: impl Fn(&Timeline) -> bool) -> Timeline {
+pub(super) fn timeline_until(path: &Path, done: impl Fn(&Timeline) -> bool) -> Timeline {
     let begun = Instant::now();
     loop {
         let timeline = timeline(path);
@@ -42,7 +42,7 @@ fn labels(timeline: &Timeline) -> Vec<&str> {
 }
 
 /// Returns the one row labelled `label`.
-fn row<'a>(timeline: &'a Timeline, label: &str) -> &'a JobRecord {
+pub(super) fn row<'a>(timeline: &'a Timeline, label: &str) -> &'a JobRecord {
     timeline
         .jobs
         .iter()
@@ -51,7 +51,7 @@ fn row<'a>(timeline: &'a Timeline, label: &str) -> &'a JobRecord {
 }
 
 /// Reports whether `timeline` has a row of `label` that has ended.
-fn ended(timeline: &Timeline, label: &str) -> bool {
+pub(super) fn ended(timeline: &Timeline, label: &str) -> bool {
     timeline.jobs.iter().any(|row| {
         row.label.as_str() == label
             && matches!(row.state, JobState::Finished { .. } | JobState::Left { .. })

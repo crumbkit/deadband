@@ -13,13 +13,14 @@ use std::time::Duration;
 use crumbkit::Sink;
 
 use super::{EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_FOUND, EXIT_NOT_STARTED, Machine, run_to};
-use crate::admit::{GIB, Lane};
+use crate::admit::{GIB, Hold, Lane};
 use crate::daemon::{Log, Settings, bind, serve};
 use crate::environment::Environment;
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
 use crate::probe::{ProcessUse, TreeUnreadable};
 use crate::protocol::{
-    Exit, Job, JobState, Jobs, OutsideJobs, Reply, Request, StuckJob, read_line, write_line,
+    Exit, Job, JobState, Jobs, Label, OutsideJobs, Reply, Request, Short, StuckJob, read_line,
+    write_line,
 };
 use crate::testing::{TestSocket, socket_path};
 
@@ -144,6 +145,8 @@ fn ask(socket: &Path, label: &str) -> (UnixStream, Reply) {
         lane: Lane::Normal,
         watched: false,
         cwd: None,
+        workspace: None,
+        short: None,
     };
     write_line(&mut stream, &Request::Ask(job)).expect("the request writes");
     let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
@@ -180,8 +183,8 @@ fn status_lists_the_daemons_running_and_waiting_jobs() {
         out.ends_with(
             "daemon: 1 running, 1 waiting, at most 1 at once\n\
              tests waits because: the daemon already runs 1 job, its most at once\n\
-             running: build (pid 5): make build\n\
-             waiting: tests (pid 5): make tests\n"
+             running: build (pid 5): make\n\
+             waiting: tests (pid 5): make\n"
         ),
         "{out}"
     );
@@ -211,7 +214,7 @@ fn status_prints_no_reason_once_the_waiting_job_has_started() {
 fn status_with_json_prints_the_sample_and_the_daemon_in_the_status_document() {
     let (code, out, err) = Test::new(Fixed).run(&["status", "--json"]);
     assert_eq!(code, 0, "{err}");
-    assert!(out.contains(r#""schema":"deadband/status/v1""#), "{out}");
+    assert!(out.contains(r#""schema":"deadband/status/v2""#), "{out}");
     assert!(out.contains(r#""load_1m":4.25"#), "{out}");
     assert!(out.contains(r#""memory_pressure":"normal""#), "{out}");
     assert!(out.contains(r#""swap_used_bytes":12168724480"#), "{out}");
@@ -577,7 +580,114 @@ fn listed(label: &str, pid: u32) -> Job {
         lane: Lane::Normal,
         watched: true,
         cwd: None,
+        workspace: None,
+        short: None,
     }
+}
+
+/// Returns a job from a daemon that sends a workspace and a short command.
+fn shown(label: &str, pid: u32, workspace: Option<&str>, short: &str) -> Job {
+    Job {
+        command: "tool --token s3cr3t deploy".to_owned(),
+        workspace: workspace.map(Label::new),
+        short: Some(Short::new(short)),
+        ..listed(label, pid)
+    }
+}
+
+/// Returns the jobs of a daemon that sends workspaces and short commands.
+fn shown_jobs() -> Jobs {
+    Jobs {
+        running: vec![
+            shown("reading-list", 11, Some("reading-list"), "cargo build"),
+            shown("api-tests", 22, Some("triage"), "cargo nextest run"),
+            shown("crumbkit-docs", 33, None, "cargo doc"),
+        ],
+        waiting: vec![
+            shown("cargo", 44, Some("board-sync"), "cargo test"),
+            shown("tool", 55, None, "tool"),
+            shown("script", 66, Some("triage"), ""),
+        ],
+        held: Some(Hold::Full { max_jobs: 4 }),
+        ..running_jobs()
+    }
+}
+
+#[test]
+fn status_names_each_job_by_workspace_and_label_and_ends_with_its_short_command() {
+    let test = Test::new(Fixed);
+    answer_status(&test, shown_jobs());
+    let (code, out, err) = test.run(&["status"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        format!(
+            "{STATUS_TOP}daemon: 3 running, 3 waiting, at most 4 at once\n\
+             board-sync waits because: the daemon already runs 4 jobs, its most at once\n\
+             running: reading-list (pid 11): cargo build\n\
+             running: triage · api-tests (pid 22): cargo nextest run\n\
+             running: crumbkit-docs (pid 33): cargo doc\n\
+             waiting: board-sync (pid 44): cargo test\n\
+             waiting: tool (pid 55): tool\n\
+             waiting: triage · script (pid 66)\n"
+        )
+    );
+    assert!(!out.contains("s3cr3t"), "{out}");
+}
+
+#[test]
+fn status_names_a_stuck_job_as_its_running_line_does() {
+    let test = Test::new(Fixed);
+    answer_status(
+        &test,
+        Jobs {
+            stuck: vec![StuckJob {
+                label: "api-tests".to_owned(),
+                pid: 22,
+                quiet_seconds: 120,
+            }],
+            ..shown_jobs()
+        },
+    );
+    let (_, out, _) = test.run(&["status"]);
+    assert!(
+        out.contains("\nstuck: triage · api-tests (pid 22): no CPU"),
+        "{out}"
+    );
+}
+
+#[test]
+fn status_with_json_gives_each_job_its_workspace_and_short_command_and_no_command_line() {
+    let test = Test::new(Fixed);
+    answer_status(&test, shown_jobs());
+    let (_, out, _) = test.run(&["status", "--json"]);
+    let value: serde_json::Value = serde_json::from_str(&out).expect("JSON");
+    assert_eq!(value["schema"], "deadband/status/v2");
+    let job = &value["data"]["daemon"]["running"][1];
+    assert_eq!(
+        job,
+        &serde_json::json!({
+            "label": "api-tests",
+            "workspace": "triage",
+            "short": "cargo nextest run",
+            "pid": 22,
+            "lane": "normal",
+            "watched": true,
+        })
+    );
+    assert!(!out.contains("s3cr3t"), "{out}");
+}
+
+#[test]
+fn status_with_json_from_an_older_daemon_leaves_out_the_command_line() {
+    let test = Test::new(Fixed);
+    answer_status(&test, running_jobs());
+    let (_, out, _) = test.run(&["status", "--json"]);
+    let value: serde_json::Value = serde_json::from_str(&out).expect("JSON");
+    let job = &value["data"]["daemon"]["running"][0];
+    assert_eq!(job["label"], "first");
+    assert!(job.get("command").is_none(), "{job}");
+    assert!(job.get("short").is_none(), "{job}");
 }
 
 fn running_jobs() -> Jobs {
@@ -745,7 +855,7 @@ fn commands_list_refuses_a_path_that_names_no_command() {
 fn schemas_list_lists_the_status_document_and_the_config_file() {
     let (code, out, err) = Test::new(Fixed).run(&["schemas", "list"]);
     assert_eq!(code, 0, "{err}");
-    assert!(out.contains("deadband/status/v1"), "{out}");
+    assert!(out.contains("deadband/status/v2"), "{out}");
     assert!(out.contains("deadband/config/v1"), "{out}");
 }
 

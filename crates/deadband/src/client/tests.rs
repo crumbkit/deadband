@@ -30,6 +30,8 @@ fn job() -> Job {
         lane: Lane::Normal,
         watched: false,
         cwd: None,
+        workspace: None,
+        short: None,
     }
 }
 

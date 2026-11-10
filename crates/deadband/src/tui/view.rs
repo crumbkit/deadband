@@ -8,10 +8,12 @@ use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 
-use super::model::{Absence, Axis, Gate, Model, Phase, Row, Status};
-use crate::protocol::{Exit, Label, OutsideJobs};
+use self::row::{Columns, draw_row};
+use super::model::{Absence, Axis, Gate, Model, Phase};
+use crate::protocol::{Label, OutsideJobs};
 
 mod graph;
+mod row;
 #[cfg(test)]
 mod tests;
 
@@ -28,15 +30,11 @@ const RED: Color = Color::Rgb(0xf4, 0x66, 0x5f);
 const VIOLET: Color = Color::Rgb(0xa8, 0x97, 0xf5);
 const INK: Color = Color::Rgb(0x06, 0x18, 0x1f);
 
-/// The column where the time axis starts.
-const AXIS_X: u16 = 24;
 /// The columns right of the time axis: two for the end marks and the gap,
 /// and fourteen for the status. The longest status is `signal 64 999h`. A
 /// job that ran over 999 hours, or a client that reports a code or signal
 /// outside what the system can give, loses the end of its text at the edge.
 const RIGHT: u16 = 16;
-/// The widest label. The column after it holds the fast-lane sign.
-const LABEL_WIDTH: usize = 20;
 /// The first line of the rows.
 const ROWS_Y: u16 = 3;
 /// The lines below the rows: the rule, the graph, the strip, the legend,
@@ -96,20 +94,22 @@ pub(super) fn draw(buffer: &mut Buffer, model: &Model, now: Instant) {
         too_small(buffer, columns, lines);
         return;
     }
-    let width = columns - AXIS_X - RIGHT;
+    let left = Columns::of(columns);
+    let axis_x = left.axis_x();
+    let width = columns - axis_x - RIGHT;
     let axis = Axis::new(width);
     let rows_end = lines - BOTTOM;
     let note = activity_note(model);
     let capacity = usize::from(rows_end - ROWS_Y) - usize::from(note.is_some());
     let rows = model.rows(now, axis, capacity);
     header(buffer, model, &phase, rows.unseen);
-    axis_labels(buffer, axis, width);
+    axis_labels(buffer, axis, width, left);
     if let Phase::DaemonDown(absence) = phase {
         no_daemon(buffer, absence, rows_end);
     } else {
-        grid(buffer, axis, rows_end);
+        grid(buffer, axis, rows_end, axis_x);
         for (y, row) in (ROWS_Y..rows_end).zip(&rows.rows) {
-            draw_row(buffer, y, row, width);
+            draw_row(buffer, y, row, width, left);
         }
         if let Some((text, style)) = note {
             put(
@@ -134,7 +134,7 @@ pub(super) fn draw(buffer: &mut Buffer, model: &Model, now: Instant) {
         model,
         now,
         rows_end + 1,
-        (AXIS_X, width),
+        (axis_x, width),
         no_activity,
     );
     reason(buffer, model, &phase, lines - 2);
@@ -255,85 +255,32 @@ fn header(buffer: &mut Buffer, model: &Model, phase: &Phase, unseen: usize) {
     put(buffer, pill_x, 0, &text, bold(INK).bg(color));
 }
 
-/// Returns the screen column of something `minutes` old on `axis`.
-fn minute_x(axis: Axis, minutes: u64) -> u16 {
+/// Returns the screen column of something `minutes` old on `axis`, which
+/// starts at column `axis_x`.
+fn minute_x(axis: Axis, minutes: u64, axis_x: u16) -> u16 {
     let age = Duration::from_secs(minutes * 60);
-    u16::try_from(i64::from(AXIS_X) + axis.column(age)).unwrap_or(AXIS_X)
+    u16::try_from(i64::from(axis_x) + axis.column(age)).unwrap_or(axis_x)
 }
 
 /// Draws the line that names the columns and the minutes.
-fn axis_labels(buffer: &mut Buffer, axis: Axis, width: u16) {
-    put(buffer, 1, 2, "job", fg(DIM));
+fn axis_labels(buffer: &mut Buffer, axis: Axis, width: u16, left: Columns) {
+    let axis_x = left.axis_x();
+    put(buffer, 1, 2, "workspace", fg(DIM));
+    put(buffer, left.job_x(), 2, "job", fg(DIM));
     for minutes in MINUTES {
         let label = format!("-{minutes}m");
-        put(buffer, minute_x(axis, minutes), 2, &label, fg(DIM));
+        put(buffer, minute_x(axis, minutes, axis_x), 2, &label, fg(DIM));
     }
-    put(buffer, AXIS_X + width - 3, 2, "now", fg(DIM));
-    put(buffer, AXIS_X + width + 2, 2, "state", fg(DIM));
+    put(buffer, axis_x + width - 3, 2, "now", fg(DIM));
+    put(buffer, axis_x + width + 2, 2, "state", fg(DIM));
 }
 
 /// Draws the faint line at each labelled minute.
-fn grid(buffer: &mut Buffer, axis: Axis, rows_end: u16) {
+fn grid(buffer: &mut Buffer, axis: Axis, rows_end: u16, axis_x: u16) {
     for minutes in MINUTES {
-        let x = minute_x(axis, minutes);
+        let x = minute_x(axis, minutes, axis_x);
         for y in ROWS_Y..rows_end {
             put(buffer, x, y, "│", fg(FAINT));
-        }
-    }
-}
-
-/// Draws one job's row.
-fn draw_row(buffer: &mut Buffer, y: u16, row: &Row, width: u16) {
-    let live = matches!(
-        row.status,
-        Status::Waiting(_) | Status::Running(_) | Status::Stuck(_)
-    );
-    let label_style = if live { bold(HI) } else { fg(DIM) };
-    put(buffer, 1, y, &fit(&row.label, LABEL_WIDTH), label_style);
-    let lane = if row.fast {
-        put(buffer, 21, y, "▲", fg(VIOLET));
-        VIOLET
-    } else {
-        TEAL
-    };
-    for column in row.waited.clone() {
-        put(buffer, AXIS_X + column, y, "░", fg(AMBER));
-    }
-    let glyph = if live { "█" } else { "▒" };
-    for column in row.ran.clone() {
-        put(buffer, AXIS_X + column, y, glyph, fg(lane));
-    }
-    for column in row.stuck.iter().flat_map(Clone::clone) {
-        put(buffer, AXIS_X + column, y, "▓", fg(RED));
-    }
-    let (text, color, sign) = status_text(row.status);
-    if let (Some(column), Some((sign, sign_color))) = (row.mark, sign) {
-        put(buffer, AXIS_X + column, y, sign, bold(sign_color));
-    }
-    let style = if matches!(row.status, Status::Stuck(_)) {
-        bold(color)
-    } else {
-        fg(color)
-    };
-    put(buffer, AXIS_X + width + 2, y, &text, style);
-}
-
-/// Returns the text at the right of a row, its colour, and the sign after
-/// the end of a job that has ended with the sign's colour.
-fn status_text(status: Status) -> (String, Color, Option<(&'static str, Color)>) {
-    match status {
-        Status::Waiting(age) => (format!("wait {}", short(age)), AMBER, None),
-        Status::Running(age) => (format!("run {}", short(age)), TEAL, None),
-        Status::Stuck(quiet) => (format!("stuck {}", short(quiet)), RED, None),
-        Status::Left { waited } => (format!("left {}", short(waited)), DIM, Some(("·", DIM))),
-        Status::Finished { exit, ran } => {
-            let (words, color, sign) = match exit {
-                Exit::Exited { code: 0 } => ("ok".to_owned(), DIM, ("✓", GREEN)),
-                Exit::Exited { code } => (format!("exit {code}"), RED, ("✗", RED)),
-                Exit::Signalled { signal } => (format!("signal {signal}"), RED, ("✗", RED)),
-                Exit::Lost => ("lost".to_owned(), AMBER, ("?", AMBER)),
-            };
-            (format!("{words} {}", short(ran)), color, Some(sign))
         }
     }
 }
