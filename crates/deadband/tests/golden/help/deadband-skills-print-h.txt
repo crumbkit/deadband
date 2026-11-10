@@ -1,0 +1,12 @@
+Print deadband's skill
+
+Usage: deadband skills print [OPTIONS]
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Examples:
+  deadband skills print
+
+Effects: read-only, closed-world.
+Global flags: --json. `deadband skills print --help` describes them.

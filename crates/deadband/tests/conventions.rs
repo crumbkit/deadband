@@ -66,6 +66,7 @@ const RECOVERIES: Recoveries<'_> = Recoveries::new(
 /// each check.
 const SUITE: Suite<'_> = Suite::new(|| (Cli::command(), TOOL))
     .allow(ALLOW)
+    .verbs(&["install", "check", "print"])
     .examples(EXAMPLES)
     .recoveries(RECOVERIES)
     .skip(

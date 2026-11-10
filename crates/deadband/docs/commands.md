@@ -14,6 +14,8 @@ Keep a busy machine usable while many heavy jobs compete for it
 - [`deadband top`](#deadband-top): Show the last ten minutes of jobs, load and holds in the terminal
 - [`deadband commands`](#deadband-commands): Explore deadband's commands
 - [`deadband schemas`](#deadband-schemas): Explore the JSON documents that deadband prints and the files it reads
+- [`deadband skills`](#deadband-skills): Give coding agents deadband's skill
+- [`deadband completion`](#deadband-completion): Set up deadband's completion in a shell
 
 ### Arguments
 
@@ -245,6 +247,218 @@ deadband schemas show deadband/config/v1
 
 - `id`: The document's id, such as `shelf/books-list/v1`.
 - `schema`: The document's 2020-12 JSON Schema.
+
+Effects: read-only, closed-world.
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+
+## `deadband skills`
+
+Give coding agents deadband's skill
+
+### Commands
+
+- [`deadband skills install`](#deadband-skills-install): Install deadband's skill into each agent skills directory that exists
+- [`deadband skills check`](#deadband-skills-check): Check that each installed copy of deadband's skill matches this deadband
+- [`deadband skills print`](#deadband-skills-print): Print deadband's skill
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+
+## `deadband skills install`
+
+Install deadband's skill into each agent skills directory that exists
+
+### Arguments
+
+- `--dir <DIR>`: Install into this skills directory in place of the agent skills directories
+- `--force`: Replace a file or a link that install did not write with the skill's own folder
+
+### Examples
+
+Install deadband's skill into each agent skills directory that exists.
+
+```sh
+deadband skills install
+```
+
+Install it, replacing a file or a link that install did not write.
+
+```sh
+deadband skills install --force
+```
+
+### Columns
+
+- `state`: What install did: failed, skipped, written or unchanged.
+- `dirs`: The skills directories that share this copy, as named. Directories that resolve to one place through a symbolic link share one copy.
+- `reason`: Why install skipped or failed, or what it replaced under --force, such as `linked to /src/shelf/skill`, or null.
+
+### Columns that `--long` adds
+
+- `path`: The SKILL.md file that install wrote or left, at its real path.
+
+Effects: additive, idempotent, closed-world.
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+
+## `deadband skills check`
+
+Check that each installed copy of deadband's skill matches this deadband
+
+### Arguments
+
+- `--dir <DIR>`: Check this skills directory in place of the agent skills directories
+
+### Examples
+
+Report each agent skills directory whose copy is missing or differs.
+
+```sh
+deadband skills check
+```
+
+### Columns
+
+- `state`: Whether the copy is the binary's: missing, differs, unreadable, linked or current.
+- `dirs`: The skills directories that share this copy, as named. Directories that resolve to one place through a symbolic link share one copy.
+- `reason`: Why the copy differs, cannot be read or is linked, such as `written by shelf 0.2.0` or `linked to /src/shelf/skill`, or null.
+
+### Columns that `--long` adds
+
+- `path`: The SKILL.md file that was checked, at its real path.
+
+Effects: read-only, closed-world.
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+
+## `deadband skills print`
+
+Print deadband's skill
+
+### Examples
+
+Print deadband's skill.
+
+```sh
+deadband skills print
+```
+
+Effects: read-only, closed-world.
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+
+## `deadband completion`
+
+Set up deadband's completion in a shell
+
+### Commands
+
+- [`deadband completion install`](#deadband-completion-install): Install deadband's completion where the shell loads it
+- [`deadband completion check`](#deadband-completion-check): Check that deadband's installed completion file matches this deadband
+- [`deadband completion print`](#deadband-completion-print): Print deadband's completion registration script for a shell
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+
+## `deadband completion install`
+
+Install deadband's completion where the shell loads it
+
+### Arguments
+
+- `--shell <SHELL>`: Install for this shell in place of the one that SHELL names. One of `bash`, `elvish`, `fish`, `powershell`, `zsh`.
+- `--force`: Replace a file or a link that install did not write; a link's target stays as it is
+
+### Examples
+
+Install deadband's completion for fish.
+
+```sh
+deadband completion install --shell fish
+```
+
+Install it for zsh, replacing a file or a link that install did not write.
+
+```sh
+deadband completion install --shell zsh --force
+```
+
+### Columns
+
+- `state`: What install did: failed, skipped, written or unchanged.
+- `shell`: The shell: bash, elvish, fish, powershell or zsh.
+- `path`: The completion file that install wrote or left. When the file is a link to a file that install wrote, the path of that file.
+- `reason`: Why install skipped or failed, or what it replaced under --force, such as `linked to /src/shelf/shelf.fish`, or null.
+
+Effects: additive, idempotent, closed-world.
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+
+## `deadband completion check`
+
+Check that deadband's installed completion file matches this deadband
+
+### Arguments
+
+- `--shell <SHELL>`: Check the file of this shell in place of the one that SHELL names. One of `bash`, `elvish`, `fish`, `powershell`, `zsh`.
+
+### Examples
+
+Report zsh's completion file when it is missing or differs.
+
+```sh
+deadband completion check --shell zsh
+```
+
+### Columns
+
+- `state`: Whether the file holds the script that install writes: missing, differs, unreadable, linked or current.
+- `shell`: The shell: bash, elvish, fish, powershell or zsh.
+- `path`: The completion file that was checked. When the file is a link to a file that install wrote, the path of that file.
+- `reason`: Why the file differs, cannot be read or is linked, such as `linked to /src/shelf/shelf.fish`, or null.
+
+Effects: read-only, closed-world.
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+
+## `deadband completion print`
+
+Print deadband's completion registration script for a shell
+
+### Arguments
+
+- `--shell <SHELL>`: Print the script of this shell in place of the one that SHELL names. One of `bash`, `elvish`, `fish`, `powershell`, `zsh`.
+
+### Examples
+
+Print the registration script for fish.
+
+```sh
+deadband completion print --shell fish
+```
 
 Effects: read-only, closed-world.
 

@@ -1,0 +1,26 @@
+Give coding agents deadband's skill
+
+Usage: deadband skills [OPTIONS] <COMMAND>
+
+Commands:
+  install  Install deadband's skill into each agent skills directory that exists
+  check    Check that each installed copy of deadband's skill matches this deadband
+  print    Print deadband's skill
+
+Options:
+      --json
+          Print the result as a JSON document. The default prints text.
+
+      --fields <FIELD>
+          Print only these comma-separated fields, in this order. The default prints the compact columns.
+
+      --long
+          Add the long columns after the compact ones. The default prints only the compact columns.
+
+      --full
+          With --json, print every field of every row. The default prints only the fields of the columns.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Next: deadband skills <COMMAND> -h

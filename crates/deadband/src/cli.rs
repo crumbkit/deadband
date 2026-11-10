@@ -9,10 +9,12 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 use crumbkit::commands::COMMANDS_LIST;
-use crumbkit::help::{Effects, Example, FileFormat, Help, Leaf};
+use crumbkit::completion::{COMPLETION_CHECK, COMPLETION_INSTALL, COMPLETION_PRINT};
+use crumbkit::help::{Effects, Example, FileFormat, Goal, Group, Help, Leaf};
 use crumbkit::schemas::{SCHEMAS_LIST, SCHEMAS_SHOW};
 use crumbkit::tool::{Exit, Failures};
 use crumbkit::{Prose, Sink, Tool, ViewFlags};
+use crumbkit_skills::{SKILLS_CHECK, SKILLS_INSTALL, SKILLS_PRINT};
 
 use crate::admit::Lane;
 use crate::client::{self, ANSWER_WITHIN};
@@ -25,6 +27,7 @@ use crate::tui::{EXIT_INTERRUPTED, TOP_NOT_A_TERMINAL, TOP_TERMINAL_FAILED};
 
 mod commands;
 mod explore;
+mod setup;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -32,6 +35,7 @@ mod tests;
 use self::commands::Flagged;
 pub use self::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED, JOB_STUCK, JOB_UNREADABLE, NotStarted};
 pub use self::explore::{CommandsCommand, SchemasCommand};
+pub use self::setup::{CompletionCommand, SKILL, SkillsCommand};
 pub use self::status::{STATUS, ShownJob, Status};
 
 /// Keep a busy machine usable while many heavy jobs compete for it.
@@ -77,6 +81,18 @@ pub enum Command {
         /// The command to run.
         #[command(subcommand)]
         command: SchemasCommand,
+    },
+    /// Give coding agents deadband's skill.
+    Skills {
+        /// What to do with the skill.
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
+    /// Set up deadband's completion in a shell.
+    Completion {
+        /// What to do with the completion.
+        #[command(subcommand)]
+        command: CompletionCommand,
     },
 }
 
@@ -158,6 +174,18 @@ pub const EXIT_NOT_FOUND: u8 = 127;
 pub const TOOL: Tool = Tool::new()
     .help(
         Help::new()
+            .groups(&[Group::new(
+                &[],
+                &[
+                    Goal::new("Run a heavy job when the machine has room", &["run"]),
+                    Goal::new("See the machine and its jobs", &["status", "top"]),
+                    Goal::new("Admit jobs", &["daemon"]),
+                    Goal::new("Explore the commands", &["commands", "schemas"]),
+                    Goal::new("Install deadband's skill", &["skills"]),
+                    Goal::new("Set up shell completion", &["completion"]),
+                ],
+            )
+            .compact()])
             .leaves(&[
                 Leaf::new(&["status"])
                     .examples(&[
@@ -210,6 +238,54 @@ pub const TOOL: Tool = Tool::new()
                     )])
                     .document(SCHEMAS_SHOW)
                     .effects(Effects::read_only()),
+                Leaf::new(&["skills", "install"])
+                    .examples(&[
+                        Example::new(
+                            &[],
+                            "Install deadband's skill into each agent skills directory that exists",
+                        ),
+                        Example::new(
+                            &["--force"],
+                            "Install it, replacing a file or a link that install did not write",
+                        ),
+                    ])
+                    .effects(Effects::additive().idempotent())
+                    .document(SKILLS_INSTALL),
+                Leaf::new(&["skills", "check"])
+                    .examples(&[Example::new(
+                        &[],
+                        "Report each agent skills directory whose copy is missing or differs",
+                    )])
+                    .effects(Effects::read_only())
+                    .document(SKILLS_CHECK),
+                Leaf::new(&["skills", "print"])
+                    .examples(&[Example::new(&[], "Print deadband's skill")])
+                    .effects(Effects::read_only())
+                    .document(SKILLS_PRINT),
+                Leaf::new(&["completion", "install"])
+                    .examples(&[
+                        Example::new(&["--shell", "fish"], "Install deadband's completion for fish"),
+                        Example::new(
+                            &["--shell", "zsh", "--force"],
+                            "Install it for zsh, replacing a file or a link that install did not write",
+                        ),
+                    ])
+                    .effects(Effects::additive().idempotent())
+                    .document(COMPLETION_INSTALL),
+                Leaf::new(&["completion", "check"])
+                    .examples(&[Example::new(
+                        &["--shell", "zsh"],
+                        "Report zsh's completion file when it is missing or differs",
+                    )])
+                    .effects(Effects::read_only())
+                    .document(COMPLETION_CHECK),
+                Leaf::new(&["completion", "print"])
+                    .examples(&[Example::new(
+                        &["--shell", "fish"],
+                        "Print the registration script for fish",
+                    )])
+                    .effects(Effects::read_only())
+                    .document(COMPLETION_PRINT),
             ])
             .file_formats(&[FileFormat::new(CONFIG)]),
     )
@@ -255,6 +331,10 @@ pub fn run<P: Probe + Clone + Send + 'static>(machine: &Machine<P>) -> ExitCode 
         Command::Top => commands::top(&mut Sink::standard(), &mut output, machine),
         Command::Commands { command } => explore::commands(&mut Sink::standard(), output, &command),
         Command::Schemas { command } => explore::schemas(&mut Sink::standard(), output, &command),
+        Command::Skills { command } => setup::skills(&mut Sink::standard(), output, &command),
+        Command::Completion { command } => {
+            setup::completion(&mut Sink::standard(), output, &command)
+        }
     };
     crumbkit::events::ended(exit, None)
 }
@@ -279,6 +359,8 @@ pub fn run_to<O: Write, W: Write, T: Into<OsString>, P: Probe + Clone + Send + '
         Command::Top => commands::top(sink, &mut output, machine),
         Command::Commands { command } => explore::commands(sink, output, &command),
         Command::Schemas { command } => explore::schemas(sink, output, &command),
+        Command::Skills { command } => setup::skills(sink, output, &command),
+        Command::Completion { command } => setup::completion(sink, output, &command),
     }
 }
 

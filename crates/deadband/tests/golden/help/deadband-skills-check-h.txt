@@ -1,0 +1,15 @@
+Check that each installed copy of deadband's skill matches this deadband
+
+Usage: deadband skills check [OPTIONS]
+
+Options:
+      --dir <DIR>  Check this skills directory in place of the agent skills directories
+  -h, --help       Print help (see more with '--help')
+
+Examples:
+  deadband skills check
+
+Effects: read-only, closed-world.
+Rows: the default text lists only the rows that report a problem, and --long, --fields or --json lists every row.
+Global flags: --json, --fields <FIELD>, --long, --full. `deadband skills check --help` describes them.
+Next: deadband skills check --help explains each column.

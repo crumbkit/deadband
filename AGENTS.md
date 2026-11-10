@@ -17,6 +17,8 @@ cargo clippy --locked --workspace --all-targets --all-features
 cargo nextest run --locked --workspace --all-features
 cargo test --locked --doc --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+cargo crumbkit skill check --bin deadband
+cargo crumbkit skill draft --bin deadband --check
 ```
 
 - Write the test first, named as a sentence (BASE-36).
