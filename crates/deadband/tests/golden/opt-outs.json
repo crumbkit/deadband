@@ -4,7 +4,7 @@
     {
       "rule": "exit-codes/shell-code",
       "applies_to": "deadband run",
-      "reason": "run passes on its job's exit status, and gives 126 and 127 their env and timeout meanings for a program that cannot start or is not found",
+      "reason": "run exits with 126 when the job's program is found but cannot start and with 127 when it is not found, the meanings that env and timeout give these codes",
       "costs": [
         "An agent cannot tell the code from the one a shell reports, such as 126 when the shell cannot run the tool or 127 when it cannot find it."
       ],
@@ -30,15 +30,6 @@
     },
     {
       "rule": "suite/skip",
-      "applies_to": "Check::CommandReference",
-      "reason": "The check runs `deadband commands list`, which deadband does not mount.",
-      "costs": [
-        "No test checks this check's rules anywhere in the tool, so a change that breaks one of them passes unnoticed and an agent meets the broken convention."
-      ],
-      "budget": null
-    },
-    {
-      "rule": "suite/skip",
       "applies_to": "Check::Twins",
       "reason": "The twin pairs of deadband's codes are not written yet; a later change writes them.",
       "costs": [
@@ -53,6 +44,11 @@
       "applies_to": "deadband status, deadband run, deadband daemon, deadband top",
       "declares": "Each command sits directly under the root as a verb.",
       "reason": "People type `deadband status`, `deadband run`, `deadband daemon` and `deadband top` as one verb, and deadband has no resource to put them under."
+    },
+    {
+      "declaration": "passes-on-exit",
+      "applies_to": "deadband run",
+      "declares": "The command exits with the exit code of the job."
     }
   ]
 }

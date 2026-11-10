@@ -32,3 +32,4 @@ Examples:
 Effects: additive, not idempotent, open-world.
 Writes: applies all items or none.
 Output: no result on standard output, and --json prints a failure as JSON.
+Exit code: the command passes on the exit code of the job.

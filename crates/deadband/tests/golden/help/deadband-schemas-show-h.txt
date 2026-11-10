@@ -1,0 +1,16 @@
+Print the JSON Schema of each document or file format
+
+Usage: deadband schemas show [OPTIONS] <ID>...
+
+Arguments:
+  <ID>...  The ids of the documents that `schemas list` lists, separated by spaces
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Examples:
+  deadband schemas show deadband/config/v1
+
+Effects: read-only, closed-world.
+Global flags: --json, --fields <FIELD>, --full. `deadband schemas show --help` describes them.
+Next: deadband schemas show --help explains each column.

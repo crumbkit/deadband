@@ -424,3 +424,41 @@ fn an_invalid_stuck_key_refuses_the_whole_config() {
     assert!(Config::parse("stuck_ignore = [\"(\"]\n").is_err());
     assert!(Config::parse("on_stuck = []\n").is_err());
 }
+
+/// A reclaim that ended at `at`, seen at `now`.
+fn reclaimed(at: std::time::SystemTime, now: std::time::SystemTime) -> Reclaimed {
+    Reclaimed {
+        at: crumbkit::Age::since(at, now),
+        reclaimer: "workspaces".to_owned(),
+        need: "memory=4G".to_owned(),
+        freed_bytes: Some(2 * GIB),
+        failed: None,
+    }
+}
+
+#[test]
+fn the_last_reclaim_says_how_long_ago_it_ended_in_text() {
+    let at = std::time::UNIX_EPOCH + Duration::from_secs(1_791_374_467);
+    let shown = reclaimed(at, at + Duration::from_secs(3 * 60 + 5)).to_string();
+    assert_eq!(
+        shown,
+        "last reclaim: workspaces asked for memory=4G 3m ago, freed 2 GiB"
+    );
+}
+
+#[test]
+fn the_last_reclaim_holds_the_time_it_ended_in_json_and_reads_it_back() {
+    let at = std::time::UNIX_EPOCH + Duration::from_secs(1_791_374_467);
+    let json = serde_json::to_value(reclaimed(at, at)).expect("the reclaim serializes");
+    assert_eq!(json["at"], "2026-10-07T12:01:07.000Z");
+    let read: Reclaimed = serde_json::from_value(json).expect("the reclaim reads back");
+    assert_eq!(read.at.at(), at);
+}
+
+#[test]
+fn a_reclaim_time_that_is_not_rfc_3339_is_refused() {
+    let at = std::time::UNIX_EPOCH;
+    let mut json = serde_json::to_value(reclaimed(at, at)).expect("the reclaim serializes");
+    json["at"] = "yesterday".into();
+    assert!(serde_json::from_value::<Reclaimed>(json).is_err());
+}

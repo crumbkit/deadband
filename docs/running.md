@@ -1,9 +1,15 @@
 # Running deadband
 
-deadband has four commands. `deadband daemon` admits jobs, `deadband run`
-asks the daemon before it starts a job, `deadband status` shows the
-machine and the daemon's jobs, and `deadband top` draws the last ten minutes
-in the terminal.
+deadband has four commands that do its work. `deadband daemon` admits jobs,
+`deadband run` asks the daemon before it starts a job, `deadband status`
+shows the machine and the daemon's jobs, and `deadband top` draws the last
+ten minutes in the terminal.
+
+Three more commands describe deadband to a program or an agent.
+`deadband commands list` lists every command with its arguments and
+examples. `deadband schemas list` lists the JSON documents that
+deadband prints and the format of its config file, and
+`deadband schemas show <ID>` prints the JSON Schema of each one.
 
 ## Installing
 
@@ -226,8 +232,10 @@ deadband never stops anything itself; the reclaimer decides what to stop.
 
 The daemon reads its config file once, when it starts. The file is
 `deadband/config.toml` in `$XDG_CONFIG_HOME`, or
-`~/.config/deadband/config.toml` when `XDG_CONFIG_HOME` is not set. Each
-`[[reclaim]]` table names one reclaimer:
+`~/.config/deadband/config.toml` when `XDG_CONFIG_HOME` is not set.
+`deadband schemas show deadband/config/v1` prints the file's JSON Schema,
+which lists every key with what it sets. Each `[[reclaim]]` table names one
+reclaimer:
 
 ```toml
 # All four settings are optional; these are the defaults.
@@ -309,10 +317,13 @@ example:
 {"data": [{"name": "idle-one", "freed": 5368709120}, {"name": "busy", "freed": 0}]}
 ```
 
-`deadband status` shows the last reclaim: when it ended, which reclaimer
-ran, the need it asked for, the bytes it reported freeing and why it
-failed, if it did. `deadband status --json` gives the same in the daemon's
-`reclaim` field.
+`deadband status` shows the last reclaim: which reclaimer ran, the need it
+asked for, how long ago it ended, the bytes it reported freeing and why it
+failed, if it did, such as
+`last reclaim: workspaces asked for memory=4G 3m ago, freed 2 GiB`.
+`deadband status --json` gives the same in the daemon's `reclaim` field,
+where `at` is the time the reclaim ended in RFC 3339 in UTC with
+milliseconds.
 
 ## Embedding deadband in a program
 

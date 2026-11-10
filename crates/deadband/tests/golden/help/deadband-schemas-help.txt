@@ -1,0 +1,25 @@
+Explore the JSON documents that deadband prints and the files it reads
+
+Usage: deadband schemas [OPTIONS] <COMMAND>
+
+Commands:
+  list  List the JSON documents that deadband prints and the files it reads
+  show  Print the JSON Schema of each document or file format
+
+Options:
+      --json
+          Print the result as a JSON document. The default prints text.
+
+      --fields <FIELD>
+          Print only these comma-separated fields, in this order. The default prints the compact columns.
+
+      --long
+          Add the long columns after the compact ones. The default prints only the compact columns.
+
+      --full
+          With --json, print every field of every row. The default prints only the fields of the columns.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Next: deadband schemas <COMMAND> -h

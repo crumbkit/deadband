@@ -13,10 +13,11 @@
 use std::fmt;
 use std::io;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
+use crumbkit::{Age, Document};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::stuck;
 
@@ -32,6 +33,15 @@ pub use self::worker::reclaim;
 /// directory.
 pub const CONFIG_FILE: &str = "config.toml";
 
+/// The format of the daemon's config file, which `deadband schemas show
+/// deadband/config/v1` prints as a JSON Schema.
+pub(crate) const CONFIG: Document<File> = Document::new(
+    "deadband",
+    "config",
+    1,
+    "The daemon's config.toml, which names the reclaimers and says when the daemon reclaims memory or disk and when a job counts as stuck.",
+);
+
 /// How long memory must stay short before the daemon reclaims, and how long
 /// it waits after a reclaim before the next, when the config sets none.
 pub const DEFAULT_AFTER: Duration = Duration::from_secs(60);
@@ -46,12 +56,14 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// One reclaimer: a name for the log and `deadband status`, and the command
 /// that the daemon runs with `--need` added.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Reclaimer {
-    /// The name the log and `deadband status` show.
+    /// The name that the daemon's log and `deadband status` show for the
+    /// reclaimer.
     pub name: String,
-    /// The program and its first arguments.
+    /// The program, as an absolute path, and its first arguments. The
+    /// daemon adds `--need` and, for a dry run, `--dry-run`.
     pub command: Vec<String>,
 }
 
@@ -86,27 +98,37 @@ impl Default for Config {
     }
 }
 
-/// The config file as it is written.
-#[derive(Deserialize)]
+/// The config file as it is written. Every key is optional.
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct File {
-    /// `Config::after`.
+pub(crate) struct File {
+    /// How long memory stays short before a reclaim, and the wait between
+    /// reclaims, as an age such as "60s". It is at least 10s, and 60s when
+    /// the file leaves it out.
     reclaim_after: Option<String>,
-    /// `Config::timeout`.
+    /// How long the daemon waits for one run of a reclaimer, as an age such
+    /// as "5m". It is more than 0, and 5m when the file leaves it out.
     reclaim_timeout: Option<String>,
-    /// `Config::memory`.
+    /// The memory each reclaim asks for, as a whole number with an optional
+    /// K, M, G or T, such as "4G". It is 4G when the file leaves it out.
     reclaim_memory: Option<String>,
-    /// `Config::disk`.
+    /// The disk each reclaim asks for, as a whole number with an optional
+    /// K, M, G or T, such as "20G". It is 20G when the file leaves it out.
     reclaim_disk: Option<String>,
-    /// `Config::reclaimers`.
+    /// The reclaimers, which the daemon asks in this order. Without one,
+    /// the daemon never reclaims.
     #[serde(default)]
     reclaim: Vec<Reclaimer>,
-    /// `stuck::Config::after`, or `"off"`.
+    /// How long a job's process tree shows no activity before the job
+    /// counts as stuck, as an age of at least 1m such as "5m", or "off" to
+    /// turn detection off. It is 5m when the file leaves it out.
     stuck_after: Option<String>,
-    /// `stuck::Config::ignore`.
+    /// Regular expressions. A job whose command line matches any of them is
+    /// not watched for being stuck.
     #[serde(default)]
     stuck_ignore: Vec<String>,
-    /// `stuck::Config::on_stuck`.
+    /// The program, as an absolute path, and its arguments, which the
+    /// daemon runs once each time a job becomes stuck.
     on_stuck: Option<Vec<String>>,
 }
 
@@ -297,8 +319,10 @@ impl Report {
 /// The last reclaim, as `deadband status` shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Reclaimed {
-    /// When the reclaim ended, in RFC 3339 form.
-    pub at: String,
+    /// When the reclaim ended, which JSON holds in RFC 3339 and text shows
+    /// as how long ago that was.
+    #[serde(deserialize_with = "ended_at")]
+    pub at: Age,
     /// The reclaimer's name.
     pub reclaimer: String,
     /// The `--need` that the daemon asked for, such as `memory=4G`.
@@ -314,7 +338,7 @@ impl fmt::Display for Reclaimed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "last reclaim: {} asked for {} at {}",
+            "last reclaim: {} asked for {} {} ago",
             self.reclaimer, self.need, self.at
         )?;
         if let Some(freed) = self.freed_bytes {
@@ -325,6 +349,14 @@ impl fmt::Display for Reclaimed {
         }
         Ok(())
     }
+}
+
+/// Reads the RFC 3339 time at which a reclaim ended, as the daemon wrote it,
+/// and measures its age now, when the client reads the daemon's answer.
+fn ended_at<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Age, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    let at = humantime::parse_rfc3339_weak(&text).map_err(serde::de::Error::custom)?;
+    Ok(Age::since(at, SystemTime::now()))
 }
 
 /// A number of bytes, which prints in whole MiB below 1 GiB and in whole

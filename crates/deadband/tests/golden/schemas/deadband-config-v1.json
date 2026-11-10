@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "deadband/config/v1",
+  "description": "The daemon's config.toml, which names the reclaimers and says when the daemon reclaims memory or disk and when a job counts as stuck.",
+  "$ref": "#/$defs/File",
+  "$defs": {
+    "File": {
+      "description": "The config file as it is written. Every key is optional.",
+      "type": "object",
+      "properties": {
+        "on_stuck": {
+          "description": "The program, as an absolute path, and its arguments, which the\ndaemon runs once each time a job becomes stuck.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "reclaim": {
+          "description": "The reclaimers, which the daemon asks in this order. Without one,\nthe daemon never reclaims.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Reclaimer"
+          }
+        },
+        "reclaim_after": {
+          "description": "How long memory stays short before a reclaim, and the wait between\nreclaims, as an age such as \"60s\". It is at least 10s, and 60s when\nthe file leaves it out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reclaim_disk": {
+          "description": "The disk each reclaim asks for, as a whole number with an optional\nK, M, G or T, such as \"20G\". It is 20G when the file leaves it out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reclaim_memory": {
+          "description": "The memory each reclaim asks for, as a whole number with an optional\nK, M, G or T, such as \"4G\". It is 4G when the file leaves it out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reclaim_timeout": {
+          "description": "How long the daemon waits for one run of a reclaimer, as an age such\nas \"5m\". It is more than 0, and 5m when the file leaves it out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stuck_after": {
+          "description": "How long a job's process tree shows no activity before the job\ncounts as stuck, as an age of at least 1m such as \"5m\", or \"off\" to\nturn detection off. It is 5m when the file leaves it out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stuck_ignore": {
+          "description": "Regular expressions. A job whose command line matches any of them is\nnot watched for being stuck.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Reclaimer": {
+      "description": "One reclaimer: a name for the log and `deadband status`, and the command\nthat the daemon runs with `--need` added.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "The program, as an absolute path, and its first arguments. The\ndaemon adds `--need` and, for a dry run, `--dry-run`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "description": "The name that the daemon's log and `deadband status` show for the\nreclaimer.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "command"
+      ]
+    }
+  }
+}

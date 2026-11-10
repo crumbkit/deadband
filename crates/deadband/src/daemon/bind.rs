@@ -8,7 +8,7 @@ use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
-use crumbkit::{Code, Failure, Recovery};
+use crumbkit::{Code, Failure};
 use rustix::fs::Mode;
 use rustix::process::{Resource, Rlimit, getrlimit, setrlimit, umask};
 
@@ -24,20 +24,35 @@ pub const SOCKET_UNUSABLE: Code = Code::new("deadband", "socket", "unusable");
 const PRIVATE: Mode = Mode::RWXG.union(Mode::RWXO);
 
 /// A daemon that could not start listening.
-#[derive(Debug)]
+#[derive(Debug, Failure)]
 pub enum Unbound {
     /// Another daemon holds the socket's lock.
+    #[failure(
+        code = DAEMON_RUNNING,
+        no_next_step = "one daemon serves each socket, and the running one already admits jobs",
+        field(path = path.to_string_lossy())
+    )]
     Running {
         /// The socket's path.
         path: PathBuf,
     },
     /// Something other than a socket is at the socket's path, and the
     /// daemon does not remove it.
+    #[failure(
+        code = SOCKET_UNUSABLE,
+        hint = "make the socket's directory exist and be writable, and remove what is at its path, or name another path in DEADBAND_SOCKET",
+        field(path = path.to_string_lossy())
+    )]
     NotSocket {
         /// The socket's path.
         path: PathBuf,
     },
     /// The socket or its lock could not be made.
+    #[failure(
+        code = SOCKET_UNUSABLE,
+        hint = "make the socket's directory exist and be writable, and remove what is at its path, or name another path in DEADBAND_SOCKET",
+        field(path = path.to_string_lossy())
+    )]
     Socket {
         /// The socket's path.
         path: PathBuf,
@@ -67,26 +82,6 @@ impl fmt::Display for Unbound {
 }
 
 impl std::error::Error for Unbound {}
-
-impl Failure for Unbound {
-    fn code(&self) -> &'static Code {
-        match self {
-            Self::Running { .. } => &DAEMON_RUNNING,
-            Self::NotSocket { .. } | Self::Socket { .. } => &SOCKET_UNUSABLE,
-        }
-    }
-
-    fn recovery(&self) -> Recovery {
-        match self {
-            Self::Running { .. } => Recovery::none(
-                "one daemon serves each socket, and the running one already admits jobs",
-            ),
-            Self::NotSocket { .. } | Self::Socket { .. } => Recovery::none(
-                "the socket's directory must exist and be writable, and nothing but a socket may be at its path; DEADBAND_SOCKET names another path",
-            ),
-        }
-    }
-}
 
 /// A listening socket and the lock that keeps a second daemon off it. The
 /// lock holds until the value is dropped.
