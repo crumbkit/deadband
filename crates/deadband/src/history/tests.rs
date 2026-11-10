@@ -649,6 +649,39 @@ fn a_directory_that_cannot_be_made_is_logged_once_and_the_recovery_is_logged_onc
     assert_eq!(lines_of(&state.join(FILE)).len(), 1);
 }
 
+#[test]
+fn a_writer_that_failed_and_then_finds_the_lock_held_does_not_say_it_writes_again() {
+    let scratch = Scratch::new();
+    let blocker = scratch.path().join("blocker");
+    write_file(&blocker, "").expect("the file writes");
+    let state = blocker.join("deadband");
+    let (mut second, log) = writer(&state, 1024 * 1024);
+    second.append(&machine(1));
+    std::fs::remove_file(&blocker).expect("the file goes");
+    let (mut first, _) = writer(&state, 1024 * 1024);
+    first.append(&machine(2));
+    second.append(&machine(3));
+    let said = logged(&log);
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said[0].contains("could not write"), "{said:?}");
+    assert!(said[1].contains("another daemon"), "{said:?}");
+}
+
+#[test]
+fn a_writer_that_failed_and_then_takes_the_lock_says_it_writes_again() {
+    let scratch = Scratch::new();
+    let blocker = scratch.path().join("blocker");
+    write_file(&blocker, "").expect("the file writes");
+    let state = blocker.join("deadband");
+    let (mut writer, log) = writer(&state, 1024 * 1024);
+    writer.append(&machine(1));
+    std::fs::remove_file(&blocker).expect("the file goes");
+    writer.append(&machine(2));
+    let said = logged(&log);
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said[1].contains("written again"), "{said:?}");
+}
+
 /// Returns a recorder whose channel holds `capacity` lines, its channel's
 /// end, and its log.
 fn recorder(

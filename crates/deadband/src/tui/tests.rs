@@ -212,3 +212,8 @@ fn a_failed_probe_leaves_a_gap_and_the_poll_still_counts() {
     assert_eq!(phase(&model), Phase::Live);
     assert_eq!(model.latest_load(), None);
 }
+
+#[test]
+fn the_no_daemon_screen_names_the_daemon_command_from_the_command_tree() {
+    assert_eq!(super::daemon_call(), "deadband daemon");
+}

@@ -233,13 +233,23 @@ impl Probe for System {
 }
 
 /// A reading of the machine that failed.
-#[derive(Debug)]
+#[derive(Debug, Failure)]
 pub enum Unreadable {
     /// deadband does not read the machine on this platform yet.
+    #[failure(
+        code = MACHINE_UNSUPPORTED,
+        no_next_step = "deadband has no probe for this platform yet"
+    )]
     Unsupported,
     /// `getloadavg` returned no 1-minute load average.
+    #[failure(code = MACHINE_UNREADABLE, recovery = Recovery::Retry)]
     Load,
     /// A `sysctlbyname` call failed.
+    #[failure(
+        code = MACHINE_UNREADABLE,
+        recovery = Recovery::Retry,
+        field(sysctl = name.to_string_lossy())
+    )]
     Sysctl {
         /// The sysctl's name.
         name: &'static CStr,
@@ -247,6 +257,11 @@ pub enum Unreadable {
         error: io::Error,
     },
     /// A sysctl value had a form the probe does not know.
+    #[failure(
+        code = MACHINE_UNREADABLE,
+        no_next_step = "this macOS gives the value in a form deadband does not know, so a retry reads the same form",
+        field(sysctl = name.to_string_lossy())
+    )]
     Value {
         /// The sysctl's name.
         name: &'static CStr,
@@ -275,22 +290,3 @@ impl fmt::Display for Unreadable {
 }
 
 impl std::error::Error for Unreadable {}
-
-impl Failure for Unreadable {
-    fn code(&self) -> &'static Code {
-        match self {
-            Self::Unsupported => &MACHINE_UNSUPPORTED,
-            Self::Load | Self::Sysctl { .. } | Self::Value { .. } => &MACHINE_UNREADABLE,
-        }
-    }
-
-    fn recovery(&self) -> Recovery {
-        match self {
-            Self::Unsupported => Recovery::none("deadband has no probe for this platform yet"),
-            Self::Value { .. } => Recovery::none(
-                "this macOS gives the value in a form deadband does not know, so a retry reads the same form",
-            ),
-            Self::Load | Self::Sysctl { .. } => Recovery::Retry,
-        }
-    }
-}

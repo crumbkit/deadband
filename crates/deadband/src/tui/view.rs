@@ -341,16 +341,17 @@ fn status_text(status: Status) -> (String, Color, Option<(&'static str, Color)>)
 /// Draws why no timeline can show, centred in the rows' area. A short
 /// area drops the blank lines.
 fn no_daemon(buffer: &mut Buffer, absence: Absence, rows_end: u16) {
+    let daemon = super::daemon_call();
     let (first, second, third) = match absence {
         Absence::NotRunning => (
             "The deadband daemon is not running.",
             "Jobs start at once while it is down.",
-            "Start it with: deadband daemon",
+            format!("Start it with: {daemon}"),
         ),
         Absence::MaybeOlder => (
             "The daemon closed the connection without answering.",
             "The daemon may be older than this command.",
-            "Stop the daemon that runs now, then run: deadband daemon",
+            format!("Stop the daemon that runs now, then run: {daemon}"),
         ),
     };
     let area = rows_end - ROWS_Y;
@@ -358,7 +359,7 @@ fn no_daemon(buffer: &mut Buffer, absence: Absence, rows_end: u16) {
         Some((first, bold(HI))),
         Some((second, fg(TEXT))),
         (area >= 6).then_some(("", fg(TEXT))),
-        Some((third, fg(TEAL))),
+        Some((third.as_str(), fg(TEAL))),
         (area >= 6).then_some(("", fg(TEXT))),
         Some(("Retrying every second…", fg(DIM))),
     ];

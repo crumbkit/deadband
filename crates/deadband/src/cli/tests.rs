@@ -709,3 +709,79 @@ fn status_as_json_lists_the_stuck_job_and_its_failure_code() {
     assert_eq!(value["data"]["daemon"]["stuck"][0]["label"], "second");
     assert_eq!(value["failures"][0]["code"], "deadband::job::stuck");
 }
+
+#[test]
+fn run_with_json_names_the_program_that_was_not_found_in_its_fields() {
+    let test = Test::new(Fixed);
+    let (code, out, err) = test.run(&["run", "--json", "--", "deadband-test-no-such-program"]);
+    assert_eq!(code, EXIT_NOT_FOUND);
+    let printed = out + &err;
+    assert!(
+        printed.contains(r#""fields":{"program":"deadband-test-no-such-program"}"#),
+        "{printed}"
+    );
+    assert!(
+        printed.contains(r#""recovery":{"kind":"hint""#),
+        "{printed}"
+    );
+}
+
+#[test]
+fn commands_list_lists_each_command_of_deadband() {
+    let (code, out, err) = Test::new(Fixed).run(&["commands", "list", "--json"]);
+    assert_eq!(code, 0, "{err}");
+    for command in ["deadband status", "deadband run", "deadband daemon"] {
+        assert!(out.contains(command), "{command}: {out}");
+    }
+}
+
+#[test]
+fn commands_list_refuses_a_path_that_names_no_command() {
+    let (code, _, err) = Test::new(Fixed).run(&["commands", "list", "no-such-command"]);
+    assert_ne!(code, 0, "{err}");
+}
+
+#[test]
+fn schemas_list_lists_the_status_document_and_the_config_file() {
+    let (code, out, err) = Test::new(Fixed).run(&["schemas", "list"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("deadband/status/v1"), "{out}");
+    assert!(out.contains("deadband/config/v1"), "{out}");
+}
+
+#[test]
+fn schemas_show_prints_the_keys_of_the_config_file() {
+    let (code, out, err) = Test::new(Fixed).run(&["schemas", "show", "deadband/config/v1"]);
+    assert_eq!(code, 0, "{err}");
+    for key in ["reclaim_after", "reclaim", "stuck_ignore", "on_stuck"] {
+        assert!(out.contains(key), "{key}: {out}");
+    }
+}
+
+#[test]
+fn schemas_show_refuses_a_document_deadband_does_not_print() {
+    let (code, _, err) = Test::new(Fixed).run(&["schemas", "show", "deadband/nothing/v1"]);
+    assert_ne!(code, 0, "{err}");
+}
+
+#[test]
+fn the_exit_codes_topic_says_run_passes_on_the_jobs_exit_code() {
+    let (code, out, err) = Test::new(Fixed).run(&["help", "exit-codes"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains("`deadband run` passes on the exit code of the job."),
+        "{out}"
+    );
+}
+
+#[cfg(feature = "tui")]
+#[test]
+fn the_exit_codes_topic_says_top_exits_130_on_ctrl_c() {
+    let (code, out, err) = Test::new(Fixed).run(&["help", "exit-codes"]);
+    assert_eq!(code, 0, "{err}");
+    let line = out
+        .lines()
+        .find(|line| line.trim_start().starts_with("130"))
+        .unwrap_or_else(|| panic!("no line for 130: {out}"));
+    assert!(line.contains("Ctrl-C"), "{out}");
+}

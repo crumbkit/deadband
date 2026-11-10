@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use crumbkit::{Code, Failure, Recovery, Run, Sink};
+use crumbkit::{Code, Failure, Field, Recovery, Run, Sink};
 
 use super::{DaemonArgs, Machine, RunArgs};
 use crate::admission::{self, Asked, Notices};
@@ -113,7 +113,11 @@ impl Failure for NotStarted {
     }
 
     fn recovery(&self) -> Recovery {
-        Recovery::none("the command after `--` must name a program on PATH that this user may run")
+        Recovery::hint("name a program on PATH that this user may run after `--`")
+    }
+
+    fn fields(&self) -> Vec<Field<'_>> {
+        vec![Field::new("program", self.program.to_string_lossy())]
     }
 }
 

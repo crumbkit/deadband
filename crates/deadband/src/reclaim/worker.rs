@@ -157,8 +157,9 @@ fn outcome(
     freed_bytes: Option<u64>,
     failed: Option<String>,
 ) -> Reclaimed {
+    let now = SystemTime::now();
     Reclaimed {
-        at: humantime::format_rfc3339_seconds(SystemTime::now()).to_string(),
+        at: crumbkit::Age::since(now, now),
         reclaimer: reclaimer.name.clone(),
         need: need.to_owned(),
         freed_bytes,

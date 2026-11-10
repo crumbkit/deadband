@@ -191,3 +191,24 @@ fn mach_ticks_scale_by_the_timebase() {
     );
     assert_eq!(super::sysctl::ticks(5, 1, 0), std::time::Duration::ZERO);
 }
+
+#[test]
+fn a_failed_sysctl_names_the_sysctl_in_its_fields() {
+    use crumbkit::{Failure, FieldValue};
+
+    let failure = parse_pressure(&3_i32.to_ne_bytes()).expect_err("level 3 is unknown");
+    let fields = failure.fields();
+    assert_eq!(fields.len(), 1, "{fields:?}");
+    assert_eq!(fields[0].name(), "sysctl");
+    assert_eq!(
+        fields[0].value(),
+        &FieldValue::from("kern.memorystatus_vm_pressure_level")
+    );
+}
+
+#[test]
+fn a_failed_load_reading_has_no_fields() {
+    use crumbkit::Failure;
+
+    assert!(Unreadable::Load.fields().is_empty());
+}

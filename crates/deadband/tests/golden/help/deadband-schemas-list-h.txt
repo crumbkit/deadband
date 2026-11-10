@@ -1,0 +1,15 @@
+List the JSON documents that deadband prints and the files it reads
+
+Usage: deadband schemas list [OPTIONS]
+
+Options:
+      --limit <N>  Print at most this many rows [default: 25]
+      --all        Print every row
+  -h, --help       Print help (see more with '--help')
+
+Examples:
+  deadband schemas list
+
+Effects: read-only, closed-world.
+Global flags: --json, --fields <FIELD>, --long, --full. `deadband schemas list --help` describes them.
+Next: deadband schemas list --help explains each column.

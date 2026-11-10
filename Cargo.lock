@@ -160,12 +160,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a0a6c8d3ef6350af97967fd136e6833f6eb99ec8905ffa496ba47fcaa918f82"
 dependencies = [
  "clap",
+ "crumbkit-derive",
  "humantime",
  "is-ai-agent",
  "rustix",
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "crumbkit-derive"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a02ad91a5b1b083815225837ed177ae882aef3bec85c15310023c32072a4b4a8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]

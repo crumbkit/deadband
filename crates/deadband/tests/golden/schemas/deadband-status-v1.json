@@ -722,8 +722,9 @@
       "type": "object",
       "properties": {
         "at": {
-          "description": "When the reclaim ended, in RFC 3339 form.",
-          "type": "string"
+          "description": "When the reclaim ended, which JSON holds in RFC 3339 and text shows\nas how long ago that was.",
+          "type": "string",
+          "format": "date-time"
         },
         "failed": {
           "description": "Why the reclaim failed, or `null` when it did not.",

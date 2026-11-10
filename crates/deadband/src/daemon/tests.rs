@@ -636,6 +636,38 @@ fn the_default_maximum_is_a_quarter_of_the_cores_rounded_up_and_at_least_one() {
     assert_eq!(default_max_jobs(None).get(), 1);
 }
 
+#[test]
+fn a_path_that_is_not_a_socket_is_named_in_the_fields_and_the_hint_says_the_repair() {
+    use crumbkit::{Failure, FieldValue, Recovery};
+
+    let path = socket_path();
+    std::fs::create_dir(&*path).expect("the test directory is made");
+    let failure = bind(&path).expect_err("a directory is not a socket");
+    std::fs::remove_dir(&*path).expect("the test directory is removed");
+    let fields = failure.fields();
+    assert_eq!(fields.len(), 1, "{fields:?}");
+    assert_eq!(fields[0].name(), "path");
+    let shown = path.to_str().expect("the test path is UTF-8");
+    assert_eq!(fields[0].value(), &FieldValue::from(shown));
+    assert!(
+        matches!(failure.recovery(), Recovery::Hint(ref text) if text.contains("DEADBAND_SOCKET")),
+        "{:?}",
+        failure.recovery()
+    );
+}
+
+#[test]
+fn a_running_daemon_names_its_path_and_offers_no_next_step() {
+    use crumbkit::{Failure, Recovery};
+
+    let path = socket_path();
+    let first = bind(&path).expect("the first daemon binds");
+    let failure = bind(&path).expect_err("the second daemon is refused");
+    drop(first);
+    assert_eq!(failure.fields().len(), 1);
+    assert!(matches!(failure.recovery(), Recovery::None { .. }));
+}
+
 /// Starts a daemon of `max_jobs` jobs that records into `directory`.
 fn recording(max_jobs: usize, directory: &Path) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
     start_with(max_jobs, &Dial::new(Pressure::Normal), |settings| {

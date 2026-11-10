@@ -21,7 +21,7 @@ const ALLOW: &[Allow] = &[
     Allow::new(
         Rule::ShellExitCode,
         "run",
-        "run passes on its job's exit status, and gives 126 and 127 their env and timeout meanings for a program that cannot start or is not found",
+        "run exits with 126 when the job's program is found but cannot start and with 127 when it is not found, the meanings that env and timeout give these codes",
     ),
     Allow::root_verbs(
         &["status", "run", "daemon", "top"],
@@ -75,10 +75,6 @@ const SUITE: Suite<'_> = Suite::new(|| (Cli::command(), TOOL))
     .skip(
         Check::Examples,
         "The `status` examples print live values, the `run` example would start a build and the `daemon` example does not exit, so no example has fixed output.",
-    )
-    .skip(
-        Check::CommandReference,
-        "The check runs `deadband commands list`, which deadband does not mount.",
     )
     .skip(
         Check::Twins,

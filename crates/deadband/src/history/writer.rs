@@ -187,7 +187,8 @@ impl Writer {
     /// again.
     pub(super) fn append(&mut self, line: &Line) {
         match self.write(line) {
-            Ok(()) => {
+            Ok(false) => {}
+            Ok(true) => {
                 if self.failing {
                     self.failing = false;
                     note(&self.log, format_args!("job history is written again"));
@@ -216,11 +217,11 @@ impl Writer {
     }
 
     /// Writes `line` to the open file, and opens the file if it is closed.
-    /// While another writer holds the directory's lock, the line is lost and
-    /// the first loss is logged.
-    fn write(&mut self, line: &Line) -> io::Result<()> {
+    /// Returns whether the line was written. While another writer holds the
+    /// directory's lock, the line is lost and the first loss is logged.
+    fn write(&mut self, line: &Line) -> io::Result<bool> {
         if !self.claim()? {
-            return Ok(());
+            return Ok(false);
         }
         let mut text = serde_json::to_vec(line).map_err(io::Error::other)?;
         text.push(b'\n');
@@ -231,7 +232,7 @@ impl Writer {
         open.file.write_all(&text)?;
         let written = u64::try_from(text.len()).unwrap_or(u64::MAX);
         open.size = open.size.saturating_add(written);
-        Ok(())
+        Ok(true)
     }
 
     /// Takes the lock on the state directory unless the writer holds it,

@@ -7,13 +7,15 @@
 use std::fmt;
 use std::io::{self, IsTerminal};
 use std::path::Path;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-use crumbkit::{Call, Code, Failure, Recovery};
+use clap::CommandFactory as _;
+use crumbkit::{Call, Code, Failure, Recovery, RenderCall as _};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyModifiers};
 
-use crate::cli::Machine;
+use crate::cli::{Cli, Machine};
 use crate::client;
 use crate::probe::Probe;
 
@@ -39,14 +41,25 @@ const POLL_WITHIN: Duration = Duration::from_millis(500);
 const POLL_EVERY: Duration = Duration::from_secs(1);
 
 /// The exit code of a view that Ctrl-C ended (CLI-8).
-const EXIT_INTERRUPTED: u8 = 130;
+pub const EXIT_INTERRUPTED: u8 = 130;
+
+/// The command that starts the daemon, rendered from the command tree once.
+static DAEMON_CALL: LazyLock<String> = LazyLock::new(|| {
+    // A test asserts that the call renders, so the words after `or` show
+    // only if `daemon` leaves the tree without that test noticing.
+    Call::new(&["daemon"])
+        .render(&mut Cli::command())
+        .unwrap_or_else(|_| "deadband daemon".to_owned())
+});
 
 /// Why `deadband top` did not run or stopped.
-#[derive(Debug)]
+#[derive(Debug, Failure)]
 pub enum TopFailed {
     /// Standard input or output is not a terminal, or `--json` was given.
+    #[failure(code = TOP_NOT_A_TERMINAL, recovery = Recovery::Run(Call::new(&["status"])))]
     NotATerminal,
     /// Reading or writing the terminal failed.
+    #[failure(code = TOP_TERMINAL_FAILED, recovery = Recovery::Retry)]
     Terminal(io::Error),
 }
 
@@ -63,20 +76,10 @@ impl fmt::Display for TopFailed {
 
 impl std::error::Error for TopFailed {}
 
-impl Failure for TopFailed {
-    fn code(&self) -> &'static Code {
-        match self {
-            Self::NotATerminal => &TOP_NOT_A_TERMINAL,
-            Self::Terminal(_) => &TOP_TERMINAL_FAILED,
-        }
-    }
-
-    fn recovery(&self) -> Recovery {
-        match self {
-            Self::NotATerminal => Recovery::Run(Call::new(&["status"])),
-            Self::Terminal(_) => Recovery::Retry,
-        }
-    }
+/// Returns the command that starts the daemon, such as `deadband daemon`,
+/// which the no-daemon screen names.
+fn daemon_call() -> &'static str {
+    &DAEMON_CALL
 }
 
 /// Refuses to open unless both streams are terminals and no `--json` was
