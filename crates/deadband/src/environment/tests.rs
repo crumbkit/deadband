@@ -133,3 +133,49 @@ fn a_job_that_starts_without_a_grant_gets_its_parallelism_but_is_not_marked_held
     assert!(variables.iter().all(|(name, _)| *name != "DEADBAND_HELD"));
     assert!(variables.contains(&("CARGO_BUILD_JOBS", "2".to_owned())));
 }
+
+#[test]
+fn the_state_directory_is_in_xdg_state_home_when_it_is_set() {
+    let read = Environment::read(
+        environment(&[("HOME", "/home/me"), ("XDG_STATE_HOME", "/state")]),
+        None,
+    );
+    assert_eq!(
+        read.history_directory(),
+        Some(PathBuf::from("/state/deadband"))
+    );
+}
+
+#[test]
+fn the_state_directory_is_in_the_home_directory_otherwise() {
+    let read = Environment::read(environment(&[("HOME", "/home/me")]), None);
+    assert_eq!(
+        read.history_directory(),
+        Some(PathBuf::from("/home/me/.local/state/deadband"))
+    );
+}
+
+#[test]
+fn no_state_directory_is_known_without_a_home_or_an_xdg_state_home() {
+    let read = Environment::read(environment(&[]), None);
+    assert_eq!(read.history_directory(), None);
+}
+
+#[test]
+fn a_daemon_started_with_its_own_socket_records_nothing() {
+    let read = Environment::read(
+        environment(&[("HOME", "/home/me"), ("DEADBAND_SOCKET", "/tmp/test.sock")]),
+        None,
+    );
+    assert!(read.state.is_some());
+    assert_eq!(read.history_directory(), None);
+}
+
+#[test]
+fn an_empty_deadband_socket_counts_as_absent_so_the_daemon_records() {
+    let read = Environment::read(
+        environment(&[("HOME", "/home/me"), ("DEADBAND_SOCKET", "")]),
+        None,
+    );
+    assert!(read.history_directory().is_some());
+}

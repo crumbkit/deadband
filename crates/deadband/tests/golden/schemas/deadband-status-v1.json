@@ -520,6 +520,13 @@
           "description": "The job's command line, with its words joined by spaces.",
           "type": "string"
         },
+        "cwd": {
+          "description": "The working directory of the job, at most 1 KiB. An older client\nsends none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "label": {
           "description": "The label that `--label` gave, or the program's name.",
           "type": "string"

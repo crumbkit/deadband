@@ -17,12 +17,14 @@
 
 use std::fmt;
 use std::io::{self, BufRead, Read, Write};
+use std::path::Path;
 
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::admit::{Hold, Lane};
+use crate::probe::ChildUsage;
 use crate::reclaim::Reclaimed;
 
 #[cfg(test)]
@@ -56,6 +58,10 @@ pub struct Job {
     /// is not watched.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub watched: bool,
+    /// The working directory of the job, at most 1 KiB. An older client
+    /// sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// What the daemon knows of the processes outside the jobs when a job is
@@ -101,6 +107,19 @@ impl fmt::Display for OutsideJobs {
     }
 }
 
+/// The most bytes of a job's working directory that a client sends, which
+/// keeps the line that asks for a job bounded.
+pub const MAX_CWD: usize = 1024;
+
+/// Returns the text that a client sends for the working directory `path`:
+/// at most [`MAX_CWD`] bytes, cut on a character boundary.
+#[must_use]
+pub fn job_cwd(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let end = text.floor_char_boundary(MAX_CWD);
+    text.get(..end).unwrap_or_default().to_owned()
+}
+
 /// What a client asks the daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -118,6 +137,10 @@ pub enum Request {
         /// older client sends no signal, and an older daemon ignores it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signal: Option<i32>,
+        /// What the kernel reported of the job's children, or `None` when
+        /// the client measured nothing. An older daemon ignores it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<ChildUsage>,
     },
     /// Asks for the jobs that `deadband top` draws.
     Timeline,

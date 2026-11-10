@@ -5,6 +5,8 @@ use std::time::Instant;
 
 use super::{State, Waiter};
 use crate::admit::{JobId, Lane};
+use crate::history::{Departure, JobLine, Line, MachineLine, Tally, VERSION, now_ms};
+use crate::probe::ChildUsage;
 use crate::protocol::{Ago, Exit, JobRecord, JobState, Jobs, Label, StuckPeriod, Timeline};
 use crate::stuck::Period;
 
@@ -100,14 +102,32 @@ impl State {
         }
     }
 
-    /// Takes the job numbered `id` out of the queue and remembers how it
-    /// ended. `exit` is `None` when the job's client could not take its
-    /// grant. A job that the queue no longer holds is recorded already, so
-    /// nothing happens.
-    pub(super) fn record(&mut self, id: JobId, exit: Option<Exit>) {
+    /// Takes the job numbered `id` out of the queue, remembers how it
+    /// ended, and hands its line to the history writer. `exit` is `None`
+    /// when the job's client could not take its grant. A job that the queue
+    /// no longer holds is recorded already, so nothing happens.
+    pub(super) fn record(&mut self, id: JobId, exit: Option<Exit>, usage: Option<ChildUsage>) {
+        let threads = self.queue.threads_of(id);
         let Some((waiter, started)) = self.queue.remove(id) else {
             return;
         };
+        let tally = self.tallies.remove(&id);
+        let ended = Instant::now();
+        let run = started.zip(exit);
+        if let (Some(recorder), Some(arrival)) = (&self.recorder, waiter.arrival) {
+            let departure = Departure {
+                label: waiter.label.clone(),
+                lane: waiter.job.lane,
+                ahead: waiter.ahead,
+                threads: run.and(threads),
+                ran: run.map(|(at, _)| ended.saturating_duration_since(at)),
+                exit: run.map(|(_, exit)| exit),
+                usage,
+                tally,
+            };
+            let line = JobLine::new(arrival, departure, now_ms());
+            recorder.send(Line::Job(Box::new(line)));
+        }
         if self.ended.len() == MAX_ENDED {
             self.ended.pop_front();
         }
@@ -116,9 +136,62 @@ impl State {
             stuck: self.stuck.end(waiter.job.pid),
             label: waiter.label,
             queued: waiter.queued,
-            ended: Instant::now(),
-            run: started.zip(exit),
+            ended,
+            run,
         });
+    }
+
+    /// Notes in every tally how many jobs run now, and returns that number.
+    pub(super) fn note_running(&mut self) -> usize {
+        let running = self.queue.running().count();
+        for tally in self.tallies.values_mut() {
+            tally.running(running);
+        }
+        running
+    }
+
+    /// Starts the tally of the job numbered `id`, which has just started.
+    pub(super) fn count_started(&mut self, id: JobId) {
+        let running = self.note_running();
+        let load = self.reading.map(|reading| reading.load_1m);
+        self.tallies.insert(id, Tally::started(load, running));
+    }
+
+    /// Adds the latest reading to the tally of each running job. A failed
+    /// reading adds nothing.
+    pub(super) fn observe(&mut self) {
+        let Some(reading) = self.reading else {
+            return;
+        };
+        let running = self.queue.running().count();
+        let every = self.settings.sample_every;
+        for tally in self.tallies.values_mut() {
+            tally.sample(reading.load_1m, reading.pressure, every, running);
+        }
+    }
+
+    /// Hands a machine line to the history writer when the settings'
+    /// interval has passed since the last one.
+    pub(super) fn write_machine(&mut self, now: Instant) {
+        let Some(recorder) = &self.recorder else {
+            return;
+        };
+        if now.saturating_duration_since(self.machine_at) < self.settings.machine_every {
+            return;
+        }
+        self.machine_at = now;
+        recorder.send(Line::Machine(MachineLine {
+            v: VERSION,
+            at_ms: now_ms(),
+            load_1m: self.reading.map(|reading| reading.load_1m),
+            pressure: self.reading.map(|reading| reading.pressure),
+            running: self.queue.running().count(),
+            waiting: self.queue.waiting().count(),
+            held: self.queue.held(),
+            max_jobs: self.settings.max_jobs.get(),
+            cores: self.settings.cores.map(std::num::NonZeroUsize::get),
+            dropped: recorder.dropped(),
+        }));
     }
 
     /// Returns the timeline at `now`: at most [`MAX_ROWS`] jobs, the

@@ -114,6 +114,7 @@ fn a_job_whose_client_reports_a_code_is_finished_with_that_code() {
         client.send(&Request::Done {
             exit_code: Some(3),
             signal: None,
+            usage: None,
         });
     });
     assert!(
@@ -134,6 +135,7 @@ fn a_job_whose_client_reports_a_signal_is_finished_with_that_signal() {
         client.send(&Request::Done {
             exit_code: None,
             signal: Some(9),
+            usage: None,
         });
     });
     assert!(
@@ -154,6 +156,7 @@ fn a_job_whose_client_reports_neither_is_lost() {
         client.send(&Request::Done {
             exit_code: None,
             signal: None,
+            usage: None,
         });
     });
     assert!(
@@ -224,6 +227,7 @@ fn the_reply_lists_running_then_waiting_then_ended_jobs_newest_first() {
         client.send(&Request::Done {
             exit_code: Some(0),
             signal: None,
+            usage: None,
         });
         timeline_until(&path, |timeline| ended(timeline, label));
     }
@@ -258,6 +262,8 @@ fn push(state: &mut State, label: &str, gone: bool) -> (JobId, Option<UnixStream
             stream: ours,
             label: Label::new(label),
             queued: Instant::now(),
+            arrival: None,
+            ahead: 0,
         },
         Lane::Normal,
     );
@@ -293,7 +299,7 @@ fn a_job_is_recorded_once_when_its_connection_ends_after_a_failed_grant() {
     let mut state = state(1);
     let (id, _) = push(&mut state, "a", true);
     state.grant();
-    state.record(id, Some(Exit::Lost));
+    state.record(id, Some(Exit::Lost), None);
     assert_eq!(state.timeline(Instant::now()).jobs.len(), 1);
 }
 
@@ -301,7 +307,7 @@ fn a_job_is_recorded_once_when_its_connection_ends_after_a_failed_grant() {
 fn end_one(state: &mut State, label: &str) {
     let (id, client) = push(state, label, false);
     state.grant();
-    state.record(id, Some(Exit::Exited { code: 0 }));
+    state.record(id, Some(Exit::Exited { code: 0 }), None);
     drop(client);
 }
 

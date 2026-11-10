@@ -72,11 +72,16 @@ mod support {
         /// Starts a daemon on `socket` that runs at most `max_jobs` jobs, and
         /// waits until it listens.
         pub(crate) fn start(socket: &Path, max_jobs: &str) -> Self {
+            Self::started(deadband(socket, &["daemon", "--max-jobs", max_jobs]))
+        }
+
+        /// Starts the daemon that `command` runs, and waits until it listens.
+        pub(crate) fn started(mut command: Command) -> Self {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "the test runs the built binary as a person would"
             )]
-            let mut daemon = deadband(socket, &["daemon", "--max-jobs", max_jobs])
+            let mut daemon = command
                 .stderr(Stdio::piped())
                 .spawn()
                 .expect("the daemon starts");
@@ -433,4 +438,118 @@ fn top_refuses_a_pipe_and_names_status() {
     let err = String::from_utf8_lossy(&output.stderr);
     assert!(err.contains("deadband status"), "{err}");
     assert!(!String::from_utf8_lossy(&output.stdout).contains('\u{1b}'));
+}
+
+/// The tests of the history file through the built binary.
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test writes the file that blocks the state directory, and a partial fixture only fails that test"
+)]
+mod history {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    use super::{Daemon, deadband, output, socket};
+
+    /// A directory for the daemon's socket and state. Dropping it removes it.
+    struct Home(PathBuf);
+
+    impl Home {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("db-h-{}-{name}", std::process::id()));
+            std::fs::create_dir_all(path.join("t")).expect("the directory is made");
+            Self(path)
+        }
+
+        fn state(&self) -> PathBuf {
+            self.0.join("s")
+        }
+
+        fn file(&self) -> PathBuf {
+            self.state().join("deadband/jobs.jsonl")
+        }
+
+        /// Returns a `deadband` command that finds its socket through
+        /// `TMPDIR` and its history through `XDG_STATE_HOME`.
+        fn command(&self, args: &[&str]) -> Command {
+            let mut command = deadband(Path::new("unused"), args);
+            command
+                .env_remove("DEADBAND_SOCKET")
+                .env("TMPDIR", self.0.join("t"))
+                .env("XDG_STATE_HOME", self.state());
+            command
+        }
+    }
+
+    impl Drop for Home {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Reads the file at `path` until it holds a line, for at most ten
+    /// seconds, and returns the first line as JSON.
+    fn first_line(path: &Path) -> serde_json::Value {
+        let begun = Instant::now();
+        loop {
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            if let Some(line) = text.lines().next() {
+                return serde_json::from_str(line).expect("the line is JSON");
+            }
+            assert!(begun.elapsed() < Duration::from_secs(10), "no line came");
+        }
+    }
+
+    #[test]
+    fn a_daemon_on_the_default_socket_records_a_finished_job_and_the_job_keeps_its_exit_code() {
+        let home = Home::new("rec");
+        let _daemon = Daemon::started(home.command(&["daemon", "--max-jobs", "1"]));
+        let run = output(home.command(&["run", "--", "sh", "-c", "exit 3"]));
+        assert_eq!(run.status.code(), Some(3), "{run:?}");
+        let line = first_line(&home.file());
+        assert_eq!(line["type"], "job");
+        assert_eq!(line["kind"], "sh");
+        assert_eq!(line["exit"]["exited"]["code"], 3);
+        if cfg!(target_os = "macos") {
+            assert!(line["child_cpu_ms"].is_u64(), "{line}");
+            assert!(line["child_peak_rss_bytes"].is_u64(), "{line}");
+        } else {
+            assert!(line["child_cpu_ms"].is_null(), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_daemon_started_with_its_own_socket_runs_the_job_and_records_nothing() {
+        let home = Home::new("own");
+        let socket = socket("own-history");
+        let mut daemon = deadband(&socket.0, &["daemon", "--max-jobs", "1"]);
+        daemon.env("XDG_STATE_HOME", home.state());
+        let _daemon = Daemon::started(daemon);
+        let mut job = deadband(&socket.0, &["run", "--", "true"]);
+        job.env("XDG_STATE_HOME", home.state());
+        let run = output(job);
+        assert!(run.status.success(), "{run:?}");
+        // A daemon on the default socket records into the same state
+        // directory. Had the first daemon recorded, its writer would hold the
+        // file's lock, and the second daemon would record nothing.
+        let _second = Daemon::started(home.command(&["daemon", "--max-jobs", "1"]));
+        let run = output(home.command(&["run", "--label", "second", "--", "true"]));
+        assert!(run.status.success(), "{run:?}");
+        let line = first_line(&home.file());
+        assert_eq!(line["label"], "second", "{line}");
+        let text = std::fs::read_to_string(home.file()).expect("the file reads");
+        assert_eq!(text.lines().count(), 1, "{text}");
+    }
+
+    #[test]
+    fn a_state_directory_that_cannot_be_made_still_runs_the_job_with_its_output() {
+        let home = Home::new("bad");
+        std::fs::write(home.state(), "").expect("the file writes");
+        let _daemon = Daemon::started(home.command(&["daemon", "--max-jobs", "1"]));
+        let run = output(home.command(&["run", "--", "sh", "-c", "echo ran"]));
+        assert!(run.status.success(), "{run:?}");
+        assert_eq!(String::from_utf8(run.stdout).expect("UTF-8"), "ran\n");
+    }
 }

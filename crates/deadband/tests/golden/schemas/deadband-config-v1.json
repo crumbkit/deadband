@@ -1,13 +1,21 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "deadband/config/v1",
-  "description": "The daemon's config.toml, which names the reclaimers and says when the daemon reclaims memory or disk and when a job counts as stuck.",
+  "description": "The daemon's config.toml, which names the reclaimers and says when the daemon reclaims memory or disk, when a job counts as stuck, which directories show a warm build and which tools keep their subcommands in the job history.",
   "$ref": "#/$defs/File",
   "$defs": {
     "File": {
       "description": "The config file as it is written. Every key is optional.",
       "type": "object",
       "properties": {
+        "kind_tools": {
+          "description": "Program file names, such as \"cargo\". The job history's kind of a\njob whose program is listed keeps up to two plain lowercase words\nafter it, such as \"cargo nextest run\", and the kind of any other job\nis the program's file name alone.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
         "on_stuck": {
           "description": "The program, as an absolute path, and its arguments, which the\ndaemon runs once each time a job becomes stuck.",
           "type": [
@@ -62,6 +70,14 @@
         },
         "stuck_ignore": {
           "description": "Regular expressions. A job whose command line matches any of them is\nnot watched for being stuck.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "warm_dirs": {
+          "description": "Directories, relative to a job's checkout, such as \"target\". The\njob history marks a job as warm when one of them has an entry under\nthe job's checkout when the job asks.",
           "type": "array",
           "default": [],
           "items": {

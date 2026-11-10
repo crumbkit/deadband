@@ -1,12 +1,74 @@
-//! Counts a job that an earlier daemon granted and that still runs.
+//! Takes a job's connection into the queue: a job that asks to start, and a
+//! job that an earlier daemon granted and that still runs. Each one's
+//! connection thread reads the job's working directory before it takes the
+//! queue lock, and then waits on the connection for the job's end.
 
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
-use super::{Shared, State, Waiter, finish, lock};
+use super::{Shared, State, Waiter, lock};
 use crate::admit::JobId;
-use crate::protocol::{Job, Label};
+use crate::history::{Arrival, Tally};
+use crate::probe::ChildUsage;
+use crate::protocol::{Exit, Job, Label, Reply, Request, read_line, write_line};
+
+/// Returns what the history line needs from `job`, or `None` when the
+/// daemon records no job. The lock is released before the disk is read, so
+/// the disk never holds the queue up.
+fn arrival(shared: &Shared, job: &Job, ran_ms: Option<u64>) -> Option<Arrival> {
+    let (warm_dirs, kind_tools) = {
+        let state = lock(shared);
+        let config = &state.settings.reclaim;
+        state
+            .recorder
+            .is_some()
+            .then(|| (config.warm_dirs.clone(), config.kind_tools.clone()))
+    }?;
+    Some(Arrival::read(job, &warm_dirs, &kind_tools, ran_ms))
+}
+
+/// Queues `job` for the client on `stream`, grants it when the admission
+/// rule allows, and removes it when the client says it ended, closes the
+/// connection, or sends a line the daemon cannot read.
+pub(super) fn ask(
+    shared: &Shared,
+    stream: UnixStream,
+    reader: &mut BufReader<UnixStream>,
+    job: Job,
+) {
+    let Ok(grant_stream) = stream.try_clone() else {
+        return;
+    };
+    let arrival = arrival(shared, &job, None);
+    let queued = Instant::now();
+    let label = Label::new(&job.label);
+    let id: JobId = {
+        let mut state = lock(shared);
+        let lane = job.lane;
+        let ahead = state.queue.ahead_in(lane);
+        let id = state.queue.push(
+            Waiter {
+                job,
+                stream: grant_stream,
+                label,
+                queued,
+                arrival,
+                ahead,
+            },
+            lane,
+        );
+        state.grant();
+        if let Some(ahead) = state.queue.ahead_of(id) {
+            let held = state.queue.held();
+            // A client that cannot take this reply also closes its
+            // connection, which the read below sees.
+            let _ = write_line(&mut &stream, &Reply::Queued { ahead, held });
+        }
+        id
+    };
+    finish(shared, reader, id);
+}
 
 /// Counts `job` as running since `ran_ms` ago on the connection `stream`,
 /// and removes it when its client says it ended or closes the connection.
@@ -24,19 +86,53 @@ pub(super) fn seat(
     jobs: usize,
     ran_ms: u64,
 ) {
+    let arrival = arrival(shared, &job, Some(ran_ms));
     let now = Instant::now();
     let at = now
         .checked_sub(Duration::from_millis(ran_ms))
         .unwrap_or(now);
-    let id = lock(shared).seat(job, stream, jobs, at);
+    let id = lock(shared).seat(job, stream, jobs, at, arrival);
     finish(shared, reader, id);
+}
+
+/// Waits for the end of the job numbered `id` on its connection, removes
+/// the job, and starts the jobs that its place lets start.
+fn finish(shared: &Shared, reader: &mut BufReader<UnixStream>, id: JobId) {
+    let (exit, usage) = read_end(reader);
+    let mut state = lock(shared);
+    state.record(id, Some(exit), usage);
+    state.grant();
+}
+
+/// Reads the job's connection until its client says how the job ended. A
+/// connection that closes or sends a line the daemon cannot read leaves the
+/// end unknown, with no usage.
+fn read_end(reader: &mut BufReader<UnixStream>) -> (Exit, Option<ChildUsage>) {
+    while let Ok(Some(request)) = read_line::<Request>(reader) {
+        if let Request::Done {
+            exit_code,
+            signal,
+            usage,
+        } = request
+        {
+            return (Exit::reported(exit_code, signal), usage);
+        }
+    }
+    (Exit::Lost, None)
 }
 
 impl State {
     /// Places `job` among the running jobs, started at `at`. The job has
     /// no record of how long it waited, so it counts as asking when it
     /// started.
-    fn seat(&mut self, job: Job, stream: UnixStream, jobs: usize, at: Instant) -> JobId {
+    fn seat(
+        &mut self,
+        job: Job,
+        stream: UnixStream,
+        jobs: usize,
+        at: Instant,
+        arrival: Option<Arrival>,
+    ) -> JobId {
         let limits = self.limits();
         let lane = job.lane;
         let label = Label::new(&job.label);
@@ -45,7 +141,12 @@ impl State {
             stream,
             label,
             queued: at,
+            arrival,
+            ahead: 0,
         };
-        self.queue.seat(waiter, lane, jobs, at, &limits)
+        let id = self.queue.seat(waiter, lane, jobs, at, &limits);
+        let running = self.note_running();
+        self.tallies.insert(id, Tally::seated(running));
+        id
     }
 }

@@ -2,7 +2,7 @@
 //! user can open, and nothing removed that is not a socket.
 
 use std::fmt;
-use std::fs::File;
+use std::fs::{File, TryLockError};
 use std::io;
 use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 use std::os::unix::net::UnixListener;
@@ -101,6 +101,37 @@ pub fn lock_path(path: &Path) -> PathBuf {
     PathBuf::from(lock)
 }
 
+/// Opens the lock file at `path`, making it with mode 0600 when it does not
+/// exist, and takes an exclusive lock on it without waiting. The lock holds
+/// until the returned file is closed. The daemon's socket and the writer of
+/// the job history both lock through this function.
+///
+/// # Errors
+///
+/// Returns [`TryLockError::WouldBlock`] when another open file holds the
+/// lock, and [`TryLockError::Error`] when the file cannot be opened or
+/// locked.
+pub(crate) fn take_lock(path: &Path) -> Result<File, TryLockError> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "crates/deadband/src/daemon/bind.rs opens a lock file, which holds no data, so it needs no atomic writer"
+    )]
+    let mut options = std::fs::OpenOptions::new();
+    let lock = options
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)
+        .map_err(TryLockError::Error)?;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "crates/deadband/src/daemon/bind.rs takes each lock without waiting, so the lock needs no deadline"
+    )]
+    let locked = lock.try_lock();
+    locked.map(|()| lock)
+}
+
 /// Makes the socket at `path` and listens on it.
 ///
 /// The daemon first takes an exclusive lock on `<path>.lock`, so two
@@ -126,32 +157,15 @@ fn bind_private(path: &Path) -> Result<Bound, Unbound> {
         path: path.to_owned(),
         error,
     };
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "crates/deadband/src/daemon/bind.rs opens the daemon's lock file, which holds no data, so it needs no atomic writer"
-    )]
-    let mut options = std::fs::OpenOptions::new();
-    let lock = options
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(lock_path(path))
-        .map_err(socket_error)?;
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the daemon takes its lock without waiting, so the lock needs no deadline"
-    )]
-    let locked = lock.try_lock();
-    match locked {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) => {
+    let lock = match take_lock(&lock_path(path)) {
+        Ok(lock) => lock,
+        Err(TryLockError::WouldBlock) => {
             return Err(Unbound::Running {
                 path: path.to_owned(),
             });
         }
-        Err(std::fs::TryLockError::Error(error)) => return Err(socket_error(error)),
-    }
+        Err(TryLockError::Error(error)) => return Err(socket_error(error)),
+    };
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_socket() => {
             std::fs::remove_file(path).map_err(socket_error)?;

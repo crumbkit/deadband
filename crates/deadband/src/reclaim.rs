@@ -39,7 +39,7 @@ pub(crate) const CONFIG: Document<File> = Document::new(
     "deadband",
     "config",
     1,
-    "The daemon's config.toml, which names the reclaimers and says when the daemon reclaims memory or disk and when a job counts as stuck.",
+    "The daemon's config.toml, which names the reclaimers and says when the daemon reclaims memory or disk, when a job counts as stuck, which directories show a warm build and which tools keep their subcommands in the job history.",
 );
 
 /// How long memory must stay short before the daemon reclaims, and how long
@@ -83,6 +83,12 @@ pub struct Config {
     pub disk: String,
     /// The keys that say how the daemon detects stuck jobs.
     pub stuck: stuck::Config,
+    /// The directories, relative to a job's checkout, whose having an entry
+    /// makes the job's history line say it started warm.
+    pub warm_dirs: Vec<String>,
+    /// The program file names whose kind in the job history keeps up to
+    /// two subcommand words.
+    pub kind_tools: Vec<String>,
 }
 
 impl Default for Config {
@@ -94,6 +100,8 @@ impl Default for Config {
             memory: "4G".to_owned(),
             disk: "20G".to_owned(),
             stuck: stuck::Config::default(),
+            warm_dirs: Vec::new(),
+            kind_tools: Vec::new(),
         }
     }
 }
@@ -130,6 +138,17 @@ pub(crate) struct File {
     /// The program, as an absolute path, and its arguments, which the
     /// daemon runs once each time a job becomes stuck.
     on_stuck: Option<Vec<String>>,
+    /// Directories, relative to a job's checkout, such as "target". The
+    /// job history marks a job as warm when one of them has an entry under
+    /// the job's checkout when the job asks.
+    #[serde(default)]
+    warm_dirs: Vec<String>,
+    /// Program file names, such as "cargo". The job history's kind of a
+    /// job whose program is listed keeps up to two plain lowercase words
+    /// after it, such as "cargo nextest run", and the kind of any other job
+    /// is the program's file name alone.
+    #[serde(default)]
+    kind_tools: Vec<String>,
 }
 
 /// Returns the age that `value` gives, or `default` when it is `None`.
@@ -189,6 +208,8 @@ impl Config {
                 &file.stuck_ignore,
                 file.on_stuck,
             )?,
+            warm_dirs: file.warm_dirs,
+            kind_tools: file.kind_tools,
         })
     }
 

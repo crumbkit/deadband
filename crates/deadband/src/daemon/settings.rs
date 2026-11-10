@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::{FIRST_LINE_WITHIN, SAMPLE_EVERY};
+use crate::history::MACHINE_EVERY;
 use crate::job::busiest::PS_COMMAND;
 use crate::reclaim;
 
@@ -29,6 +30,11 @@ pub struct Settings {
     pub reclaim: reclaim::Config,
     /// How the daemon watches jobs for activity.
     pub watching: Watching,
+    /// The directory of the history file, or `None` when the daemon records
+    /// no job.
+    pub history: Option<PathBuf>,
+    /// How often the daemon writes a machine line to the history file.
+    pub machine_every: Duration,
 }
 
 /// How the daemon watches jobs for activity.
@@ -62,8 +68,8 @@ impl Default for Watching {
 impl Settings {
     /// Returns the settings with `max_jobs`, `cores`, `home` and
     /// `priority_file`, the default sampling interval, [`SAMPLE_EVERY`],
-    /// the default wait for a first line, [`FIRST_LINE_WITHIN`], and no
-    /// reclaimer.
+    /// the default wait for a first line, [`FIRST_LINE_WITHIN`], no
+    /// reclaimer and no history.
     #[must_use]
     pub fn new(
         max_jobs: NonZeroUsize,
@@ -80,6 +86,8 @@ impl Settings {
             first_line_within: FIRST_LINE_WITHIN,
             reclaim: reclaim::Config::default(),
             watching: Watching::default(),
+            history: None,
+            machine_every: MACHINE_EVERY,
         }
     }
 }

@@ -13,6 +13,7 @@ use std::time::Duration;
 use super::{Admitted, Asked, Notices, admit};
 use crate::admit::Lane;
 use crate::environment::{Environment, HELD};
+use crate::probe::ChildUsage;
 use crate::protocol::{Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 use crate::throttle::{NORMAL_NICE, own_priority};
@@ -152,6 +153,51 @@ fn admit_with_a_grant_holds_the_lease_and_gives_the_granted_threads() {
 }
 
 #[test]
+fn admit_sends_the_working_directory_of_the_environment() {
+    let (socket, received) = scripted(vec![Reply::Granted { jobs: 3 }]);
+    let environment = Environment {
+        cwd: Some("/work/repo".into()),
+        ..Environment::default()
+    };
+    let (_result, _) = admitted(&socket, &environment, None);
+    let Request::Ask(job) = received.recv_timeout(WAIT).expect("the daemon was asked") else {
+        panic!("the first request was not an ask");
+    };
+    assert_eq!(job.cwd.as_deref(), Some("/work/repo"));
+}
+
+#[test]
+fn admit_without_a_working_directory_sends_none() {
+    let (socket, received) = scripted(vec![Reply::Granted { jobs: 3 }]);
+    let (_result, _) = admitted(&socket, &Environment::default(), None);
+    let Request::Ask(job) = received.recv_timeout(WAIT).expect("the daemon was asked") else {
+        panic!("the first request was not an ask");
+    };
+    assert_eq!(job.cwd, None);
+}
+
+#[test]
+fn end_measured_tells_the_daemon_the_status_and_the_usage() {
+    use std::os::unix::process::ExitStatusExt;
+    let (socket, received) = scripted(vec![Reply::Granted { jobs: 2 }]);
+    let (result, _) = admitted(&socket, &Environment::default(), None);
+    let _ = received.recv_timeout(WAIT).expect("the ask arrives");
+    let usage = ChildUsage {
+        cpu_ms: 10,
+        peak_rss_bytes: 20,
+    };
+    result.end_measured(std::process::ExitStatus::from_raw(0), Some(usage));
+    assert_eq!(
+        received.recv_timeout(WAIT).expect("the daemon is told"),
+        Request::Done {
+            exit_code: Some(0),
+            signal: None,
+            usage: Some(usage),
+        }
+    );
+}
+
+#[test]
 fn end_tells_the_daemon_the_exit_code_of_a_granted_job() {
     let (socket, received) = scripted(vec![Reply::Granted { jobs: 2 }]);
     let (result, _) = admitted(&socket, &Environment::default(), None);
@@ -161,7 +207,8 @@ fn end_tells_the_daemon_the_exit_code_of_a_granted_job() {
         received.recv_timeout(WAIT).expect("the daemon is told"),
         Request::Done {
             exit_code: Some(7),
-            signal: None
+            signal: None,
+            usage: None,
         }
     );
 }
@@ -177,7 +224,8 @@ fn end_status_tells_the_daemon_the_signal_that_ended_a_granted_job() {
         received.recv_timeout(WAIT).expect("the daemon is told"),
         Request::Done {
             exit_code: None,
-            signal: Some(15)
+            signal: Some(15),
+            usage: None,
         }
     );
 }

@@ -352,11 +352,28 @@ impl<J> Queue<J> {
             .map(|each| &each.job)
     }
 
+    /// Returns the threads of the running job numbered `id`.
+    #[must_use]
+    pub fn threads_of(&self, id: JobId) -> Option<usize> {
+        let job = self.running.iter().find(|each| each.id == id)?;
+        Some(job.jobs)
+    }
+
     /// Returns how many jobs start before the waiting job numbered `id`, or
     /// `None` when that job does not wait.
     #[must_use]
     pub fn ahead_of(&self, id: JobId) -> Option<usize> {
         self.waiting_ids().position(|each| each == id)
+    }
+
+    /// Returns how many waiting jobs start before a job that joins `lane`
+    /// now, in the order that [`Queue::waiting`] gives.
+    #[must_use]
+    pub fn ahead_in(&self, lane: Lane) -> usize {
+        match lane {
+            Lane::Fast => self.fast.len(),
+            Lane::Normal => self.fast.len() + self.normal.len(),
+        }
     }
 
     /// Returns the numbers of the waiting jobs in the order they start.

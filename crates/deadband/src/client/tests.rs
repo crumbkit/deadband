@@ -29,6 +29,7 @@ fn job() -> Job {
         command: "make".to_owned(),
         lane: Lane::Normal,
         watched: false,
+        cwd: None,
     }
 }
 
@@ -160,7 +161,8 @@ fn ask_returns_a_lease_when_the_daemon_grants_the_job_after_it_waits() {
         received.recv().expect("the end arrives"),
         Request::Done {
             exit_code: Some(4),
-            signal: None
+            signal: None,
+            usage: None,
         }
     );
 }
@@ -306,7 +308,8 @@ fn a_lease_reports_an_exit_code_from_the_status_it_ends_with() {
         received.recv().expect("the end arrives"),
         Request::Done {
             exit_code: Some(3),
-            signal: None
+            signal: None,
+            usage: None,
         }
     );
 }
@@ -324,7 +327,8 @@ fn a_lease_reports_the_signal_that_ended_the_job() {
         received.recv().expect("the end arrives"),
         Request::Done {
             exit_code: None,
-            signal: Some(9)
+            signal: Some(9),
+            usage: None,
         }
     );
 }
@@ -455,7 +459,8 @@ fn the_end_of_a_seated_job_reaches_the_new_daemon() {
         next.request(),
         Request::Done {
             exit_code: Some(4),
-            signal: None
+            signal: None,
+            usage: None,
         }
     );
 }

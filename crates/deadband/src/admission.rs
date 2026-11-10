@@ -32,7 +32,8 @@ use crate::client::{self, ANSWER_WITHIN, Admission, Lease};
 use crate::daemon;
 use crate::environment::Environment;
 use crate::priority;
-use crate::protocol::Job;
+use crate::probe::ChildUsage;
+use crate::protocol::{Job, job_cwd};
 use crate::throttle::{self, NORMAL_NICE};
 
 #[cfg(test)]
@@ -136,6 +137,14 @@ impl Admitted {
             lease.end_status(status);
         }
     }
+
+    /// Tells the daemon how the job ended, as [`Admitted::end_status`]
+    /// does, and what the kernel reported of the job's children.
+    pub fn end_measured(self, status: ExitStatus, usage: Option<ChildUsage>) {
+        if let Some(lease) = self.lease {
+            lease.end_measured(status, usage);
+        }
+    }
 }
 
 /// Returns the line that says why a job waits behind `ahead` jobs.
@@ -208,6 +217,7 @@ pub fn admit(asked: &Asked<'_>, notify: &mut impl FnMut(&str)) -> Admitted {
         command: asked.command.to_owned(),
         lane,
         watched: asked.notices.is_some(),
+        cwd: environment.cwd.as_deref().map(job_cwd),
     };
     let queued = |ahead: usize, held: Option<Hold>| notify(&waits(ahead, held));
     let lease = match client::ask_noticed(asked.socket, &job, ANSWER_WITHIN, queued, asked.notices)

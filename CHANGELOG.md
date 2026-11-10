@@ -13,6 +13,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   standard error of the waiting `deadband run`. The `stuck_after`,
   `stuck_ignore` and `on_stuck` config keys control it. deadband never ends,
   pauses or signals a stuck job.
+- Each daemon appends one line of JSON for every job that ends, and one line
+  about the machine every 60 seconds, to `deadband/jobs.jsonl` in
+  `$XDG_STATE_HOME`, or in `~/.local/state`. A recording failure never holds a
+  job. A daemon started with `DEADBAND_SOCKET` set records nothing, and a
+  second daemon on the same state directory records nothing and logs one line.
+- `deadband status --json` shows each job's working directory in an optional
+  `cwd` field.
+- The config file accepts `warm_dirs`, the directories under a job's checkout
+  that show a warm build, and `kind_tools`, the programs whose kind in the job
+  history keeps up to two subcommand words. The kind of any other job is its
+  program's file name alone. Both keys are empty by default. An older binary
+  refuses these keys and runs no reclaimer, so add them only after installing
+  this release.
 
 ### Changed
 

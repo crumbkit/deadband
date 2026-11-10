@@ -37,11 +37,12 @@ status.
 
 | Module | Owns |
 | --- | --- |
-| probe | Reads CPU load, memory pressure, swap and disk space from macOS every second, and the CPU time and disk bytes of a job's process tree, behind a trait so a Linux probe can be added later. |
+| probe | Reads CPU load, memory pressure, swap and disk space from macOS every second, and the CPU time and disk bytes of a job's process tree, behind a trait so a Linux probe can be added later. It also reads what the kernel reports of a job's waited-for children. |
 | admit | Decides whether a waiting job starts now and how many threads it gets, and holds the queue with its fast and normal lanes. The rule holds a job on the job count or the lane's places even when the probe fails, and on critically low disk even when nothing runs. Past those checks it admits a job when nothing runs or the probe fails, and otherwise holds it on memory pressure or the load. |
 | admission | One public call, `admit`, that does what `deadband run` does before it starts a job: it chooses the lane, asks the daemon, waits, and returns the job's lease and variables. It writes no log, so a program that embeds deadband passes a callback. |
-| daemon | Listens on the socket, samples the probe once a second, and grants waiting jobs as admit allows. It remembers the last 64 jobs that ended, in memory only, for the timeline request. Its watch thread reads the process tree of each job that `deadband run` started. |
+| daemon | Listens on the socket, samples the probe once a second, and grants waiting jobs as admit allows. It remembers the last 64 jobs that ended, in memory only, for the timeline request. Its watch thread reads the process tree of each job that `deadband run` started. The daemon hands a line about each job that ends to history. |
 | stuck | The pure rule that says when a watched job counts as stuck, the lines that report it, and the `stuck_after`, `stuck_ignore` and `on_stuck` config keys. |
+| history | The record types, the rule that turns a command line into a kind, and one writer thread that appends each line to a private file. Nothing in deadband reads the file. |
 | serve | One public call, `run_daemon`, that does what `deadband daemon` does before it prints a failure: it binds the socket, reads the reclaim config and serves. |
 | client | Asks the daemon to admit a job or to list its jobs, and gives the reason to start at once when the daemon cannot be asked. A granted job's lease has one thread that tells the next daemon the job still runs when the connection closes. |
 | protocol | The messages over the socket, one JSON object per line. |
@@ -65,6 +66,8 @@ status.
   queued job waiting, as [running.md](running.md) says.
 - When the probe cannot read the machine, the daemon starts each job once a
   place is free, and its log says why in one line.
+- A failure to record a job never delays, holds or ends that job. The daemon
+  does no file I/O while it holds the queue lock.
 - No source file outside tests is longer than 400 lines.
 
 ## Reclaiming memory and disk
@@ -153,6 +156,46 @@ A job that a client does not mark `watched`, or whose command matches
 | `/bin/ps` hangs | The watch thread waits at most 5 seconds for it, then names no process and goes on sampling. |
 | The Mac sleeps | The monotonic clock does not advance, so sleep adds no quiet time. |
 
+## The job history
+
+Each daemon appends one line of JSON for every job that ends, and one line
+about the machine every 60 seconds, to a private file on that machine.
+[running.md](running.md) gives the file's place and format.
+
+The daemon is the only writer. Its writer thread takes an exclusive lock on
+`jobs.lock` in the state directory before it opens the file and holds it while
+the daemon runs, so one daemon writes each state directory even when two
+daemons listen on different sockets. A daemon that finds the lock held records
+nothing and logs one line. A daemon started with `DEADBAND_SOCKET` set records
+nothing, so test daemons do not write to the file. The client adds the two things that only it
+knows, its working directory on `Ask` and the usage of the job's children on
+`Done`. The working directory is shortened to 1 KiB by the client.
+
+The job's connection thread walks up from the working directory to `.git` and
+reads the config's `warm_dirs` before it takes the queue lock. Later, while it
+holds the lock, the daemon builds the record and hands it to one writer thread
+with `try_send` on a channel of 256 entries, so the daemon never waits for the
+disk. A line that finds the channel full is dropped, and a counter that each
+machine line reports goes up. If the writer thread has stopped, the first line
+that cannot reach it is logged once.
+
+The kind rule names no tool in code. The kind is the program's file name,
+such as `deploy.sh` for `./deploy.sh hunterpass`, so a script's arguments
+never reach the file. When the config's `kind_tools` lists the program's file
+name, the kind also keeps up to two plain lowercase subcommand words, such as
+`cargo nextest run`. The list is empty by default. The rule skips a leading
+`env` and the `NAME=value` words after it, and it stops collecting
+subcommands at the first word that starts with `-`, because the word after an
+option may be its value. The record never holds an option value, an
+environment variable or an absolute path.
+
+The writer opens the file when the first line arrives, and each line is one
+write. A write that fails loses that line, logs one line when writing starts
+to fail and one when it recovers, and the next line tries again. Past 64 MiB,
+the writer renames the file to `jobs.1.jsonl`, replacing any earlier one, which
+is the only deletion. A crash can tear the last line, so the next open adds a
+newline, and a reader skips a line it cannot parse.
+
 # Planned
 
 None of the features in this part exists in the source. The design records
@@ -166,14 +209,16 @@ already running, and cannot cap how many compiler processes one build starts.
 deadband is planned to learn each job's cost, slow running jobs, and cap
 compiler processes through a shared jobserver.
 
-The daemon would be the only writer of the ledger of past jobs and the only
-owner of the jobserver and of signals.
+The daemon would be the only owner of the jobserver and of signals. The job
+history file exists, as the first part says. A store for fast lookups and any
+learned cost depend on what an offline replay of that file shows, so neither
+is agreed yet.
 
 ```text
  +--------------+  ask/grant  +----------------------------------------+
  | client (cli) |------------>| daemon                                 |
  +--------------+ Unix socket |                                        |
-        |                     |  probe --> admit <-- ledger (SQLite)   |
+        |                     |  probe --> admit <-- learned cost (?)  |
         | starts the job      |              |          ^              |
         v                     |              v          |              |
    job process <-- signals ---|          throttle   history sink ------+--> history store
@@ -188,7 +233,7 @@ owner of the jobserver and of signals.
 
 | Module | Would own |
 | --- | --- |
-| ledger | Stores each finished job's label, metadata, duration and measured CPU and memory in SQLite, and gives a learned cost per label. |
+| ledger | Would give a learned cost per label from past jobs, if the replay of the job history shows that a prediction is needed. Its store, and whether it uses SQLite, are not decided. |
 | jobserver | Runs one shared jobserver pipe, so all cargo processes together start at most a set number of compiler processes. admit raises and lowers the ceiling. |
 | sink | The `HistorySink` trait that receives a record of each finished job. The first sink writes records to a board with `board put`. |
 

@@ -3,10 +3,14 @@
 # owning module, which suppresses the lint with #[expect] and a reason
 # (BASE-5). The environment, process, priority and entry-point effects have
 # owning modules now, and their reasons name them. The DUR-1 and DUR-2
-# entries have no atomic writer and no lock module yet. Their only uses are
-# in crates/deadband/src/daemon/bind.rs, which creates the daemon's empty lock
-# file and locks it without waiting, and whose #[expect] reasons say so. The
-# change that adds a writer or lock module names its path in the reason.
+# entries have no atomic writer and no lock module yet. Their uses are in
+# crates/deadband/src/daemon/bind.rs, whose take_lock creates an empty lock
+# file and locks it without waiting for both the daemon's socket and the
+# job history's writer, and in
+# crates/deadband/src/history/writer.rs, which appends to the job history
+# under the DUR-1 exception in rust-standards.toml. Each #[expect] reason says
+# so. The change that adds a writer or lock module names its path in the
+# reason.
 
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true

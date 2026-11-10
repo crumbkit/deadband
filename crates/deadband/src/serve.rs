@@ -97,6 +97,7 @@ pub fn run_daemon<P: Probe + Clone + Send + 'static>(
                 machine.environment.priority_file(),
             );
             settings.reclaim = reclaim_config(machine);
+            settings.history = machine.environment.history_directory();
             let error = daemon::serve(
                 &bound.listener,
                 machine.probe.clone(),

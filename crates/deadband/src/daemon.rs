@@ -10,7 +10,7 @@
 //! [`Reply::Granted`] to that job's client. The daemon never starts, stops
 //! or signals a job; each client runs its own job.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -24,8 +24,9 @@ use rustix::io::Errno;
 use self::reading::{priority_active, read_machine};
 use self::timeline::Ended;
 use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
+use crate::history::{Arrival, Recorder, Tally};
 use crate::probe::{Pressure, Probe};
-use crate::protocol::{Exit, Job, Label, Reply, Request, read_line, write_line};
+use crate::protocol::{Job, Label, Reply, Request, read_line, write_line};
 use crate::reclaim::{self, Reclaimed, Resource, Watch};
 
 mod bind;
@@ -37,6 +38,7 @@ mod tests;
 mod timeline;
 mod watch;
 
+pub(crate) use self::bind::take_lock;
 pub use self::bind::{
     Bound, DAEMON_RUNNING, SOCKET_UNUSABLE, Unbound, bind, lock_path, raise_descriptor_limit,
 };
@@ -72,6 +74,11 @@ struct Waiter {
     label: Label,
     /// When the job asked to start.
     queued: Instant,
+    /// What the history line needs from the job's arrival, or `None` when
+    /// the daemon records no job.
+    arrival: Option<Arrival>,
+    /// How many jobs were ahead of it when it asked.
+    ahead: usize,
 }
 
 /// What the threads of the daemon share.
@@ -94,11 +101,19 @@ struct State {
     ended: VecDeque<Ended>,
     /// What the daemon knows of the watched jobs.
     stuck: watch::Watched,
+    /// The handle on the writer of the history file, or `None` when the
+    /// daemon records no job.
+    recorder: Option<Recorder>,
+    /// The machine's figures across each running job's run.
+    tallies: HashMap<JobId, Tally>,
+    /// When the daemon last wrote a machine line.
+    machine_at: Instant,
 }
 
 impl State {
     /// Returns the state of a daemon that starts now and has no job.
     fn new(settings: Settings, reading: Option<Reading>, reserve_lanes: bool) -> Self {
+        let now = Instant::now();
         Self {
             queue: Queue::default(),
             reading,
@@ -106,9 +121,12 @@ impl State {
             settings,
             watch: Watch::default(),
             reclaimed: None,
-            up: Instant::now(),
+            up: now,
             ended: VecDeque::new(),
             stuck: watch::Watched::default(),
+            recorder: None,
+            tallies: HashMap::new(),
+            machine_at: now,
         }
     }
 
@@ -134,13 +152,14 @@ impl State {
                 return;
             }
             for (id, jobs) in started {
+                self.count_started(id);
                 let granted = Reply::Granted { jobs };
                 let delivered = self
                     .queue
                     .running_job(id)
                     .is_some_and(|waiter| write_line(&mut &waiter.stream, &granted).is_ok());
                 if !delivered {
-                    self.record(id, None);
+                    self.record(id, None, None);
                 }
             }
         }
@@ -197,7 +216,13 @@ pub fn serve<P: Probe + Clone + Send + 'static>(
 ) -> io::Error {
     let reading = read_machine(&probe, &settings, log, None);
     let reserve_lanes = priority_active(settings.priority_file.as_deref());
-    let shared: Shared = Arc::new(Mutex::new(State::new(settings, reading, reserve_lanes)));
+    let recorder = settings
+        .history
+        .clone()
+        .and_then(|directory| Recorder::start(directory, log));
+    let mut state = State::new(settings, reading, reserve_lanes);
+    state.recorder = recorder;
+    let shared: Shared = Arc::new(Mutex::new(state));
     // The sampler stops when `serve` returns and drops `_stop`.
     let (_stop, stopped) = mpsc::channel::<()>();
     let sampler = Arc::clone(&shared);
@@ -259,7 +284,9 @@ fn sample(shared: &Shared, probe: &impl Probe, stopped: &mpsc::Receiver<()>, log
         let mut state = lock(shared);
         state.reading = reading;
         state.reserve_lanes = reserve_lanes;
+        state.observe();
         state.grant();
+        state.write_machine(Instant::now());
         if let Some(resource) = state.reclaim_now() {
             let config = state.settings.reclaim.clone();
             let quiet = state.watch.quiet(resource);
@@ -309,7 +336,7 @@ fn connection(shared: &Shared, stream: UnixStream) {
             // A granted job may run for hours, so its connection waits for
             // the end without a deadline.
             if stream.set_read_timeout(None).is_ok() {
-                ask(shared, stream, &mut reader, job);
+                seat::ask(shared, stream, &mut reader, job);
             }
         }
         Ok(Some(Request::Status)) => {
@@ -329,58 +356,4 @@ fn connection(shared: &Shared, stream: UnixStream) {
         }
         Ok(Some(Request::Done { .. }) | None) | Err(_) => {}
     }
-}
-
-/// Queues `job` for the client on `stream`, grants it when the admission
-/// rule allows, and removes it when the client says it ended, closes the
-/// connection, or sends a line the daemon cannot read.
-fn ask(shared: &Shared, stream: UnixStream, reader: &mut BufReader<UnixStream>, job: Job) {
-    let Ok(grant_stream) = stream.try_clone() else {
-        return;
-    };
-    let queued = Instant::now();
-    let label = Label::new(&job.label);
-    let id: JobId = {
-        let mut state = lock(shared);
-        let lane = job.lane;
-        let id = state.queue.push(
-            Waiter {
-                job,
-                stream: grant_stream,
-                label,
-                queued,
-            },
-            lane,
-        );
-        state.grant();
-        if let Some(ahead) = state.queue.ahead_of(id) {
-            let held = state.queue.held();
-            // A client that cannot take this reply also closes its
-            // connection, which the read below sees.
-            let _ = write_line(&mut &stream, &Reply::Queued { ahead, held });
-        }
-        id
-    };
-    finish(shared, reader, id);
-}
-
-/// Waits for the end of the job numbered `id` on its connection, removes
-/// the job, and starts the jobs that its place lets start.
-fn finish(shared: &Shared, reader: &mut BufReader<UnixStream>, id: JobId) {
-    let exit = read_end(reader);
-    let mut state = lock(shared);
-    state.record(id, Some(exit));
-    state.grant();
-}
-
-/// Reads the job's connection until its client says how the job ended. A
-/// connection that closes or sends a line the daemon cannot read leaves the
-/// end unknown.
-fn read_end(reader: &mut BufReader<UnixStream>) -> Exit {
-    while let Ok(Some(request)) = read_line::<Request>(reader) {
-        if let Request::Done { exit_code, signal } = request {
-            return Exit::reported(exit_code, signal);
-        }
-    }
-    Exit::Lost
 }

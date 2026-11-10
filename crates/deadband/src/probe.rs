@@ -4,7 +4,8 @@
 //! The command and, later, the daemon take any [`Probe`], and tests pass a
 //! fake one. [`System`] reads the machine deadband runs on.
 //! On macOS it calls `getloadavg` and `sysctlbyname` in the `macos` module,
-//! which is the only module with unsafe code. The `sysctl` module
+//! which is the only module with unsafe code, and [`child_usage`] calls
+//! `getrusage` there. The `sysctl` module
 //! parses each sysctl value in safe code that runs on every platform.
 
 use std::ffi::CStr;
@@ -20,7 +21,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(target_os = "macos")]
 #[expect(
     unsafe_code,
-    reason = "crates/deadband/src/probe/macos.rs calls getloadavg, sysctlbyname and libproc; rust-standards.toml's unsafe decision states its invariant"
+    reason = "crates/deadband/src/probe/macos.rs calls getloadavg, sysctlbyname, libproc and getrusage; rust-standards.toml's unsafe decision states its invariant"
 )]
 mod macos;
 // The parsing of the sysctl values runs on every platform, so the tests
@@ -102,6 +103,35 @@ impl fmt::Display for TreeUnreadable {
             Self::Failed(error) => write!(f, "the process table could not be read: {error}"),
         }
     }
+}
+
+/// What the kernel reports of a process's waited-for child processes.
+///
+/// A process that a child did not start, such as a compiler that a cache's
+/// server runs, counts for nothing here, so both figures are lower bounds on
+/// a cold build. `peak_rss_bytes` is the largest single process, and it is
+/// not a sum across processes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChildUsage {
+    /// The user and system CPU time, in milliseconds.
+    pub cpu_ms: u64,
+    /// The peak resident memory of the largest child, in bytes.
+    pub peak_rss_bytes: u64,
+}
+
+/// Returns what the kernel reports of the waited-for children of this
+/// process, or `None` when the call fails or the platform is not macOS.
+#[cfg(target_os = "macos")]
+#[must_use]
+pub fn child_usage() -> Option<ChildUsage> {
+    macos::child_usage()
+}
+
+/// Returns `None`, because deadband reads child usage only on macOS.
+#[cfg(not(target_os = "macos"))]
+#[must_use]
+pub const fn child_usage() -> Option<ChildUsage> {
+    None
 }
 
 /// The space of one disk.

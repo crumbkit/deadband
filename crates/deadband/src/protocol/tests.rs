@@ -1,14 +1,16 @@
 //! Tests of the messages and their JSON lines.
 
 use std::io::{BufReader, ErrorKind};
+use std::path::Path;
 
 use serde::Deserialize;
 
 use super::{
-    Ago, Exit, Job, JobRecord, JobState, Jobs, LABEL_BYTES, Label, MAX_LINE, OutsideJobs, Reply,
-    Request, StuckPeriod, Timeline, read_line, write_line,
+    Ago, Exit, Job, JobRecord, JobState, Jobs, LABEL_BYTES, Label, MAX_CWD, MAX_LINE, OutsideJobs,
+    Reply, Request, StuckPeriod, Timeline, job_cwd, read_line, write_line,
 };
 use crate::admit::{Hold, Lane};
+use crate::probe::ChildUsage;
 
 /// A job that the tests send.
 fn job() -> Job {
@@ -18,6 +20,7 @@ fn job() -> Job {
         command: "cargo nextest run".to_owned(),
         lane: Lane::Fast,
         watched: false,
+        cwd: None,
     }
 }
 
@@ -38,7 +41,8 @@ fn each_request_is_one_json_line() {
     assert_eq!(
         line(&Request::Done {
             exit_code: Some(3),
-            signal: None
+            signal: None,
+            usage: None,
         }),
         "{\"done\":{\"exit_code\":3}}\n"
     );
@@ -95,6 +99,7 @@ fn read_line_reads_back_each_line_that_write_line_wrote() {
         + &line(&Request::Done {
             exit_code: None,
             signal: None,
+            usage: None,
         });
     let mut reader = BufReader::new(text.as_bytes());
     assert_eq!(
@@ -105,7 +110,8 @@ fn read_line_reads_back_each_line_that_write_line_wrote() {
         read_line::<Request>(&mut reader).expect("the line reads"),
         Some(Request::Done {
             exit_code: None,
-            signal: None
+            signal: None,
+            usage: None,
         })
     );
     assert_eq!(
@@ -186,6 +192,7 @@ fn each_line_that_an_older_client_sends_still_reads() {
             Request::Done {
                 exit_code: Some(3),
                 signal: None,
+                usage: None,
             },
         ),
     ];
@@ -201,10 +208,81 @@ fn a_done_line_that_carries_a_signal_names_it() {
     assert_eq!(
         line(&Request::Done {
             exit_code: None,
-            signal: Some(9)
+            signal: Some(9),
+            usage: None,
         }),
         "{\"done\":{\"exit_code\":null,\"signal\":9}}\n"
     );
+}
+
+#[test]
+fn a_done_line_that_carries_usage_reads_back_as_itself() {
+    let done = Request::Done {
+        exit_code: Some(0),
+        signal: None,
+        usage: Some(ChildUsage {
+            cpu_ms: 1500,
+            peak_rss_bytes: 4096,
+        }),
+    };
+    let text = line(&done);
+    assert_eq!(
+        text,
+        "{\"done\":{\"exit_code\":0,\"usage\":{\"cpu_ms\":1500,\"peak_rss_bytes\":4096}}}\n"
+    );
+    let read = read_line::<Request>(&mut BufReader::new(text.as_bytes())).expect("reads");
+    assert_eq!(read, Some(done));
+}
+
+#[test]
+fn a_job_with_a_working_directory_carries_it_and_reads_back_as_itself() {
+    let asked = Request::Ask(Job {
+        cwd: Some("/work/repo".to_owned()),
+        ..job()
+    });
+    let text = line(&asked);
+    assert!(text.contains("\"cwd\":\"/work/repo\""), "{text}");
+    let read = read_line::<Request>(&mut BufReader::new(text.as_bytes())).expect("reads");
+    assert_eq!(read, Some(asked));
+}
+
+#[test]
+fn a_job_from_an_older_client_has_no_working_directory() {
+    let text = "{\"ask\":{\"label\":\"a\",\"pid\":1,\"command\":\"c\"}}\n";
+    let read = read_line::<Request>(&mut BufReader::new(text.as_bytes())).expect("reads");
+    let Some(Request::Ask(asked)) = read else {
+        panic!("the line is an ask");
+    };
+    assert_eq!(asked.cwd, None);
+}
+
+#[test]
+fn a_short_working_directory_is_sent_whole() {
+    assert_eq!(job_cwd(Path::new("/work/repo")), "/work/repo");
+}
+
+#[test]
+fn a_long_working_directory_is_shortened_to_1_kib_on_a_character_boundary() {
+    let long = format!("/{}", "é".repeat(MAX_CWD));
+    let sent = job_cwd(Path::new(&long));
+    assert!(sent.len() <= MAX_CWD, "{}", sent.len());
+    assert!(sent.len() >= MAX_CWD - 1, "{}", sent.len());
+    assert!(long.starts_with(&sent));
+}
+
+#[test]
+fn an_older_daemon_reads_a_done_line_that_carries_usage() {
+    let text = line(&Request::Done {
+        exit_code: None,
+        signal: None,
+        usage: Some(ChildUsage {
+            cpu_ms: 1,
+            peak_rss_bytes: 2,
+        }),
+    });
+    let read: Option<OlderRequest> =
+        read_line(&mut BufReader::new(text.as_bytes())).expect("the line reads");
+    assert_eq!(read, Some(OlderRequest::Done { exit_code: None }));
 }
 
 /// The request as a daemon that knows no `signal` field reads it.
@@ -219,6 +297,7 @@ fn an_older_daemon_reads_a_done_line_that_carries_a_signal() {
     let text = line(&Request::Done {
         exit_code: None,
         signal: Some(9),
+        usage: None,
     });
     let read: Option<OlderRequest> =
         read_line(&mut BufReader::new(text.as_bytes())).expect("the line reads");
