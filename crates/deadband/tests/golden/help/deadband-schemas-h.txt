@@ -1,0 +1,13 @@
+Explore the JSON documents that deadband prints and the files it reads
+
+Usage: deadband schemas [OPTIONS] <COMMAND>
+
+Commands:
+  list  List the JSON documents that deadband prints and the files it reads
+  show  Print the JSON Schema of each document or file format
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Global flags: --json, --fields <FIELD>, --long, --full. `deadband schemas --help` describes them.
+Next: deadband schemas <COMMAND> -h

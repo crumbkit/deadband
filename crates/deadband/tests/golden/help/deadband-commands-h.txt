@@ -1,0 +1,12 @@
+Explore deadband's commands
+
+Usage: deadband commands [OPTIONS] <COMMAND>
+
+Commands:
+  list  List deadband's commands with their arguments, examples and columns
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Global flags: --json, --fields <FIELD>, --long, --full. `deadband commands --help` describes them.
+Next: deadband commands <COMMAND> -h

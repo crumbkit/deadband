@@ -9,7 +9,9 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
-use crumbkit::help::{Effects, Example, Help, Leaf};
+use crumbkit::commands::COMMANDS_LIST;
+use crumbkit::help::{Effects, Example, FileFormat, Help, Leaf};
+use crumbkit::schemas::{SCHEMAS_LIST, SCHEMAS_SHOW};
 use crumbkit::tool::{Exit, Failures};
 use crumbkit::{Document, Prose, Sink, Tool, ViewFlags};
 use schemars::JsonSchema;
@@ -21,16 +23,19 @@ use crate::daemon::{DAEMON_RUNNING, Log, SOCKET_UNUSABLE};
 use crate::environment::Environment;
 use crate::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Probe, Sample, Unreadable};
 use crate::protocol::{Job, Jobs};
+use crate::reclaim::CONFIG;
 use crate::stuck::quiet_text;
 #[cfg(feature = "tui")]
-use crate::tui::{TOP_NOT_A_TERMINAL, TOP_TERMINAL_FAILED};
+use crate::tui::{EXIT_INTERRUPTED, TOP_NOT_A_TERMINAL, TOP_TERMINAL_FAILED};
 
 mod commands;
+mod explore;
 #[cfg(test)]
 mod tests;
 
 use self::commands::Flagged;
 pub use self::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED, JOB_STUCK, JOB_UNREADABLE, NotStarted};
+pub use self::explore::{CommandsCommand, SchemasCommand};
 
 /// Keep a busy machine usable while many heavy jobs compete for it.
 #[derive(Debug, Parser)]
@@ -63,6 +68,19 @@ pub enum Command {
     /// Show the last ten minutes of jobs, load and holds in the terminal.
     #[cfg(feature = "tui")]
     Top,
+    /// Explore deadband's commands.
+    Commands {
+        /// The command to run.
+        #[command(subcommand)]
+        command: CommandsCommand,
+    },
+    /// Explore the JSON documents that deadband prints and the files it
+    /// reads.
+    Schemas {
+        /// The command to run.
+        #[command(subcommand)]
+        command: SchemasCommand,
+    },
 }
 
 /// The arguments of `deadband run`.
@@ -212,37 +230,61 @@ pub const EXIT_NOT_FOUND: u8 = 127;
 /// command, and the exit codes with the failures that produce them.
 pub const TOOL: Tool = Tool::new()
     .help(
-        Help::new().leaves(&[
-            Leaf::new(&["status"])
-                .examples(&[
-                    Example::new(&[], "Print the machine's load, memory pressure and swap"),
-                    Example::new(&["--json"], "Print the same sample as a JSON document"),
-                ])
-                .effects(Effects::read_only())
-                .document(STATUS),
-            Leaf::new(&["run"])
-                .examples(&[Example::new(
-                    &["--label", "tests", "--", "cargo", "test"],
-                    "Run cargo test once the daemon admits it",
-                )])
-                .effects(Effects::additive().all_or_none().open_world())
-                .prints_no_result(),
-            Leaf::new(&["daemon"])
-                .examples(&[Example::new(
-                    &["--max-jobs", "2"],
-                    "Admit jobs while at most 2 run at once",
-                )])
-                .effects(Effects::additive())
-                .prints_no_result(),
-            #[cfg(feature = "tui")]
-            Leaf::new(&["top"])
-                .examples(&[Example::new(
-                    &[],
-                    "Show the last ten minutes of jobs in the terminal",
-                )])
-                .effects(Effects::read_only())
-                .prints_no_result(),
-        ]),
+        Help::new()
+            .leaves(&[
+                Leaf::new(&["status"])
+                    .examples(&[
+                        Example::new(&[], "Print the machine's load, memory pressure and swap"),
+                        Example::new(&["--json"], "Print the same sample as a JSON document"),
+                    ])
+                    .effects(Effects::read_only())
+                    .document(STATUS),
+                Leaf::new(&["run"])
+                    .examples(&[Example::new(
+                        &["--label", "tests", "--", "cargo", "test"],
+                        "Run cargo test once the daemon admits it",
+                    )])
+                    .effects(Effects::additive().all_or_none().open_world())
+                    .passes_on_exit("the job")
+                    .prints_no_result(),
+                Leaf::new(&["daemon"])
+                    .examples(&[Example::new(
+                        &["--max-jobs", "2"],
+                        "Admit jobs while at most 2 run at once",
+                    )])
+                    .effects(Effects::additive())
+                    .prints_no_result(),
+                #[cfg(feature = "tui")]
+                Leaf::new(&["top"])
+                    .examples(&[Example::new(
+                        &[],
+                        "Show the last ten minutes of jobs in the terminal",
+                    )])
+                    .effects(Effects::read_only())
+                    .prints_no_result(),
+                Leaf::new(&["commands", "list"])
+                    .examples(&[
+                        Example::new(&[], "List every command with its arguments"),
+                        Example::new(&["run"], "List only `deadband run` and its arguments"),
+                    ])
+                    .document(COMMANDS_LIST)
+                    .effects(Effects::read_only()),
+                Leaf::new(&["schemas", "list"])
+                    .examples(&[Example::new(
+                        &[],
+                        "List the documents deadband prints and its config file format",
+                    )])
+                    .document(SCHEMAS_LIST)
+                    .effects(Effects::read_only()),
+                Leaf::new(&["schemas", "show"])
+                    .examples(&[Example::new(
+                        &["deadband/config/v1"],
+                        "Print the JSON Schema of the daemon's config file",
+                    )])
+                    .document(SCHEMAS_SHOW)
+                    .effects(Effects::read_only()),
+            ])
+            .file_formats(&[FileFormat::new(CONFIG)]),
     )
     .failures(
         Failures::new().exits(&[
@@ -263,6 +305,9 @@ pub const TOOL: Tool = Tool::new()
             Exit::new(EXIT_TOP, "`top` has no terminal to draw on, or lost it.")
                 .commands(&[&["top"]])
                 .failures(&[&TOP_NOT_A_TERMINAL, &TOP_TERMINAL_FAILED]),
+            #[cfg(feature = "tui")]
+            Exit::new(EXIT_INTERRUPTED, "the person pressed Ctrl-C in `top`.")
+                .commands(&[&["top"]]),
         ]),
     );
 
@@ -281,6 +326,8 @@ pub fn run<P: Probe + Clone + Send + 'static>(machine: &Machine<P>) -> ExitCode 
         }
         #[cfg(feature = "tui")]
         Command::Top => commands::top(&mut Sink::standard(), &mut output, machine),
+        Command::Commands { command } => explore::commands(&mut Sink::standard(), output, &command),
+        Command::Schemas { command } => explore::schemas(&mut Sink::standard(), output, &command),
     };
     crumbkit::events::ended(exit, None)
 }
@@ -303,6 +350,8 @@ pub fn run_to<O: Write, W: Write, T: Into<OsString>, P: Probe + Clone + Send + '
         Command::Daemon(args) => commands::daemon(sink, &mut output, machine, &args),
         #[cfg(feature = "tui")]
         Command::Top => commands::top(sink, &mut output, machine),
+        Command::Commands { command } => explore::commands(sink, output, &command),
+        Command::Schemas { command } => explore::schemas(sink, output, &command),
     }
 }
 

@@ -1,0 +1,19 @@
+List deadband's commands with their arguments, examples and columns
+
+Usage: deadband commands list [OPTIONS] [PATH]...
+
+Arguments:
+  [PATH]...  The names of the commands below the root that lead to the branch, such as `books list`
+
+Options:
+      --limit <N>  Print at most this many rows [default: 25]
+      --all        Print every row
+  -h, --help       Print help (see more with '--help')
+
+Examples:
+  deadband commands list
+  deadband commands list run
+
+Effects: read-only, closed-world.
+Global flags: --json, --fields <FIELD>, --full. `deadband commands list --help` describes them.
+Next: deadband commands list --help explains each column.
