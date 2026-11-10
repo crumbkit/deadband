@@ -55,6 +55,7 @@ command = ["tool", "reclaim", "--json"]
             }],
             after: Duration::from_secs(120),
             timeout: Duration::from_secs(30),
+            stuck: crate::stuck::Config::default(),
             memory: "8G".to_owned(),
             disk: "50G".to_owned(),
         }
@@ -395,4 +396,31 @@ fn a_real_run_that_exits_with_an_error_still_counts_the_bytes_it_reported() {
     let last = records.last().expect("a record");
     assert_eq!(last.freed_bytes, Some(2 * GIB));
     assert_eq!(last.failed.as_deref(), Some("it exited with code 1"));
+}
+
+#[test]
+fn the_config_file_reads_the_stuck_keys() {
+    let text =
+        "stuck_after = \"10m\"\nstuck_ignore = [\"^docker \"]\non_stuck = [\"tell\", \"me\"]\n";
+    let config = Config::parse(text).expect("the config parses");
+    assert_eq!(config.stuck.after, Some(Duration::from_secs(600)));
+    assert!(config.stuck.ignores("docker compose up"));
+    assert_eq!(
+        config.stuck.on_stuck,
+        vec!["tell".to_owned(), "me".to_owned()]
+    );
+}
+
+#[test]
+fn a_config_with_no_stuck_keys_detects_after_five_minutes() {
+    let config = Config::parse("").expect("an empty file parses");
+    assert_eq!(config.stuck.after, Some(Duration::from_secs(300)));
+    assert!(config.stuck.on_stuck.is_empty());
+}
+
+#[test]
+fn an_invalid_stuck_key_refuses_the_whole_config() {
+    assert!(Config::parse("stuck_after = \"1s\"\n").is_err());
+    assert!(Config::parse("stuck_ignore = [\"(\"]\n").is_err());
+    assert!(Config::parse("on_stuck = []\n").is_err());
 }

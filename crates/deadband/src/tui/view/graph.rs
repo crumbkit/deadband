@@ -89,7 +89,14 @@ fn scale_color(permille: u32) -> Color {
 }
 
 /// Draws the load, the cores, the strip and the legend from line `top`.
-pub(super) fn draw(buffer: &mut Buffer, model: &Model, now: Instant, top: u16, x: u16, width: u16) {
+pub(super) fn draw(
+    buffer: &mut Buffer,
+    model: &Model,
+    now: Instant,
+    top: u16,
+    (x, width): (u16, u16),
+    no_activity: bool,
+) {
     put(buffer, 1, top, "load", fg(TEXT));
     let load = model
         .latest_load()
@@ -106,7 +113,7 @@ pub(super) fn draw(buffer: &mut Buffer, model: &Model, now: Instant, top: u16, x
     let limit = cores.and_then(|cores| u16::try_from(cores).ok());
     graph(buffer, model, now, (top, x, width), scale_top, limit);
     strip(buffer, model, now, top + HEIGHT, x, width);
-    legend(buffer, top + HEIGHT + 1, x);
+    legend(buffer, top + HEIGHT + 1, x, no_activity);
 }
 
 /// Draws the braille graph of the load in `(top, x, width)`. Dots that are
@@ -161,24 +168,40 @@ fn strip(buffer: &mut Buffer, model: &Model, now: Instant, y: u16, x: u16, width
 }
 
 /// Draws the key to the strip's and the bars' colours. It starts left of
-/// the axis when the terminal is too narrow for it there.
-fn legend(buffer: &mut Buffer, y: u16, x: u16) {
+/// the axis when the terminal is too narrow for it there. While a row shows
+/// a period with no activity, the key names it, and in a terminal too
+/// narrow for its usual gaps the gaps close up.
+fn legend(buffer: &mut Buffer, y: u16, x: u16, no_activity: bool) {
     /// The columns the legend takes, with one spare on the right.
     const WIDTH: u16 = 72;
-    let x = x.min(buffer.area.width.saturating_sub(WIDTH));
+    /// The columns the legend takes with `no activity`.
+    const WIDE: u16 = 85;
+    /// The columns the legend takes with `no activity` and closed gaps.
+    const TIGHT: u16 = 78;
+    let columns = buffer.area.width;
+    let (gaps, needs): ([u16; 7], u16) = match (no_activity, columns >= WIDE) {
+        (false, _) => ([9, 9, 9, 11, 11, 13, 0], WIDTH),
+        (true, true) => ([9, 9, 9, 11, 9, 12, 12], WIDE),
+        (true, false) => ([8, 8, 8, 10, 8, 11, 11], TIGHT),
+    };
+    let x = x.min(columns.saturating_sub(needs));
     let parts = [
-        ("▀", OPEN, "open", 9),
-        ("▀", TEAL, "full", 9),
-        ("▀", AMBER, "load", 9),
-        ("▀", VIOLET, "memory", 11),
-        ("▀", RED, "disk", 11),
-        ("░", AMBER, "waiting", 13),
-        ("█", TEAL, "running", 0),
+        ("▀", OPEN, "open"),
+        ("▀", TEAL, "full"),
+        ("▀", AMBER, "load"),
+        ("▀", VIOLET, "memory"),
+        ("▀", RED, "disk"),
+        ("░", AMBER, "waiting"),
+        ("█", TEAL, "running"),
     ];
     let mut at = x;
-    for (sign, color, name, width) in parts {
+    for ((sign, color, name), gap) in parts.into_iter().zip(gaps) {
         put(buffer, at, y, sign, fg(color));
         put(buffer, at + 2, y, name, fg(super::DIM));
-        at += width;
+        at += gap;
+    }
+    if no_activity {
+        put(buffer, at, y, "▓", fg(RED));
+        put(buffer, at + 2, y, "no activity", fg(super::DIM));
     }
 }

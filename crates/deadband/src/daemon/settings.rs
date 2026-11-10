@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use super::{FIRST_LINE_WITHIN, SAMPLE_EVERY};
+use crate::job::busiest::PS_COMMAND;
 use crate::reclaim;
 
 /// How the daemon admits jobs.
@@ -26,6 +27,36 @@ pub struct Settings {
     pub first_line_within: Duration,
     /// The reclaimers and when the daemon asks them.
     pub reclaim: reclaim::Config,
+    /// How the daemon watches jobs for activity.
+    pub watching: Watching,
+}
+
+/// How the daemon watches jobs for activity.
+#[derive(Debug, Clone)]
+pub struct Watching {
+    /// How often the daemon reads the process tree of each watched job.
+    pub every: Duration,
+    /// The command that lists every process.
+    pub census: Vec<String>,
+    /// How long the daemon waits for that command.
+    pub census_within: Duration,
+    /// How often that command runs while a job stays stuck.
+    pub census_every: Duration,
+    /// How long the daemon waits for one run of `on_stuck` before it logs
+    /// that the command is late.
+    pub on_stuck_within: Duration,
+}
+
+impl Default for Watching {
+    fn default() -> Self {
+        Self {
+            every: Duration::from_secs(15),
+            census: PS_COMMAND.map(str::to_owned).to_vec(),
+            census_within: Duration::from_secs(5),
+            census_every: Duration::from_secs(60),
+            on_stuck_within: Duration::from_secs(60),
+        }
+    }
 }
 
 impl Settings {
@@ -48,6 +79,7 @@ impl Settings {
             sample_every: SAMPLE_EVERY,
             first_line_within: FIRST_LINE_WITHIN,
             reclaim: reclaim::Config::default(),
+            watching: Watching::default(),
         }
     }
 }

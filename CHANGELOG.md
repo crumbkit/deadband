@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The daemon detects a job that has shown no activity for 5 minutes and says
+  so in `deadband status`, which then exits 1, in `deadband top`, and on the
+  standard error of the waiting `deadband run`. The `stuck_after`,
+  `stuck_ignore` and `on_stuck` config keys control it. deadband never ends,
+  pauses or signals a stuck job.
+
 ### Changed
 
 - `DEADBAND_HELD=0` no longer marks a job as held, and `DEADBAND_HELD` and

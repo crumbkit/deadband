@@ -129,3 +129,65 @@ fn the_system_probe_says_why_it_cannot_read_a_missing_directory() {
         .expect_err("a missing directory has no disk");
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
 }
+
+#[cfg(target_os = "macos")]
+mod tree {
+    use std::time::{Duration, Instant};
+
+    use crate::probe::{Probe, System};
+
+    #[test]
+    fn the_tree_of_a_process_holds_it_and_its_child() {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "this test needs a real process tree"
+        )]
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 2 & wait"])
+            .spawn()
+            .expect("sh starts");
+        let root = child.id();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut tree = System.tree(root).expect("the tree reads");
+        while tree.len() < 2 && Instant::now() < deadline {
+            std::thread::yield_now();
+            tree = System.tree(root).expect("the tree reads");
+        }
+        let _ = child.wait();
+        assert_eq!(tree.len(), 2);
+        assert!(tree.iter().any(|each| each.pid == root));
+    }
+
+    #[test]
+    fn a_process_that_is_gone_reads_as_an_empty_tree() {
+        // The highest process ID on macOS is 99998, so this one never exists.
+        let tree = System.tree(1_000_000).expect("the read does not fail");
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn this_process_shows_cpu_time() {
+        let tree = System.tree(std::process::id()).expect("the tree reads");
+        let me = tree.iter().find(|each| each.pid == std::process::id());
+        assert!(me.expect("the tree holds this process").cpu > Duration::ZERO);
+    }
+
+    #[test]
+    fn a_process_owned_by_another_user_reads_as_zero() {
+        // Process 1 belongs to root, and libproc refuses its usage to an
+        // unprivileged test.
+        let tree = System.tree(1).expect("the read does not fail");
+        let init = tree.iter().find(|each| each.pid == 1);
+        let init = init.expect("the tree holds process 1");
+        assert_eq!((init.cpu, init.disk_bytes), (Duration::ZERO, 0));
+    }
+}
+
+#[test]
+fn mach_ticks_scale_by_the_timebase() {
+    assert_eq!(
+        super::sysctl::ticks(24, 125, 3),
+        std::time::Duration::from_nanos(1000)
+    );
+    assert_eq!(super::sysctl::ticks(5, 1, 0), std::time::Duration::ZERO);
+}

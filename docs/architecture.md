@@ -37,15 +37,16 @@ status.
 
 | Module | Owns |
 | --- | --- |
-| probe | Reads CPU load, memory pressure, swap and disk space from macOS every second, behind a trait so a Linux probe can be added later. |
+| probe | Reads CPU load, memory pressure, swap and disk space from macOS every second, and the CPU time and disk bytes of a job's process tree, behind a trait so a Linux probe can be added later. |
 | admit | Decides whether a waiting job starts now and how many threads it gets, and holds the queue with its fast and normal lanes. The rule holds a job on the job count or the lane's places even when the probe fails, and on critically low disk even when nothing runs. Past those checks it admits a job when nothing runs or the probe fails, and otherwise holds it on memory pressure or the load. |
 | admission | One public call, `admit`, that does what `deadband run` does before it starts a job: it chooses the lane, asks the daemon, waits, and returns the job's lease and variables. It writes no log, so a program that embeds deadband passes a callback. |
-| daemon | Listens on the socket, samples the probe once a second, and grants waiting jobs as admit allows. It remembers the last 64 jobs that ended, in memory only, for the timeline request. |
+| daemon | Listens on the socket, samples the probe once a second, and grants waiting jobs as admit allows. It remembers the last 64 jobs that ended, in memory only, for the timeline request. Its watch thread reads the process tree of each job that `deadband run` started. |
+| stuck | The pure rule that says when a watched job counts as stuck, the lines that report it, and the `stuck_after`, `stuck_ignore` and `on_stuck` config keys. |
 | serve | One public call, `run_daemon`, that does what `deadband daemon` does before it prints a failure: it binds the socket, reads the reclaim config and serves. |
 | client | Asks the daemon to admit a job or to list its jobs, and gives the reason to start at once when the daemon cannot be asked. A granted job's lease has one thread that tells the next daemon the job still runs when the connection closes. |
 | protocol | The messages over the socket, one JSON object per line. |
 | socket | Finds the socket's path from the environment, and lists the variables deadband reads. |
-| job | The only module that starts a process: the job that `deadband run` was given, and the reclaimers that the daemon's config file names. |
+| job | The only module that starts a process: the job that `deadband run` was given, the reclaimers and the `on_stuck` command that the daemon's config file names, and `/bin/ps`, which names the busiest process outside the jobs. |
 | reclaim | Reads the daemon's config file, decides when to reclaim memory or disk, runs the reclaimers on a thread of their own, and keeps the last reclaim for `deadband status`. |
 | environment | Reads the variables that `deadband run` uses, and gives a granted job its parallelism variables. |
 | priority | Chooses a job's lane from the priority file. |
@@ -91,6 +92,66 @@ holds no job. deadband never signals or stops a reclaimer; past its
 timeout the daemon stops waiting for it, and starts no other reclaim until
 it exits. [running.md](running.md) gives the config and the JSON a
 reclaimer prints.
+
+## Detecting stuck jobs
+
+A job can hold a place while it does nothing, for example when its
+processes wait in dyld while syspolicyd scans them. The daemon watches the
+process tree of each job that `deadband run` started, and says when one has
+shown no activity.
+
+The watch thread wakes every 15 seconds and makes no process call while no
+watched job runs. It copies the running jobs under the queue lock, then
+reads their trees through `Probe::tree` with the lock released, applies the
+rule in `stuck` under the lock, and writes each notice with the lock
+released, so admission never waits for a reading. The daemon holds a job's
+last reading, its last activity and its last four stuck periods in memory
+and keeps those periods with the 64 ended jobs that it remembers.
+
+Activity is any of three things accumulated across the tree since the last
+activity: one second of CPU, one mebibyte of disk read or written, or a
+change in the tree's set of process IDs. A job with no activity for
+`stuck_after`, 5 minutes by default, is stuck. The rule adds only the
+positive change of each process, so a child that exits cannot lower the
+total. A child owned by another user reads as zero, so its use does not count.
+
+When a job becomes stuck, and at most once a minute while one stays stuck,
+the job module runs `/bin/ps` on a thread of its own with a 5-second
+deadline. libproc refuses an unprivileged daemon the CPU use of a root
+process, and `/bin/ps` is setuid root. At most one runs at a time, and
+deadband never signals it. It names the busiest process outside the jobs
+when that process uses at least 50% of one core.
+
+deadband never ends, pauses or signals a stuck job, and detection changes
+neither admission nor a job's priority or streams. A stuck job keeps its
+place. Every failure leaves the job running and writes one log line: a failed
+read of the process table leaves the job unflagged, and `deadband status`
+then exits 1 with `deadband::job::unreadable`; a platform with no reader
+flags nothing and exits 0; a failure of `/bin/ps` names no process and the
+job stays flagged.
+
+Only `deadband run` sets `watched` on its job. A program that embeds deadband
+holds the lease in its own process, whose tree is not the job's tree, so it
+passes no notices and its job is not watched. A daemon restart keeps
+`watched`, because `Request::Seat` carries the `Job`.
+
+### The lifecycle of a watched job
+
+| State | Meaning | Enters when | Leaves when |
+| --- | --- | --- | --- |
+| Watching | The job runs and its tree shows activity within `stuck_after` | The job is granted or seated with `watched` set, or Stuck sees activity | No activity for `stuck_after` goes to Stuck; `Done` or a closed connection ends the record |
+| Stuck | The tree has shown no activity for `stuck_after` | Watching passes `stuck_after` | Activity goes to Watching; `Done` or a closed connection ends the record |
+
+A job that a client does not mark `watched`, or whose command matches
+`stuck_ignore`, has no record. A waiting job has no record.
+
+| Crash or fault | Result |
+| --- | --- |
+| The daemon exits | The records are lost. Jobs keep running, because the daemon never touches them. Each lease seats its job on the next daemon, which starts it in Watching with a fresh timer. |
+| The client exits | The connection closes and the record ends. |
+| The watch thread panics | Detection stops and admission continues. Every job shows as running. |
+| `/bin/ps` hangs | The watch thread waits at most 5 seconds for it, then names no process and goes on sampling. |
+| The Mac sleeps | The monotonic clock does not advance, so sleep adds no quiet time. |
 
 # Planned
 

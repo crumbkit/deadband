@@ -5,8 +5,8 @@ use std::io::{BufReader, ErrorKind};
 use serde::Deserialize;
 
 use super::{
-    Ago, Exit, Job, JobRecord, JobState, Jobs, LABEL_BYTES, Label, MAX_LINE, Reply, Request,
-    Timeline, read_line, write_line,
+    Ago, Exit, Job, JobRecord, JobState, Jobs, LABEL_BYTES, Label, MAX_LINE, OutsideJobs, Reply,
+    Request, StuckPeriod, Timeline, read_line, write_line,
 };
 use crate::admit::{Hold, Lane};
 
@@ -17,6 +17,7 @@ fn job() -> Job {
         pid: 42,
         command: "cargo nextest run".to_owned(),
         lane: Lane::Fast,
+        watched: false,
     }
 }
 
@@ -81,6 +82,9 @@ fn each_reply_is_one_json_line() {
         waiting: Vec::new(),
         held: None,
         reclaim: None,
+        stuck: Vec::new(),
+        busiest: None,
+        unreadable: false,
     });
     assert!(line(&jobs).starts_with("{\"jobs\":{\"max_jobs\":1,\"running\":[{"));
 }
@@ -228,6 +232,7 @@ fn timeline() -> Timeline {
         lane: Lane::Normal,
         queued: Ago::from_millis(queued),
         state,
+        stuck: Vec::new(),
     };
     Timeline {
         up: Ago::from_millis(9),
@@ -259,6 +264,8 @@ fn timeline() -> Timeline {
         ],
         hidden: 0,
         held: Some(Hold::Full { max_jobs: 1 }),
+        busiest: None,
+        unreadable: false,
     }
 }
 
@@ -294,6 +301,13 @@ fn the_largest_timeline_reply_fits_in_one_line() {
             ended: Ago::from_millis(u64::MAX),
             exit: Exit::Signalled { signal: i32::MIN },
         },
+        stuck: vec![
+            StuckPeriod {
+                since: Ago::from_millis(u64::MAX),
+                until: Some(Ago::from_millis(u64::MAX)),
+            };
+            4
+        ],
     };
     let reply = Reply::Timeline(Timeline {
         up: Ago::from_millis(u64::MAX),
@@ -303,6 +317,11 @@ fn the_largest_timeline_reply_fits_in_one_line() {
             projected: f64::MAX,
             cores: usize::MAX,
         }),
+        busiest: Some(OutsideJobs::Busy {
+            name: "\"".repeat(LABEL_BYTES),
+            cpu_percent: u32::MAX,
+        }),
+        unreadable: true,
     });
     let length = line(&reply).len();
     assert!(
@@ -360,4 +379,47 @@ fn an_age_counts_the_whole_milliseconds_between_two_instants() {
     let later = start + std::time::Duration::from_millis(1500);
     assert_eq!(Ago::between(start, later), Ago::from_millis(1500));
     assert_eq!(Ago::between(later, start), Ago::from_millis(0));
+}
+
+#[test]
+fn a_job_from_an_older_client_is_not_watched() {
+    let line = r#"{"label":"a","pid":1,"command":"b"}"#;
+    let job: Job = serde_json::from_str(line).expect("the job reads");
+    assert!(!job.watched);
+}
+
+#[test]
+fn a_watched_job_says_so_on_the_wire() {
+    let line = serde_json::to_string(&Job {
+        watched: true,
+        ..job()
+    })
+    .expect("a job serializes");
+    assert!(line.contains("\"watched\":true"), "{line}");
+}
+
+#[test]
+fn a_stuck_notice_round_trips() {
+    let reply = Reply::Stuck {
+        quiet: Ago::from_millis(300_000),
+        again: false,
+        busiest: Some(OutsideJobs::Quiet),
+    };
+    let text = serde_json::to_string(&reply).expect("a reply serializes");
+    assert_eq!(serde_json::from_str::<Reply>(&text).expect("reads"), reply);
+}
+
+#[test]
+fn jobs_from_an_older_daemon_have_no_stuck_job() {
+    let line = r#"{"max_jobs":1,"running":[],"waiting":[]}"#;
+    let jobs: Jobs = serde_json::from_str(line).expect("the jobs read");
+    assert!(jobs.stuck.is_empty() && jobs.busiest.is_none() && !jobs.unreadable);
+}
+
+#[test]
+fn a_timeline_from_an_older_daemon_has_no_stuck_periods() {
+    let line = r#"{"up":5,"jobs":[{"label":"a","lane":"normal","queued":1,"state":"waiting"}],"hidden":0,"held":null}"#;
+    let timeline: Timeline = serde_json::from_str(line).expect("the timeline reads");
+    assert!(timeline.jobs[0].stuck.is_empty());
+    assert!(timeline.busiest.is_none() && !timeline.unreadable);
 }

@@ -1,0 +1,16 @@
+ deadband  last 10 minutes · 3 more jobs not shown      2 STUCK   HELD · FULL
+
+ job                   -10m    -8m     -6m     -4m     -2m   now  state
+ board-cli-test        │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  stuck 46m
+ mirror-git-dir        │███████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓  stuck 7m
+ starmap-check         │       │       │ ░░█████████████████████  run 5m
+ 2 jobs show no activity · busiest process outside the jobs: syspolicyd at 470…
+────────────────────────────────────────────────────────────────────────────────
+ load   3.2
+ cores  14              ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+
+                        ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶
+ held by                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ▀ open  ▀ full  ▀ load  ▀ memory  ▀ disk  ░ waiting  █ running  ▓ no activity
+ waiting because: the daemon already runs 4 jobs, its most at once
+ q quit

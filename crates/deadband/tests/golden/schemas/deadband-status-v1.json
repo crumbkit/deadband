@@ -534,6 +534,10 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0
+        },
+        "watched": {
+          "description": "Whether the daemon watches this job's process tree, whose root is\n`pid`. A client that names none, and every job that a program embeds,\nis not watched.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -547,6 +551,18 @@
       "description": "The daemon's running and waiting jobs.",
       "type": "object",
       "properties": {
+        "busiest": {
+          "description": "The processes outside the jobs while a job is stuck, or `null` when\nno job is stuck or the daemon could not read them.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutsideJobs"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "held": {
           "description": "Why the first waiting job does not start yet, or `null` when no job\nwaits or the daemon does not know.",
           "anyOf": [
@@ -584,6 +600,19 @@
             "$ref": "#/$defs/Job"
           }
         },
+        "stuck": {
+          "description": "The jobs that have shown no activity for the configured time, in the\norder they started.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/StuckJob"
+          }
+        },
+        "unreadable": {
+          "description": "Whether the daemon's latest read of a job's processes failed, so it\ncannot say whether that job is stuck.",
+          "type": "boolean",
+          "default": false
+        },
         "waiting": {
           "description": "The waiting jobs, the oldest first.",
           "type": "array",
@@ -597,7 +626,10 @@
         "running",
         "waiting",
         "held",
-        "reclaim"
+        "reclaim",
+        "stuck",
+        "busiest",
+        "unreadable"
       ]
     },
     "Lane": {
@@ -612,6 +644,49 @@
           "description": "Every other job.",
           "type": "string",
           "const": "normal"
+        }
+      ]
+    },
+    "OutsideJobs": {
+      "description": "What the daemon knows of the processes outside the jobs when a job is\nstuck.",
+      "oneOf": [
+        {
+          "description": "The busiest process outside the jobs uses at least 50% of one core.",
+          "type": "object",
+          "properties": {
+            "cpu_percent": {
+              "description": "The process's share of one core, in percent.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "name": {
+              "description": "The process's name.",
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "const": "busy"
+            }
+          },
+          "required": [
+            "state",
+            "name",
+            "cpu_percent"
+          ]
+        },
+        {
+          "description": "No process outside the jobs uses 50% of one core.",
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "quiet"
+            }
+          },
+          "required": [
+            "state"
+          ]
         }
       ]
     },
@@ -719,6 +794,33 @@
         "swap_used_bytes",
         "swap_total_bytes",
         "daemon"
+      ]
+    },
+    "StuckJob": {
+      "description": "A job that has shown no activity for the configured time.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "The job's label.",
+          "type": "string"
+        },
+        "pid": {
+          "description": "The process ID of the `deadband run` that asked for the job.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "quiet_seconds": {
+          "description": "How long the job has shown no activity, in seconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "label",
+        "pid",
+        "quiet_seconds"
       ]
     }
   }

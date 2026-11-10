@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use super::{Absence, Axis, Gate, MAX_SAMPLES, Model, Phase, Rows, Status, WINDOW};
 use crate::admit::{Hold, Lane};
 use crate::client::Unasked;
-use crate::protocol::{Ago, Exit, JobRecord, JobState, Label, Timeline};
+use crate::protocol::{Ago, Exit, JobRecord, JobState, Label, StuckPeriod, Timeline};
 
 /// An axis of 60 columns over 600 seconds, so a column is 10 seconds.
 const AXIS: Axis = Axis::new(60);
@@ -26,6 +26,7 @@ fn record(label: &str, queued: u64, state: JobState) -> JobRecord {
         lane: Lane::Normal,
         queued: ago(queued),
         state,
+        stuck: Vec::new(),
     }
 }
 
@@ -35,6 +36,8 @@ fn timeline(up: u64, jobs: Vec<JobRecord>) -> Timeline {
         jobs,
         hidden: 0,
         held: None,
+        busiest: None,
+        unreadable: false,
     }
 }
 
@@ -519,4 +522,97 @@ fn the_restart_notice_goes_once_the_window_holds_only_the_new_daemon() {
     model.observe(now + secs(1), Ok(timeline(1, Vec::new())), None);
     model.observe(now + secs(2), Ok(timeline(600, Vec::new())), None);
     assert_eq!(model.restarted(), None);
+}
+
+fn quiet_record(label: &str, queued: u64, quiet: u64) -> JobRecord {
+    JobRecord {
+        stuck: vec![StuckPeriod {
+            since: ago(quiet),
+            until: None,
+        }],
+        ..record(
+            label,
+            queued,
+            JobState::Running {
+                started: ago(queued),
+            },
+        )
+    }
+}
+
+#[test]
+fn stuck_jobs_come_before_every_other_row_however_small_the_screen() {
+    let now = Instant::now();
+    let mut model = model();
+    let jobs = vec![
+        record("old", 500, JobState::Running { started: ago(490) }),
+        record("older", 550, JobState::Waiting),
+        quiet_record("stuck", 100, 60),
+    ];
+    model.observe(now, Ok(timeline(50, jobs)), None);
+    let rows = model.rows(now, Axis::new(80), 1);
+    assert_eq!(rows.rows.len(), 1);
+    assert_eq!(rows.rows[0].label, "stuck");
+    assert_eq!(rows.unseen, 2);
+}
+
+#[test]
+fn rows_with_no_stuck_job_keep_the_oldest_queued_first() {
+    let now = Instant::now();
+    let mut model = model();
+    let jobs = vec![
+        record("young", 100, JobState::Running { started: ago(90) }),
+        record("older", 550, JobState::Waiting),
+    ];
+    model.observe(now, Ok(timeline(50, jobs)), None);
+    let rows = model.rows(now, Axis::new(80), 2);
+    assert_eq!(rows.rows[0].label, "older");
+    assert_eq!(rows.rows[1].label, "young");
+}
+
+#[test]
+fn a_recovered_job_does_not_count_as_stuck() {
+    let now = Instant::now();
+    let mut model = model();
+    let mut job = record("back", 300, JobState::Running { started: ago(300) });
+    job.stuck = vec![StuckPeriod {
+        since: ago(200),
+        until: Some(ago(100)),
+    }];
+    model.observe(now, Ok(timeline(50, vec![job])), None);
+    assert_eq!(model.stuck_count(), 0);
+    let rows = model.rows(now, Axis::new(60), 3);
+    assert_eq!(rows.rows[0].stuck, vec![39..49]);
+    assert_eq!(
+        rows.rows[0].status,
+        Status::Running(Duration::from_secs(300))
+    );
+}
+
+#[test]
+fn a_stuck_job_shows_its_quiet_time() {
+    let now = Instant::now();
+    let mut model = model();
+    model.observe(
+        now,
+        Ok(timeline(50, vec![quiet_record("q", 300, 120)])),
+        None,
+    );
+    assert_eq!(model.stuck_count(), 1);
+    let rows = model.rows(now, Axis::new(60), 3);
+    assert_eq!(rows.rows[0].status, Status::Stuck(Duration::from_secs(120)));
+}
+
+#[test]
+fn a_period_outside_the_window_draws_no_span() {
+    let now = Instant::now();
+    let mut model = model();
+    let mut job = record("long", 3000, JobState::Running { started: ago(3000) });
+    job.stuck = vec![StuckPeriod {
+        since: ago(2000),
+        until: Some(ago(1000)),
+    }];
+    model.observe(now, Ok(timeline(50, vec![job])), None);
+    let rows = model.rows(now, Axis::new(60), 3);
+    assert!(rows.rows[0].stuck.is_empty());
 }

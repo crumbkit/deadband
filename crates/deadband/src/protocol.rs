@@ -11,8 +11,11 @@
 //! as running without a reply. A daemon that does not know the line closes
 //! the connection, and `run` tries again. `status` sends
 //! [`Request::Status`] and reads [`Reply::Jobs`]. `top` sends
-//! [`Request::Timeline`] once a second and reads [`Reply::Timeline`].
+//! [`Request::Timeline`] once a second and reads [`Reply::Timeline`]. While
+//! a job started with `watched` runs, the daemon may write [`Reply::Stuck`]
+//! and [`Reply::Active`] on its connection.
 
+use std::fmt;
 use std::io::{self, BufRead, Read, Write};
 
 use schemars::JsonSchema;
@@ -26,7 +29,9 @@ use crate::reclaim::Reclaimed;
 mod tests;
 mod timeline;
 
-pub use self::timeline::{Ago, Exit, JobRecord, JobState, LABEL_BYTES, Label, Timeline};
+pub use self::timeline::{
+    Ago, Exit, JobRecord, JobState, LABEL_BYTES, Label, StuckPeriod, Timeline,
+};
 
 /// The longest line, in bytes, that either side reads. A longer line is
 /// refused as malformed, so a peer cannot make the reader hold an unbounded
@@ -46,6 +51,54 @@ pub struct Job {
     /// normal lane.
     #[serde(default)]
     pub lane: Lane,
+    /// Whether the daemon watches this job's process tree, whose root is
+    /// `pid`. A client that names none, and every job that a program embeds,
+    /// is not watched.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub watched: bool,
+}
+
+/// What the daemon knows of the processes outside the jobs when a job is
+/// stuck.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum OutsideJobs {
+    /// The busiest process outside the jobs uses at least 50% of one core.
+    Busy {
+        /// The process's name.
+        name: String,
+        /// The process's share of one core, in percent.
+        cpu_percent: u32,
+    },
+    /// No process outside the jobs uses 50% of one core.
+    Quiet,
+}
+
+impl OutsideJobs {
+    /// Returns the clause that ends a line of `deadband run`.
+    #[must_use]
+    pub fn clause(&self) -> String {
+        match self {
+            Self::Busy { name, cpu_percent } => {
+                format!("the busiest process outside the jobs is {name} at {cpu_percent}% CPU")
+            }
+            Self::Quiet => "no process outside the jobs is using more than 50% CPU".to_owned(),
+        }
+    }
+}
+
+impl fmt::Display for OutsideJobs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Busy { name, cpu_percent } => {
+                write!(
+                    f,
+                    "busiest process outside the jobs: {name} at {cpu_percent}% CPU"
+                )
+            }
+            Self::Quiet => f.write_str("no process outside the jobs is using more than 50% CPU"),
+        }
+    }
 }
 
 /// What a client asks the daemon.
@@ -103,6 +156,22 @@ pub enum Reply {
     Jobs(Jobs),
     /// The jobs that `deadband top` draws.
     Timeline(Timeline),
+    /// The watched job has shown no activity. A client ignores any reply it
+    /// cannot read.
+    Stuck {
+        /// How long the job has shown no activity.
+        quiet: Ago,
+        /// Whether the job was already stuck, so this is a reminder.
+        again: bool,
+        /// What the daemon knows of the processes outside the jobs, or
+        /// `None` when it could not read them.
+        busiest: Option<OutsideJobs>,
+    },
+    /// The watched job that was stuck shows activity again.
+    Active {
+        /// How long the job showed no activity.
+        quiet: Ago,
+    },
 }
 
 /// The daemon's running and waiting jobs.
@@ -121,6 +190,29 @@ pub struct Jobs {
     /// The last reclaim, or `null` when the daemon has run none.
     #[serde(default)]
     pub reclaim: Option<Reclaimed>,
+    /// The jobs that have shown no activity for the configured time, in the
+    /// order they started.
+    #[serde(default)]
+    pub stuck: Vec<StuckJob>,
+    /// The processes outside the jobs while a job is stuck, or `null` when
+    /// no job is stuck or the daemon could not read them.
+    #[serde(default)]
+    pub busiest: Option<OutsideJobs>,
+    /// Whether the daemon's latest read of a job's processes failed, so it
+    /// cannot say whether that job is stuck.
+    #[serde(default)]
+    pub unreadable: bool,
+}
+
+/// A job that has shown no activity for the configured time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StuckJob {
+    /// The job's label.
+    pub label: String,
+    /// The process ID of the `deadband run` that asked for the job.
+    pub pid: u32,
+    /// How long the job has shown no activity, in seconds.
+    pub quiet_seconds: u64,
 }
 
 /// Writes `message` to `writer` as one JSON line and flushes it.

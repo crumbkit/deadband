@@ -214,7 +214,8 @@ fn the_daemon_command_runs_no_reclaimer_and_says_why_when_its_config_is_refused(
     start_daemon_command(&test);
     let log = test.log();
     assert!(
-        log.contains("reclaim_timeout is 0") && log.contains("so the daemon runs no reclaimer"),
+        log.contains("reclaim_timeout is 0")
+            && log.contains("so the daemon runs no reclaimer and no on_stuck command"),
         "{log}"
     );
 }

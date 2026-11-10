@@ -27,6 +27,7 @@ use std::path::Path;
 use std::process::ExitStatus;
 
 use crate::admit::{Hold, Lane, Limits};
+pub use crate::client::Notices;
 use crate::client::{self, ANSWER_WITHIN, Admission, Lease};
 use crate::daemon;
 use crate::environment::Environment;
@@ -59,6 +60,11 @@ pub struct Asked<'a> {
     /// The lane the job waits in, or `None` to take the fast lane when the
     /// priority file matches the job and the normal lane otherwise.
     pub lane: Option<Lane>,
+    /// Where the lines that say a job is stuck, or active again, go. Passing
+    /// one says that the calling process is the job's parent, so the daemon
+    /// watches its process tree. A program that holds the lease for a job
+    /// that is not its child passes `None`, and the job is not watched.
+    pub notices: Option<&'a Notices>,
 }
 
 /// A job that may start, with the lease that counts it as running.
@@ -201,9 +207,11 @@ pub fn admit(asked: &Asked<'_>, notify: &mut impl FnMut(&str)) -> Admitted {
         pid: std::process::id(),
         command: asked.command.to_owned(),
         lane,
+        watched: asked.notices.is_some(),
     };
     let queued = |ahead: usize, held: Option<Hold>| notify(&waits(ahead, held));
-    let lease = match client::ask(asked.socket, &job, ANSWER_WITHIN, queued) {
+    let lease = match client::ask_noticed(asked.socket, &job, ANSWER_WITHIN, queued, asked.notices)
+    {
         Admission::Granted(lease) => Some(lease),
         Admission::Open(unasked) => {
             notify(&format!("{unasked}, so the job starts now"));

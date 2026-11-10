@@ -175,6 +175,8 @@ fn reply_line(up: u64) -> Vec<u8> {
         jobs: Vec::new(),
         hidden: 0,
         held: None,
+        busiest: None,
+        unreadable: false,
     });
     write_line(&mut line, &reply).expect("the line writes");
     line

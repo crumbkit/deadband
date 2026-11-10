@@ -3,7 +3,8 @@
 //! [`admit`](crate::admit) allows.
 //!
 //! The daemon runs one thread that samples the probe every
-//! [`SAMPLE_EVERY`] and one thread per connection. Each thread that changes
+//! [`SAMPLE_EVERY`], one thread per connection, and one thread in
+//! the `watch` module that flags jobs with no activity. Each thread that changes
 //! the queue or the pressure starts every job that the admission rule then
 //! lets start, under the one lock that guards the queue, and writes
 //! [`Reply::Granted`] to that job's client. The daemon never starts, stops
@@ -24,7 +25,7 @@ use self::reading::{priority_active, read_machine};
 use self::timeline::Ended;
 use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
 use crate::probe::{Pressure, Probe};
-use crate::protocol::{Exit, Job, Jobs, Label, Reply, Request, read_line, write_line};
+use crate::protocol::{Exit, Job, Label, Reply, Request, read_line, write_line};
 use crate::reclaim::{self, Reclaimed, Resource, Watch};
 
 mod bind;
@@ -34,11 +35,12 @@ mod settings;
 #[cfg(test)]
 mod tests;
 mod timeline;
+mod watch;
 
 pub use self::bind::{
     Bound, DAEMON_RUNNING, SOCKET_UNUSABLE, Unbound, bind, lock_path, raise_descriptor_limit,
 };
-pub use self::settings::{Settings, default_max_jobs};
+pub use self::settings::{Settings, Watching, default_max_jobs};
 
 /// How often the daemon samples the probe.
 pub const SAMPLE_EVERY: Duration = Duration::from_secs(1);
@@ -90,6 +92,8 @@ struct State {
     up: Instant,
     /// The jobs that have ended, the oldest first.
     ended: VecDeque<Ended>,
+    /// What the daemon knows of the watched jobs.
+    stuck: watch::Watched,
 }
 
 impl State {
@@ -104,6 +108,7 @@ impl State {
             reclaimed: None,
             up: Instant::now(),
             ended: VecDeque::new(),
+            stuck: watch::Watched::default(),
         }
     }
 
@@ -138,17 +143,6 @@ impl State {
                     self.record(id, None);
                 }
             }
-        }
-    }
-
-    /// Returns the running and waiting jobs.
-    fn jobs(&self) -> Jobs {
-        Jobs {
-            max_jobs: self.settings.max_jobs.get(),
-            running: self.queue.running().map(|each| each.job.clone()).collect(),
-            waiting: self.queue.waiting().map(|each| each.job.clone()).collect(),
-            held: self.queue.held(),
-            reclaim: self.reclaimed.clone(),
         }
     }
 
@@ -195,7 +189,7 @@ pub fn note(log: &Log, line: fmt::Arguments<'_>) {
 /// A failed accept that can pass, such as running out of descriptors or a
 /// client that gave up while it connected, is logged, and the daemon
 /// accepts again after 100 ms.
-pub fn serve<P: Probe + Send + 'static>(
+pub fn serve<P: Probe + Clone + Send + 'static>(
     listener: &UnixListener,
     probe: P,
     settings: Settings,
@@ -208,6 +202,8 @@ pub fn serve<P: Probe + Send + 'static>(
     let (_stop, stopped) = mpsc::channel::<()>();
     let sampler = Arc::clone(&shared);
     let sampler_log = Arc::clone(log);
+    let (_watching, watch_stopped) = mpsc::channel::<()>();
+    watch::start(&shared, probe.clone(), watch_stopped, log);
     thread::spawn(move || sample(&sampler, &probe, &stopped, &sampler_log));
     loop {
         match listener.accept() {

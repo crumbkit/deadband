@@ -17,7 +17,10 @@ use crate::admit::{GIB, Lane};
 use crate::daemon::{Log, Settings, bind, serve};
 use crate::environment::Environment;
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
-use crate::protocol::{Exit, Job, JobState, Reply, Request, read_line, write_line};
+use crate::probe::{ProcessUse, TreeUnreadable};
+use crate::protocol::{
+    Exit, Job, JobState, Jobs, OutsideJobs, Reply, Request, StuckJob, read_line, write_line,
+};
 use crate::testing::{TestSocket, socket_path};
 
 mod reclaim;
@@ -139,6 +142,7 @@ fn ask(socket: &Path, label: &str) -> (UnixStream, Reply) {
         pid: 5,
         command: format!("make {label}"),
         lane: Lane::Normal,
+        watched: false,
     };
     write_line(&mut stream, &Request::Ask(job)).expect("the request writes");
     let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
@@ -489,4 +493,217 @@ fn top_with_json_refuses_with_not_a_terminal_and_names_status() {
         "{printed}"
     );
     assert!(printed.contains("deadband status"), "{printed}");
+}
+
+/// A probe whose job trees never change.
+#[derive(Clone)]
+struct QuietTree;
+
+impl Probe for QuietTree {
+    fn sample(&self) -> Result<Sample, Unreadable> {
+        Fixed.sample()
+    }
+
+    fn disk(&self, path: &Path) -> std::io::Result<Disk> {
+        Fixed.disk(path)
+    }
+
+    fn tree(&self, root: u32) -> Result<Vec<ProcessUse>, TreeUnreadable> {
+        Ok(vec![ProcessUse {
+            pid: root,
+            cpu: Duration::ZERO,
+            disk_bytes: 0,
+        }])
+    }
+}
+
+/// Starts a daemon on `test`'s socket that flags a quiet job within
+/// milliseconds.
+fn start_watching(test: &Test<QuietTree>) {
+    let bound = bind(&test.machine.socket).expect("the test socket binds");
+    let probe = test.machine.probe.clone();
+    let log = Arc::clone(&test.machine.log);
+    thread::spawn(move || {
+        let bound = bound;
+        let mut settings = Settings::new(NonZeroUsize::MIN, NonZeroUsize::new(4), None, None);
+        settings.reclaim.stuck.after = Some(Duration::from_millis(30));
+        settings.watching.every = Duration::from_millis(5);
+        settings.watching.census = vec!["/bin/sh".to_owned(), "-c".to_owned(), "exit 1".to_owned()];
+        serve(&bound.listener, probe, settings, &log)
+    });
+    while !test.machine.socket.exists() {
+        thread::yield_now();
+    }
+}
+
+#[test]
+fn a_job_flagged_stuck_still_runs_to_its_own_exit_code() {
+    let test = Test::new(QuietTree);
+    start_watching(&test);
+    let (code, _, _) = test.run(&["run", "--", "sh", "-c", "sleep 1; exit 7"]);
+    assert_eq!(code, 7);
+    let log = test.log();
+    assert!(log.contains("the job has shown no CPU use"), "{log}");
+    assert!(log.contains("deadband leaves it running"), "{log}");
+}
+
+#[test]
+fn a_job_that_ends_before_the_limit_is_not_flagged_and_keeps_its_exit_code() {
+    let test = Test::new(QuietTree);
+    start_watching(&test);
+    let (code, _, _) = test.run(&["run", "--", "sh", "-c", "exit 7"]);
+    assert_eq!(code, 7);
+    assert!(!test.log().contains("no CPU use"), "{}", test.log());
+}
+
+/// Listens on `test`'s socket and answers one status request with `jobs`.
+fn answer_status<P>(test: &Test<P>, jobs: Jobs) {
+    let listener =
+        std::os::unix::net::UnixListener::bind(&test.machine.socket).expect("the socket binds");
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("the client connects");
+        let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
+        let _ = read_line::<Request>(&mut reader);
+        write_line(&mut stream, &Reply::Jobs(jobs)).expect("the reply writes");
+    });
+}
+
+fn listed(label: &str, pid: u32) -> Job {
+    Job {
+        label: label.to_owned(),
+        pid,
+        command: format!("make {label}"),
+        lane: Lane::Normal,
+        watched: true,
+    }
+}
+
+fn running_jobs() -> Jobs {
+    Jobs {
+        max_jobs: 4,
+        running: vec![listed("first", 11), listed("second", 22)],
+        waiting: Vec::new(),
+        held: None,
+        reclaim: None,
+        stuck: Vec::new(),
+        busiest: None,
+        unreadable: false,
+    }
+}
+
+const STATUS_TOP: &str =
+    "load: 4.25 (1-minute average)\nmemory pressure: normal\nswap: 11605 MiB used of 13312 MiB\n";
+
+#[test]
+fn status_lists_a_stuck_job_first_and_exits_1() {
+    let test = Test::new(Fixed);
+    answer_status(
+        &test,
+        Jobs {
+            stuck: vec![StuckJob {
+                label: "second".to_owned(),
+                pid: 22,
+                quiet_seconds: 46 * 60,
+            }],
+            busiest: Some(OutsideJobs::Busy {
+                name: "syspolicyd".to_owned(),
+                cpu_percent: 470,
+            }),
+            ..running_jobs()
+        },
+    );
+    let (code, out, err) = test.run(&["status"]);
+    assert_eq!(code, 1);
+    assert_eq!(
+        out,
+        format!(
+            "{STATUS_TOP}daemon: 2 running, 0 waiting, at most 4 at once\nstuck: second (pid 22): no CPU, new process or disk use for 46m\nbusiest process outside the jobs: syspolicyd at 470% CPU\nrunning: second (pid 22): make second\nrunning: first (pid 11): make first\n"
+        )
+    );
+    assert!(err.contains("1 job shows no activity"), "{err}");
+    assert_eq!(
+        err.lines()
+            .filter(|line| line.contains("no activity"))
+            .count(),
+        1,
+        "{err}"
+    );
+}
+
+#[test]
+fn status_with_no_stuck_job_exits_0() {
+    let test = Test::new(Fixed);
+    answer_status(&test, running_jobs());
+    let (code, out, err) = test.run(&["status"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        format!(
+            "{STATUS_TOP}daemon: 2 running, 0 waiting, at most 4 at once\nrunning: first (pid 11): make first\nrunning: second (pid 22): make second\n"
+        )
+    );
+    assert_eq!(err, "");
+}
+
+#[test]
+fn status_says_when_no_process_outside_the_jobs_is_busy() {
+    let test = Test::new(Fixed);
+    answer_status(
+        &test,
+        Jobs {
+            stuck: vec![StuckJob {
+                label: "first".to_owned(),
+                pid: 11,
+                quiet_seconds: 6 * 60,
+            }],
+            busiest: Some(OutsideJobs::Quiet),
+            ..running_jobs()
+        },
+    );
+    let (code, out, _) = test.run(&["status"]);
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("\nno process outside the jobs is using more than 50% CPU\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn status_exits_1_when_the_jobs_processes_cannot_be_read() {
+    let test = Test::new(Fixed);
+    answer_status(
+        &test,
+        Jobs {
+            unreadable: true,
+            ..running_jobs()
+        },
+    );
+    let (code, out, err) = test.run(&["status"]);
+    assert_eq!(code, 1);
+    assert!(
+        out.contains("deadband could not read the jobs' processes, so it cannot say whether any job is stuck\n"),
+        "{out}"
+    );
+    assert!(err.contains("could not read the jobs' processes"), "{err}");
+}
+
+#[test]
+fn status_as_json_lists_the_stuck_job_and_its_failure_code() {
+    let test = Test::new(Fixed);
+    answer_status(
+        &test,
+        Jobs {
+            stuck: vec![StuckJob {
+                label: "second".to_owned(),
+                pid: 22,
+                quiet_seconds: 120,
+            }],
+            ..running_jobs()
+        },
+    );
+    let (code, out, _) = test.run(&["status", "--json"]);
+    assert_eq!(code, 1);
+    let value: serde_json::Value = serde_json::from_str(&out).expect("JSON");
+    assert_eq!(value["data"]["daemon"]["stuck"][0]["label"], "second");
+    assert_eq!(value["failures"][0]["code"], "deadband::job::stuck");
 }

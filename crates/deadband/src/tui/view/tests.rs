@@ -15,7 +15,7 @@ use ratatui::layout::Rect;
 use super::{BG, draw};
 use crate::admit::{GIB, Hold, Lane};
 use crate::client::Unasked;
-use crate::protocol::{Ago, Exit, JobRecord, JobState, Label, Timeline};
+use crate::protocol::{Ago, Exit, JobRecord, JobState, Label, OutsideJobs, StuckPeriod, Timeline};
 use crate::tui::model::Model;
 
 const CORES: usize = 14;
@@ -34,6 +34,7 @@ fn record(label: &str, lane: Lane, queued: u64, state: JobState) -> JobRecord {
         lane,
         queued: ago(queued),
         state,
+        stuck: Vec::new(),
     }
 }
 
@@ -172,6 +173,18 @@ impl History {
 /// Feeds `history` to a new model one second at a time, ends with `jobs`,
 /// and returns the model with the time of the last poll.
 fn model_of(history: &History, up: u64, jobs: Vec<JobRecord>) -> (Model, Instant) {
+    model_with(history, up, jobs, None, false)
+}
+
+/// Returns the model that [`model_of`] does, whose last reply also says
+/// `busiest` and `unreadable`.
+fn model_with(
+    history: &History,
+    up: u64,
+    jobs: Vec<JobRecord>,
+    busiest: Option<OutsideJobs>,
+    unreadable: bool,
+) -> (Model, Instant) {
     let mut model = Model::new(NonZeroUsize::new(CORES));
     let start = Instant::now();
     let now = start + secs(history.seen);
@@ -181,6 +194,8 @@ fn model_of(history: &History, up: u64, jobs: Vec<JobRecord>) -> (Model, Instant
             jobs: Vec::new(),
             hidden: 0,
             held: history.hold(age),
+            busiest: None,
+            unreadable: false,
         };
         model.observe(now - secs(age), Ok(reply), Some(history.load(age)));
     }
@@ -189,6 +204,8 @@ fn model_of(history: &History, up: u64, jobs: Vec<JobRecord>) -> (Model, Instant
         jobs,
         hidden: 0,
         held: history.hold(0),
+        busiest,
+        unreadable,
     };
     model.observe(now, Ok(reply), Some(history.load(0)));
     (model, now)
@@ -275,6 +292,8 @@ fn a_daemon_restart_matches_the_mockup() {
         jobs: load_jobs(),
         hidden: 0,
         held: Some(load_hold()),
+        busiest: None,
+        unreadable: false,
     };
     model.observe(now, Ok(reply), Some(15.9));
     assert_golden(
@@ -357,6 +376,8 @@ fn a_reply_says_how_many_jobs_are_not_shown() {
         jobs: all(disk_jobs()),
         hidden: 2,
         held: None,
+        busiest: None,
+        unreadable: false,
     };
     model.observe(now, Ok(reply), None);
     let text = render(&model, now, 80, 16);
@@ -372,6 +393,8 @@ fn one_job_with_no_row_reads_in_the_singular() {
         jobs: Vec::new(),
         hidden: 1,
         held: None,
+        busiest: None,
+        unreadable: false,
     };
     model.observe(now, Ok(reply), None);
     let text = render(&model, now, 120, 28);
@@ -412,6 +435,8 @@ fn a_label_cut_to_its_column_ends_in_an_ellipsis() {
         jobs: vec![waiting(&"a".repeat(30), 5)],
         hidden: 0,
         held: None,
+        busiest: None,
+        unreadable: false,
     };
     model.observe(now, Ok(reply), None);
     let text = render(&model, now, 120, 28);
@@ -434,6 +459,8 @@ fn longest_state(columns: u16, lines: u16) -> String {
         )],
         hidden: 0,
         held: None,
+        busiest: None,
+        unreadable: false,
     };
     model.observe(now, Ok(reply), None);
     render(&model, now, columns, lines)
@@ -449,4 +476,228 @@ fn the_longest_state_shows_whole_at_120_columns() {
 fn the_longest_state_shows_whole_at_the_minimum_width() {
     let text = longest_state(80, 16);
     assert!(text.contains("signal 64 999h"), "{text}");
+}
+
+/// Returns a running job that has shown no activity for `quiet` seconds.
+fn stuck(label: &str, queued: u64, started: u64, quiet: u64) -> JobRecord {
+    JobRecord {
+        stuck: vec![StuckPeriod {
+            since: ago(quiet),
+            until: None,
+        }],
+        ..record(
+            label,
+            Lane::Normal,
+            queued,
+            JobState::Running {
+                started: ago(started),
+            },
+        )
+    }
+}
+
+fn running(label: &str, queued: u64, started: u64) -> JobRecord {
+    record(
+        label,
+        Lane::Normal,
+        queued,
+        JobState::Running {
+            started: ago(started),
+        },
+    )
+}
+
+fn full_history() -> History {
+    History {
+        load_now: 3.2,
+        load_before: 3.2,
+        held: Some(Hold::Full { max_jobs: 4 }),
+        held_for: 600,
+        seen: 599,
+    }
+}
+
+fn syspolicyd() -> Option<OutsideJobs> {
+    Some(OutsideJobs::Busy {
+        name: "syspolicyd".to_owned(),
+        cpu_percent: 470,
+    })
+}
+
+/// The jobs of the mockup's first state: two stuck, syspolicyd busy.
+fn incident_jobs() -> Vec<JobRecord> {
+    vec![
+        running("starmap-check", 330, 300),
+        waiting("crumbkit-tool", 260),
+        waiting("mxv-l-deny", 150),
+        waiting("band-orders-red", 60),
+        stuck("board-cli-test", 2840, 2790, 2760),
+        stuck("mirror-git-dir", 900, 850, 420),
+    ]
+}
+
+fn incident(columns: u16, lines: u16) -> String {
+    let (model, now) = model_with(&full_history(), 5000, incident_jobs(), syspolicyd(), false);
+    render(&model, now, columns, lines)
+}
+
+#[test]
+fn a_stuck_job_is_listed_first_with_its_quiet_time() {
+    let screen = incident(120, 28);
+    let lines: Vec<_> = screen.lines().collect();
+    assert!(lines[3].starts_with(" board-cli-test "), "{screen}");
+    assert!(lines[3].ends_with("stuck 46m"), "{screen}");
+    assert!(lines[4].starts_with(" mirror-git-dir "), "{screen}");
+    assert!(lines[4].ends_with("stuck 7m"), "{screen}");
+}
+
+#[test]
+fn a_stuck_job_shows_the_no_activity_bar_from_its_last_activity() {
+    let screen = incident(120, 28);
+    let lines: Vec<_> = screen.lines().collect();
+    // A quiet time over the window fills the axis.
+    assert_eq!(lines[3].matches('▓').count(), 80, "{screen}");
+    // 420 seconds of a 600 second window on 80 columns is 56 columns.
+    let bars = lines[4].matches('▓').count();
+    assert!((56..=57).contains(&bars), "{bars}: {screen}");
+    assert!(lines[4].contains("█▓"), "{screen}");
+    assert_eq!(lines[5].matches('▓').count(), 0, "{screen}");
+}
+
+#[test]
+fn the_header_counts_the_stuck_jobs_left_of_the_hold_label() {
+    let screen = incident(120, 28);
+    let first = screen.lines().next().expect("a line");
+    let stuck = first.find("2 STUCK").expect("the label shows");
+    let hold = first.find("HELD · FULL").expect("the hold shows");
+    assert!(stuck < hold, "{first}");
+}
+
+#[test]
+fn a_line_above_the_rule_names_the_count_and_the_busiest_process() {
+    let screen = incident(120, 28);
+    let lines: Vec<_> = screen.lines().collect();
+    assert!(
+        lines[18].starts_with(
+            " 2 jobs show no activity · busiest process outside the jobs: syspolicyd at 470% CPU"
+        ),
+        "{screen}"
+    );
+    assert!(lines[19].starts_with("───"), "{screen}");
+}
+
+#[test]
+fn the_legend_gains_no_activity_while_a_row_shows_it() {
+    let screen = incident(120, 28);
+    assert!(
+        screen.contains(
+            "▀ open   ▀ full   ▀ load   ▀ memory   ▀ disk   ░ waiting   █ running   ▓ no activity"
+        ),
+        "{screen}"
+    );
+}
+
+#[test]
+fn the_smallest_terminal_keeps_stuck_jobs_and_the_whole_legend() {
+    let screen = incident(80, 16);
+    let lines: Vec<_> = screen.lines().collect();
+    assert!(lines[3].starts_with(" board-cli-test "), "{screen}");
+    assert!(lines[4].starts_with(" mirror-git-dir "), "{screen}");
+    assert!(lines[5].starts_with(" starmap-check "), "{screen}");
+    assert!(lines[6].starts_with(" 2 jobs show no activity"), "{screen}");
+    assert!(screen.contains("▓ no activity"), "{screen}");
+    assert!(lines[0].contains("2 STUCK"), "{screen}");
+}
+
+#[test]
+fn a_screen_with_no_stuck_job_shows_none_of_it() {
+    let jobs = vec![
+        running("starmap-check", 330, 300),
+        waiting("crumbkit-tool", 260),
+    ];
+    let (model, now) = model_with(&full_history(), 5000, jobs, None, false);
+    let screen = render(&model, now, 120, 28);
+    assert!(!screen.contains("STUCK"), "{screen}");
+    assert!(!screen.contains("no activity"), "{screen}");
+    assert!(!screen.contains('▓'), "{screen}");
+}
+
+#[test]
+fn a_recovered_job_keeps_its_period_and_runs_again() {
+    let mut job = running("board-cli-test", 3050, 3000);
+    job.stuck = vec![StuckPeriod {
+        since: ago(240),
+        until: Some(ago(90)),
+    }];
+    let (model, now) = model_with(&full_history(), 5000, vec![job], None, false);
+    let screen = render(&model, now, 120, 28);
+    let lines: Vec<_> = screen.lines().collect();
+    assert!(lines[3].ends_with("run 50m"), "{screen}");
+    assert_eq!(lines[3].matches('▓').count(), 20, "{screen}");
+    assert!(screen.contains("▓ no activity"), "{screen}");
+    assert!(!screen.contains("STUCK"), "{screen}");
+    assert!(!screen.contains("show no activity"), "{screen}");
+}
+
+#[test]
+fn an_ended_job_keeps_its_period_while_it_is_in_the_window() {
+    let mut job = past(
+        "mirror-git-dir",
+        Lane::Normal,
+        520,
+        500,
+        110,
+        Exit::Exited { code: 0 },
+    );
+    job.stuck = vec![StuckPeriod {
+        since: ago(430),
+        until: Some(ago(210)),
+    }];
+    let (model, now) = model_with(&full_history(), 5000, vec![job], None, false);
+    let screen = render(&model, now, 120, 28);
+    let lines: Vec<_> = screen.lines().collect();
+    assert_eq!(lines[3].matches('▓').count(), 29, "{screen}");
+    assert!(lines[3].contains("ok 6m"), "{screen}");
+}
+
+#[test]
+fn a_read_that_failed_says_activity_is_unknown() {
+    let jobs = vec![running("board-cli-test", 400, 380)];
+    let (model, now) = model_with(&full_history(), 5000, jobs, None, true);
+    let screen = render(&model, now, 120, 28);
+    let lines: Vec<_> = screen.lines().collect();
+    assert!(
+        lines[18].starts_with(" activity unknown: deadband could not read the jobs' processes"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn a_stuck_row_is_drawn_in_red() {
+    let (model, now) = model_with(&full_history(), 5000, incident_jobs(), syspolicyd(), false);
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 120, 28));
+    draw(&mut buffer, &model, now);
+    assert_eq!(buffer[(30, 3)].symbol(), "▓");
+    assert_eq!(buffer[(30, 3)].fg, super::RED);
+    assert_eq!(buffer[(106, 3)].fg, super::RED);
+}
+
+/// The screens below were read after the view drew them, and compared with a
+/// text dump of the signed-off mockup: the rows, the header labels, the line
+/// above the rule and the legend match. The pill keeps the two columns at the
+/// right that every other screen has, and the graph shows this test's history.
+#[test]
+fn two_stuck_jobs_match_the_signed_off_screen() {
+    assert_golden(
+        &incident(120, 28),
+        include_str!("../../../tests/golden/top/stuck.txt"),
+    );
+}
+
+#[test]
+fn two_stuck_jobs_on_the_smallest_terminal_match_the_signed_off_screen() {
+    assert_golden(
+        &incident(80, 16),
+        include_str!("../../../tests/golden/top/stuck-min.txt"),
+    );
 }

@@ -29,7 +29,7 @@ fn reclaim_config<P>(machine: &Machine<P>) -> reclaim::Config {
         note(
             &machine.log,
             format_args!(
-                "deadband could not read {}: {error}, so the daemon runs no reclaimer",
+                "deadband could not read {}: {error}, so the daemon runs no reclaimer and no on_stuck command",
                 path.display()
             ),
         );

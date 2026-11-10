@@ -9,9 +9,11 @@ use std::thread;
 use std::time::Duration;
 
 use super::lease::Seat;
-use super::{Admission, Lease, Unasked, ask, jobs, timeline};
+use super::{Admission, Lease, Notices, Unasked, ask, ask_noticed, jobs, timeline};
 use crate::admit::{Hold, Lane};
-use crate::protocol::{Ago, Job, Jobs, Reply, Request, Timeline, read_line, write_line};
+use crate::protocol::{
+    Ago, Job, Jobs, OutsideJobs, Reply, Request, Timeline, read_line, write_line,
+};
 use crate::testing::{TestSocket, socket_path};
 
 /// How long the tests let a scripted daemon take to answer.
@@ -26,6 +28,7 @@ fn job() -> Job {
         pid: 9,
         command: "make".to_owned(),
         lane: Lane::Normal,
+        watched: false,
     }
 }
 
@@ -170,6 +173,9 @@ fn ask_starts_the_job_when_the_daemon_answers_with_a_reply_the_client_does_not_e
         waiting: Vec::new(),
         held: None,
         reclaim: None,
+        stuck: Vec::new(),
+        busiest: None,
+        unreadable: false,
     };
     let (path, _received) = scripted(vec![Reply::Jobs(jobs)]);
     let admission = ask(&path, &job(), ANSWER_WITHIN, |_, _| {});
@@ -187,6 +193,9 @@ fn jobs_returns_the_daemons_jobs() {
         waiting: Vec::new(),
         held: None,
         reclaim: None,
+        stuck: Vec::new(),
+        busiest: None,
+        unreadable: false,
     };
     let (path, received) = scripted(vec![Reply::Jobs(listed.clone())]);
     assert_eq!(
@@ -212,6 +221,8 @@ fn empty_timeline() -> Timeline {
         jobs: Vec::new(),
         hidden: 0,
         held: None,
+        busiest: None,
+        unreadable: false,
     }
 }
 
@@ -459,7 +470,7 @@ fn a_lease_opens_no_second_connection_while_the_first_stays_open() {
     client
         .set_read_timeout(Some(READ_TIMEOUT))
         .expect("the timeout sets");
-    let _lease = Lease::watched(client, 5, &path, &job());
+    let _lease = Lease::watched(client, 5, &path, &job(), None);
     // The wait outlasts the read timeout several times. A slow machine
     // can only make this check pass without proving anything, never fail.
     assert!(next_connection(&listener, READ_TIMEOUT * 4).is_none());
@@ -550,4 +561,114 @@ fn a_connection_that_opens_after_the_job_ended_is_closed() {
         read_line::<Request>(&mut BufReader::new(theirs)).expect("the end reads in time"),
         None
     );
+}
+
+/// A daemon that grants a job and then writes `lines`, one at a time, and
+/// keeps the connection open until the test ends. It writes them once `go`
+/// receives, so the lease's reader is the one that reads them. It returns the
+/// socket, the sender of `go` and the connection.
+fn noticing(lines: Vec<String>) -> (TestSocket, mpsc::Sender<()>, mpsc::Receiver<UnixStream>) {
+    let (start, go) = mpsc::channel();
+    let path = socket_path();
+    let listener = UnixListener::bind(&path).expect("the test socket binds");
+    let (later, connections) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("the client connects");
+        let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
+        let _ = read_line::<Request>(&mut reader);
+        write_line(&mut stream, &Reply::Granted { jobs: 2 }).expect("the grant writes");
+        go.recv().expect("the test says go");
+        for line in lines {
+            std::io::Write::write_all(&mut stream, line.as_bytes()).expect("the line writes");
+            std::io::Write::write_all(&mut stream, b"\n").expect("the line writes");
+        }
+        later.send(stream).expect("the test receives");
+        while let Ok((stream, _)) = listener.accept() {
+            drop(stream);
+        }
+    });
+    (path, start, connections)
+}
+
+/// Asks the daemon at `path` for a job and returns the lease and the lines
+/// that reach its notices.
+fn noticed(path: &Path, go: &mpsc::Sender<()>) -> (Lease, mpsc::Receiver<String>) {
+    let (sender, lines) = mpsc::channel();
+    let sender = std::sync::Mutex::new(sender);
+    let notices = Notices::new(move |line| {
+        let _ = sender.lock().expect("locks").send(line.to_owned());
+    });
+    match ask_noticed(path, &job(), ANSWER_WITHIN, |_, _| {}, Some(&notices)) {
+        Admission::Granted(lease) => {
+            go.send(()).expect("the daemon waits");
+            (lease, lines)
+        }
+        Admission::Open(unasked) => panic!("the daemon granted nothing: {unasked}"),
+    }
+}
+
+fn reply_line(reply: &Reply) -> String {
+    serde_json::to_string(reply).expect("a reply serializes")
+}
+
+fn stuck_reply(minutes: u64, again: bool) -> Reply {
+    Reply::Stuck {
+        quiet: Ago::from_millis(minutes * 60_000),
+        again,
+        busiest: Some(OutsideJobs::Busy {
+            name: "syspolicyd".to_owned(),
+            cpu_percent: 470,
+        }),
+    }
+}
+
+#[test]
+fn the_lease_passes_the_stuck_and_active_lines_on() {
+    let (path, go, _connections) = noticing(vec![
+        reply_line(&stuck_reply(5, false)),
+        reply_line(&stuck_reply(15, true)),
+        reply_line(&Reply::Active {
+            quiet: Ago::from_millis(46 * 60_000),
+        }),
+    ]);
+    let (_lease, lines) = noticed(&path, &go);
+    let line = || lines.recv_timeout(ANSWER_WITHIN).expect("a line arrives");
+    assert_eq!(
+        line(),
+        "the job has shown no CPU use, new process or disk use for 5m; deadband leaves it running; the busiest process outside the jobs is syspolicyd at 470% CPU"
+    );
+    assert_eq!(
+        line(),
+        "the job has still shown no activity after 15m; the busiest process outside the jobs is syspolicyd at 470% CPU"
+    );
+    assert_eq!(line(), "the job is active again after 46m with no activity");
+}
+
+#[test]
+fn a_line_the_lease_cannot_read_is_ignored_and_the_lease_is_held() {
+    let (path, go, connections) = noticing(vec![
+        "this is no reply".to_owned(),
+        reply_line(&stuck_reply(5, false)),
+    ]);
+    let (_lease, lines) = noticed(&path, &go);
+    let line = lines.recv_timeout(ANSWER_WITHIN).expect("a line arrives");
+    assert!(line.starts_with("the job has shown"), "{line}");
+    let stream = connections.recv_timeout(ANSWER_WITHIN).expect("the stream");
+    // The lease still holds the connection, so a write reaches an open peer.
+    let wrote = write_line(&mut &stream, &stuck_reply(6, true));
+    assert!(wrote.is_ok());
+    assert!(lines.recv_timeout(ANSWER_WITHIN).is_ok());
+}
+
+#[test]
+fn a_reply_with_no_line_for_the_caller_is_ignored() {
+    let (path, go, _connections) = noticing(vec![
+        reply_line(&Reply::Granted { jobs: 1 }),
+        reply_line(&Reply::Active {
+            quiet: Ago::from_millis(60_000),
+        }),
+    ]);
+    let (_lease, lines) = noticed(&path, &go);
+    let line = lines.recv_timeout(ANSWER_WITHIN).expect("a line arrives");
+    assert_eq!(line, "the job is active again after 1m with no activity");
 }
