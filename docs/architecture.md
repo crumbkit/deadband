@@ -179,12 +179,15 @@ disk. A line that finds the channel full is dropped, and a counter that each
 machine line reports goes up. If the writer thread has stopped, the first line
 that cannot reach it is logged once.
 
-The kind rule holds no knowledge of any tool. It keeps up to the first three
-plain lowercase words of the command, with the program reduced to its file
-name. It skips a leading `env` and the `NAME=value` words after it, and it
-stops collecting at the first word that starts with `-`, because the word
-after an option may be its value. The record never holds an option
-value, an environment variable or an absolute path.
+The kind rule names no tool in code. The kind is the program's file name,
+such as `deploy.sh` for `./deploy.sh hunterpass`, so a script's arguments
+never reach the file. When the config's `kind_tools` lists the program's file
+name, the kind also keeps up to two plain lowercase subcommand words, such as
+`cargo nextest run`. The list is empty by default. The rule skips a leading
+`env` and the `NAME=value` words after it, and it stops collecting
+subcommands at the first word that starts with `-`, because the word after an
+option may be its value. The record never holds an option value, an
+environment variable or an absolute path.
 
 The writer opens the file when the first line arrives, and each line is one
 write. A write that fails loses that line, logs one line when writing starts

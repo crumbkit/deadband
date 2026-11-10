@@ -190,7 +190,8 @@ pub struct JobLine {
     pub seated: bool,
     /// The job's label, at most 64 bytes.
     pub label: Label,
-    /// Up to three plain words of the command.
+    /// The program's file name, and up to two subcommand words when the
+    /// config's `kind_tools` lists the program.
     pub kind: String,
     /// The names of the command's options, without their values.
     pub options: Vec<String>,

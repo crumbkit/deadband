@@ -719,7 +719,7 @@ fn a_job_that_exits_writes_one_line_with_each_field_of_its_run() {
     let line = lines_until(scratch.path(), "job", 1).remove(0);
     assert_eq!(line["v"], 1);
     assert_eq!(line["label"], "a");
-    assert_eq!(line["kind"], "make a");
+    assert_eq!(line["kind"], "make");
     assert_eq!(line["seated"], false);
     assert_eq!(line["lane"], "normal");
     assert_eq!(line["threads"], CORES);
@@ -827,6 +827,38 @@ fn a_job_in_a_checkout_names_it_and_says_it_started_warm() {
     assert_eq!(line["repo"], "repo");
     assert_eq!(line["checkout"], "repo");
     assert_eq!(line["warm"], true);
+}
+
+/// Runs one job of `command` on a recording daemon whose `kind_tools` is
+/// `tools`, and returns the text of its job line.
+fn job_line_of(command: &str, tools: &[&str]) -> String {
+    let scratch = Scratch::new();
+    let history = scratch.path().join("history");
+    let (path, _log) = start_with(1, &Dial::new(Pressure::Normal), |settings| {
+        settings.history = Some(history.clone());
+        settings.reclaim.kind_tools = tools.iter().map(|&tool| tool.to_owned()).collect();
+    });
+    let mut client = Client::connect(&path);
+    client.send(&Request::Ask(Job {
+        command: command.to_owned(),
+        ..job("a")
+    }));
+    assert_eq!(client.reply(), granted(1));
+    drop(client);
+    lines_until(&history, "job", 1).remove(0).to_string()
+}
+
+#[test]
+fn a_job_line_of_an_unlisted_script_holds_no_word_after_the_program() {
+    let line = job_line_of("./deploy.sh hunterpass", &[]);
+    assert!(!line.contains("hunterpass"), "{line}");
+    assert!(line.contains("\"kind\":\"deploy.sh\""), "{line}");
+}
+
+#[test]
+fn a_job_line_of_a_listed_script_keeps_the_word_after_the_program() {
+    let line = job_line_of("./deploy.sh hunterpass", &["deploy.sh"]);
+    assert!(line.contains("\"kind\":\"deploy.sh hunterpass\""), "{line}");
 }
 
 #[test]

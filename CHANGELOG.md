@@ -21,8 +21,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `deadband status --json` shows each job's working directory in an optional
   `cwd` field.
 - The config file accepts `warm_dirs`, the directories under a job's checkout
-  that show a warm build. An older binary refuses this key and runs no
-  reclaimer, so add it only after installing this release.
+  that show a warm build, and `kind_tools`, the programs whose kind in the job
+  history keeps up to two subcommand words. The kind of any other job is its
+  program's file name alone. Both keys are empty by default. An older binary
+  refuses these keys and runs no reclaimer, so add them only after installing
+  this release.
 
 ### Changed
 

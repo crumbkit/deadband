@@ -1,10 +1,12 @@
 //! What a job's arrival tells: the kind and the option names of its command
 //! line, and the checkout that its working directory lies in.
 //!
-//! The kind rule knows no tool. It only keeps words of a plain form, so the
-//! record cannot hold an option value, an environment variable or a path. A
-//! command line can hold a secret, so the words that the rule does not keep
-//! never reach the history file.
+//! The kind rule names no tool in code. It keeps the program's file name, and
+//! keeps subcommand words only for the programs that the config's
+//! `kind_tools` lists, so a script's arguments never reach the history file.
+//! It only keeps words of a plain form, so the record cannot hold an option
+//! value, an environment variable or a path. A command line can hold a
+//! secret, so the words that the rule does not keep never reach the file.
 
 use std::fs::{self, File};
 use std::io::Read as _;
@@ -16,8 +18,8 @@ use crate::protocol::Job;
 /// The most bytes of a `.git` file that the daemon reads.
 const GIT_FILE_BYTES: u64 = 4096;
 
-/// The most words in a kind.
-const KIND_WORDS: usize = 3;
+/// The most subcommand words that the kind of a listed tool keeps.
+const SUBCOMMANDS: usize = 2;
 
 /// The most bytes in a word of a kind or in the name of an option. A longer
 /// word is left out, because a long word is more likely to be a token.
@@ -31,26 +33,37 @@ const MAX_OPTIONS: usize = 32;
 /// program that follows them.
 const ENV: &str = "env";
 
-/// Returns the kind of `command`: up to the first three plain lowercase
-/// words, with the program reduced to its file name. A leading `env` and the
-/// `NAME=value` words after it are skipped, so the program is the word that
-/// follows them. The collecting stops at the first word that starts with
-/// `-`, because the word after an option may be its value. Only the
-/// program's file name may hold digits and dots. A word that is not plain is
-/// skipped.
+/// Returns the kind of `command`: the program's file name, and, when that
+/// name is in `tools`, up to two plain lowercase subcommand words after it.
+/// A leading `env` and the `NAME=value` words after it are skipped, so the
+/// program is the word that follows them. The subcommands stop at the first
+/// word that starts with `-`, because the word after an option may be its
+/// value, and a word that is not plain is skipped. Only the program's file
+/// name may hold digits and dots. A program that is not plain gives an empty
+/// kind.
 #[must_use]
-pub fn kind(command: &str) -> String {
+pub fn kind(command: &str, tools: &[String]) -> String {
     let mut words = command.split_whitespace().peekable();
     if words.peek().map(|word| file_name(word)) == Some(ENV) {
         words.next();
         while words.next_if(|word| word.contains('=')).is_some() {}
     }
-    let program = words.next().map(file_name).filter(|name| plain(name, true));
-    let rest = words
+    let Some(program) = words.next().map(file_name).filter(|name| plain(name, true)) else {
+        return String::new();
+    };
+    let subcommands = tools
+        .iter()
+        .any(|tool| tool == program)
+        .then_some(words)
+        .into_iter()
+        .flatten()
         .take_while(|word| !word.starts_with('-'))
-        .filter(|word| plain(word, false));
-    let kept: Vec<&str> = program.into_iter().chain(rest).take(KIND_WORDS).collect();
-    kept.join(" ")
+        .filter(|word| plain(word, false))
+        .take(SUBCOMMANDS);
+    std::iter::once(program)
+        .chain(subcommands)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Returns the names of the options of `command`, at most 32, without any
@@ -204,7 +217,12 @@ impl Arrival {
     /// This call reads the disk, so the daemon makes it before it takes the
     /// queue lock.
     #[must_use]
-    pub fn read(job: &Job, warm_dirs: &[String], ran_ms: Option<u64>) -> Self {
+    pub fn read(
+        job: &Job,
+        warm_dirs: &[String],
+        kind_tools: &[String],
+        ran_ms: Option<u64>,
+    ) -> Self {
         let mut place = job
             .cwd
             .as_deref()
@@ -215,7 +233,7 @@ impl Arrival {
         Self {
             at_ms: now_ms().saturating_sub(ran_ms.unwrap_or(0)),
             seated: ran_ms.is_some(),
-            kind: kind(&job.command),
+            kind: kind(&job.command, kind_tools),
             options: options(&job.command),
             place,
         }

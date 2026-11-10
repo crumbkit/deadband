@@ -17,14 +17,15 @@ use crate::protocol::{Exit, Job, Label, Reply, Request, read_line, write_line};
 /// daemon records no job. The lock is released before the disk is read, so
 /// the disk never holds the queue up.
 fn arrival(shared: &Shared, job: &Job, ran_ms: Option<u64>) -> Option<Arrival> {
-    let warm_dirs = {
+    let (warm_dirs, kind_tools) = {
         let state = lock(shared);
+        let config = &state.settings.reclaim;
         state
             .recorder
             .is_some()
-            .then(|| state.settings.reclaim.warm_dirs.clone())
+            .then(|| (config.warm_dirs.clone(), config.kind_tools.clone()))
     }?;
-    Some(Arrival::read(job, &warm_dirs, ran_ms))
+    Some(Arrival::read(job, &warm_dirs, &kind_tools, ran_ms))
 }
 
 /// Queues `job` for the client on `stream`, grants it when the admission

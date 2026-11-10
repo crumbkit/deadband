@@ -172,7 +172,7 @@ A job line has these fields:
 | `queued_at_ms`, `started_at_ms`, `ended_at_ms` | Wall-clock times in Unix milliseconds. `started_at_ms` is null for a job that left before it ran. |
 | `seated` | True when a new daemon took over the running job, so its wait is unknown. Such a job counts as starting when it asked, and its `load_at_start` and `warm` are null. |
 | `label` | The label, at most 64 bytes. |
-| `kind` | Up to the first three plain lowercase words of the command, with the program reduced to its file name, such as `cargo nextest run`. A leading `env` and the `NAME=value` words after it are skipped. The program's file name may hold digits and dots, such as `wait-for-stack.sh`. Collecting stops at the first word that starts with `-`. |
+| `kind` | The program's file name, such as `deploy.sh` for `./deploy.sh hunterpass`. When the config's `kind_tools` lists that name, the kind also keeps up to two plain lowercase subcommand words, such as `cargo nextest run`, and stops at the first word that starts with `-`. A leading `env` and the `NAME=value` words after it are skipped. The program's file name may hold digits and dots, such as `wait-for-stack.sh`. |
 | `options` | The names of up to 32 options, without any value: each `--name` form and each exact `-x` form. |
 | `repo`, `checkout` | The final directory name of the main checkout and of the worktree, or null outside git. |
 | `warm` | True when a directory that `warm_dirs` names has an entry under the checkout when the job asks. Null when `warm_dirs` is empty or the job is outside git. |
@@ -297,12 +297,13 @@ which lists every key with what it sets. Each `[[reclaim]]` table names one
 reclaimer:
 
 ```toml
-# All five settings are optional; these are the defaults.
+# All six settings are optional; these are the defaults.
 reclaim_after = "60s"     # how long memory stays short before a reclaim, and the wait between reclaims; at least 10s
 reclaim_timeout = "5m"    # how long the daemon waits for one run of a reclaimer; more than 0
 reclaim_memory = "4G"     # the memory each reclaim asks for
 reclaim_disk = "20G"      # the disk each reclaim asks for
 warm_dirs = []            # directories under a job's checkout that show a warm build, such as ["target"]
+kind_tools = []           # programs whose kind in the job history keeps their subcommands
 
 [[reclaim]]
 name = "workspaces"
@@ -319,10 +320,20 @@ A size is a whole number with an optional `K`, `M`, `G` or `T`, each a
 power of 1024. An age is a number with a unit, such as `90s`, `5m` or
 `1h`. `reclaim_after` must be at least 10 seconds, and `reclaim_timeout`
 more than 0. `warm_dirs` lists directories, relative to a job's checkout, and
-only the job history reads it. Without the file, or without a `[[reclaim]]` table, the daemon
-never reclaims. A file that cannot be read, has an unknown key or breaks
-one of these limits turns reclaiming off, and the daemon's log says why in
-one line.
+only the job history reads it. Without the file, or without a `[[reclaim]]`
+table, the daemon never reclaims. A file that cannot be read, has an unknown
+key or breaks one of these limits turns reclaiming off, and the daemon's log
+says why in one line.
+
+`kind_tools` lists program file names, and only the job history reads it.
+The kind of a job whose program is listed keeps up to two subcommand words,
+such as `cargo nextest run`. The kind of any other job is the program's file
+name alone, so the words after a script's name, which may be secrets, are
+never recorded. A list for common build tools looks like this:
+
+```toml
+kind_tools = ["cargo", "npm", "make", "git", "just", "mxv"]
+```
 
 The daemon reclaims memory once memory pressure has been above normal, or
 a job has waited for memory, for `reclaim_after` without a break. It

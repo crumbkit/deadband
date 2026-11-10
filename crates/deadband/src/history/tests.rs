@@ -122,34 +122,70 @@ fn warm_dirs() -> Vec<String> {
     vec!["target".to_owned()]
 }
 
+/// Returns the tool list `names`.
+fn tools(names: &[&str]) -> Vec<String> {
+    names.iter().map(|&name| name.to_owned()).collect()
+}
+
 #[test]
-fn the_kind_keeps_the_first_three_plain_words_with_the_program_reduced_to_its_file_name() {
+fn the_kind_of_a_program_that_is_not_listed_is_its_file_name_only() {
+    assert_eq!(kind("./deploy.sh hunterpass", &[]), "deploy.sh");
+}
+
+#[test]
+fn the_kind_of_a_program_alone_is_its_file_name() {
+    assert_eq!(kind("./deploy.sh", &[]), "deploy.sh");
+    assert_eq!(kind("make", &[]), "make");
+}
+
+#[test]
+fn the_kind_of_an_unlisted_tool_leaves_out_its_next_word() {
+    assert_eq!(kind("mytool secretword", &tools(&["cargo"])), "mytool");
+}
+
+#[test]
+fn the_kind_of_a_listed_tool_keeps_its_next_word() {
     assert_eq!(
-        kind("/usr/local/bin/cargo nextest run extra"),
+        kind("mytool secretword", &tools(&["mytool"])),
+        "mytool secretword"
+    );
+}
+
+#[test]
+fn the_kind_of_a_listed_tool_keeps_its_subcommands_and_skips_words_that_are_not_plain() {
+    assert_eq!(
+        kind("cargo +1.99.1 nextest run --locked", &tools(&["cargo"])),
         "cargo nextest run"
     );
-    assert_eq!(kind("make"), "make");
 }
 
 #[test]
-fn the_kind_stops_at_the_first_word_that_starts_with_a_dash_so_an_option_value_stays_out() {
-    assert_eq!(kind("tool --password hunter"), "tool");
-    assert_eq!(kind("tool -p hunter"), "tool");
+fn the_kind_of_a_listed_tool_stops_at_the_first_word_that_starts_with_a_dash() {
+    assert_eq!(kind("tool --password hunter", &tools(&["tool"])), "tool");
+    assert_eq!(kind("tool -p hunter", &tools(&["tool"])), "tool");
 }
 
 #[test]
-fn the_kind_skips_a_word_that_is_not_plain_and_keeps_collecting_until_an_option() {
+fn an_empty_tool_list_gives_the_program_alone() {
+    assert_eq!(kind("cargo nextest run", &[]), "cargo");
+}
+
+#[test]
+fn a_listed_tool_keeps_at_most_two_subcommands_and_matches_by_file_name() {
     assert_eq!(
-        kind("cargo +1.99.1 nextest run --locked"),
+        kind("/usr/local/bin/cargo nextest run extra", &tools(&["cargo"])),
         "cargo nextest run"
     );
 }
 
 #[test]
-fn the_kind_keeps_no_path_environment_variable_capital_or_long_word() {
+fn the_kind_of_a_listed_tool_keeps_no_path_environment_variable_capital_or_long_word() {
     let long = "a".repeat(33);
     assert_eq!(
-        kind(&format!("tool FOO=bar /opt/x some/where Upper {long} sync")),
+        kind(
+            &format!("tool FOO=bar /opt/x some/where Upper {long} sync"),
+            &tools(&["tool"])
+        ),
         "tool sync"
     );
 }
@@ -157,57 +193,72 @@ fn the_kind_keeps_no_path_environment_variable_capital_or_long_word() {
 #[test]
 fn the_kind_keeps_a_word_of_the_longest_length_it_allows() {
     let longest = "a".repeat(32);
-    assert_eq!(kind(&format!("tool {longest}")), format!("tool {longest}"));
+    assert_eq!(
+        kind(&format!("tool {longest}"), &tools(&["tool"])),
+        format!("tool {longest}")
+    );
 }
 
 #[test]
 fn only_the_program_of_a_kind_may_hold_digits() {
-    assert_eq!(kind("python3 ab12 run"), "python3 run");
+    assert_eq!(
+        kind("python3 ab12 run", &tools(&["python3"])),
+        "python3 run"
+    );
 }
 
 #[test]
-fn the_kind_of_a_program_that_is_not_plain_keeps_only_the_plain_words_after_it() {
-    assert_eq!(kind("./Build.sh test"), "test");
-    assert_eq!(kind(""), "");
+fn a_program_that_is_not_plain_gives_an_empty_kind() {
+    assert_eq!(kind("./Build.sh test", &tools(&["Build.sh"])), "");
+    assert_eq!(kind("", &[]), "");
 }
 
 #[test]
 fn a_leading_env_and_its_assignments_are_skipped_so_the_kind_starts_at_the_program() {
-    assert_eq!(kind("env TOKEN=abc A=b cargo test"), "cargo test");
+    let cargo = tools(&["cargo"]);
+    assert_eq!(kind("env TOKEN=abc A=b cargo test", &cargo), "cargo test");
     assert_eq!(
-        kind("/usr/bin/env TOKEN=abc /opt/bin/cargo test"),
+        kind("/usr/bin/env TOKEN=abc /opt/bin/cargo test", &cargo),
         "cargo test"
     );
 }
 
 #[test]
 fn a_program_whose_name_only_starts_with_env_is_kept_as_the_program() {
-    assert_eq!(kind("envoy run TOKEN=abc"), "envoy run");
+    assert_eq!(kind("envoy run TOKEN=abc", &tools(&["envoy"])), "envoy run");
 }
 
 #[test]
 fn an_env_with_only_assignments_gives_an_empty_kind() {
-    assert_eq!(kind("env TOKEN=abc"), "");
+    assert_eq!(kind("env TOKEN=abc", &[]), "");
 }
 
 #[test]
 fn a_program_whose_file_name_holds_a_dot_keeps_it() {
     assert_eq!(
-        kind("./scripts/wait-for-stack.sh up"),
+        kind(
+            "./scripts/wait-for-stack.sh up",
+            &tools(&["wait-for-stack.sh"])
+        ),
         "wait-for-stack.sh up"
     );
 }
 
 #[test]
 fn a_later_word_with_a_dot_and_a_dotted_hidden_program_are_left_out() {
-    assert_eq!(kind("tool file.txt run"), "tool run");
-    assert_eq!(kind("/opt/.hidden run"), "run");
-    assert_eq!(kind("TOKEN=a.b run"), "run");
+    assert_eq!(kind("tool file.txt run", &tools(&["tool"])), "tool run");
+    assert_eq!(kind("/opt/.hidden run", &tools(&[".hidden"])), "");
+    assert_eq!(kind("TOKEN=a.b run", &[]), "");
 }
 
 #[test]
 fn a_job_line_of_a_command_behind_env_holds_no_assignment() {
-    let arrival = Arrival::read(&job_in("env TOKEN=abc cargo test", None), &[], None);
+    let arrival = Arrival::read(
+        &job_in("env TOKEN=abc cargo test", None),
+        &[],
+        &tools(&["cargo"]),
+        None,
+    );
     let departure = Departure {
         label: Label::new("tests"),
         lane: Lane::Normal,
@@ -338,7 +389,7 @@ fn an_arrival_reads_the_command_and_the_working_directory() {
     let root = checkout(scratch.path(), "repo");
     directory(&root, "target/debug");
     let job = job_in("cargo nextest run --workspace", Some(&root));
-    let arrival = Arrival::read(&job, &warm_dirs(), None);
+    let arrival = Arrival::read(&job, &warm_dirs(), &tools(&["cargo"]), None);
     assert_eq!(arrival.kind, "cargo nextest run");
     assert_eq!(arrival.options, ["--workspace"]);
     assert_eq!(arrival.place.repo.as_deref(), Some("repo"));
@@ -353,7 +404,7 @@ fn a_seated_arrival_has_no_warmth_because_the_job_has_already_run() {
     directory(&root, "target/debug");
     let job = job_in("make", Some(&root));
     let asked = super::now_ms();
-    let arrival = Arrival::read(&job, &warm_dirs(), Some(5000));
+    let arrival = Arrival::read(&job, &warm_dirs(), &[], Some(5000));
     assert!(arrival.seated);
     assert_eq!(arrival.place.warm, None);
     assert_eq!(arrival.place.repo.as_deref(), Some("repo"));
@@ -411,7 +462,7 @@ fn a_tally_keeps_the_most_jobs_that_ran_at_once() {
 
 /// Returns the line of a job that ran with `tally`.
 fn line_of_tally(tally: Tally) -> JobLine {
-    let arrival = Arrival::read(&job_in("make", None), &[], None);
+    let arrival = Arrival::read(&job_in("make", None), &[], &[], None);
     let departure = Departure {
         label: Label::new("tests"),
         lane: Lane::Normal,
@@ -480,7 +531,7 @@ fn a_job_line_holds_no_option_value_environment_variable_or_absolute_path() {
         "/opt/bin/tool --token=hunter-two SECRET=value /private/path --key hunter",
         Some(&root),
     );
-    let arrival = Arrival::read(&job, &[], None);
+    let arrival = Arrival::read(&job, &[], &[], None);
     let departure = Departure {
         label: Label::new("tests"),
         lane: Lane::Normal,
@@ -506,7 +557,7 @@ fn a_job_line_holds_no_option_value_environment_variable_or_absolute_path() {
 
 #[test]
 fn a_job_that_left_before_it_ran_has_no_start_threads_or_figures() {
-    let arrival = Arrival::read(&job_in("make", None), &[], None);
+    let arrival = Arrival::read(&job_in("make", None), &[], &[], None);
     let departure = Departure {
         label: Label::new("tests"),
         lane: Lane::Fast,
@@ -527,7 +578,7 @@ fn a_job_that_left_before_it_ran_has_no_start_threads_or_figures() {
 
 #[test]
 fn a_seated_job_counts_as_starting_when_it_asked() {
-    let arrival = Arrival::read(&job_in("make", None), &[], Some(1000));
+    let arrival = Arrival::read(&job_in("make", None), &[], &[], Some(1000));
     let at_ms = arrival.at_ms;
     let departure = Departure {
         label: Label::new("tests"),

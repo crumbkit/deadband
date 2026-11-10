@@ -41,6 +41,7 @@ reclaim_timeout = "30s"
 reclaim_memory = "8G"
 reclaim_disk = "50G"
 warm_dirs = ["target", "build/out"]
+kind_tools = ["cargo", "make"]
 
 [[reclaim]]
 name = "workspaces"
@@ -60,6 +61,7 @@ command = ["tool", "reclaim", "--json"]
             memory: "8G".to_owned(),
             disk: "50G".to_owned(),
             warm_dirs: vec!["target".to_owned(), "build/out".to_owned()],
+            kind_tools: vec!["cargo".to_owned(), "make".to_owned()],
         }
     );
 }
