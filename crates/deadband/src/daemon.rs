@@ -345,9 +345,10 @@ fn connection(shared: &Shared, stream: UnixStream) {
         }
         Ok(Some(Request::Timeline)) => {
             // The write has its timeout and happens after the lock is
-            // released, so a client that does not read holds up no job.
+            // released, so a client that does not read holds up no job. The
+            // fit also runs after the lock is released.
             let timeline = lock(shared).timeline(Instant::now());
-            let _ = write_line(&mut &stream, &Reply::Timeline(timeline));
+            let _ = write_line(&mut &stream, &Reply::Timeline(timeline.fit()));
         }
         Ok(Some(Request::Seat { job, jobs, ran_ms })) => {
             if stream.set_read_timeout(None).is_ok() {

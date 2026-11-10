@@ -46,6 +46,7 @@ status.
 | serve | One public call, `run_daemon`, that does what `deadband daemon` does before it prints a failure: it binds the socket, reads the reclaim config and serves. |
 | client | Asks the daemon to admit a job or to list its jobs, and gives the reason to start at once when the daemon cannot be asked. A granted job's lease has one thread that tells the next daemon the job still runs when the connection closes. |
 | protocol | The messages over the socket, one JSON object per line. |
+| name | The rule that names a job in `status` and `top` from its workspace, its label and its short command, and leaves the label out when it repeats the workspace or the command's first word. |
 | socket | Finds the socket's path from the environment, and lists the variables deadband reads. |
 | job | The only module that starts a process: the job that `deadband run` was given, the reclaimers and the `on_stuck` command that the daemon's config file names, and `/bin/ps`, which names the busiest process outside the jobs. |
 | reclaim | Reads the daemon's config file, decides when to reclaim memory or disk, runs the reclaimers on a thread of their own, and keeps the last reclaim for `deadband status`. |
@@ -178,6 +179,17 @@ with `try_send` on a channel of 256 entries, so the daemon never waits for the
 disk. A line that finds the channel full is dropped, and a counter that each
 machine line reports goes up. If the writer thread has stopped, the first line
 that cannot reach it is logged once.
+
+The same walk runs for every job, including on a daemon that records nothing,
+because it also finds the job's workspace. It keeps going past `.git` to the
+first directory that holds `.deadband-workspace` as a regular file, and stops
+at the filesystem root or after 64 directories. The daemon names the
+workspace after that directory, unless the client named one, and computes the
+job's short command from its command line with the kind rule below. Both
+travel with the job to `status` and `top`, and neither reaches the history
+file. The full command line stays in the protocol, because `stuck_ignore`
+matches it. `status` prints the full command line only for a job from an
+older daemon, which sends no short command, and `top` never prints it.
 
 The kind rule names no tool in code. The kind is the program's file name,
 such as `deploy.sh` for `./deploy.sh hunterpass`, so a script's arguments

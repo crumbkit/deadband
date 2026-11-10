@@ -7,7 +7,7 @@ use super::{State, Waiter};
 use crate::admit::{JobId, Lane};
 use crate::history::{Departure, JobLine, Line, MachineLine, Tally, VERSION, now_ms};
 use crate::probe::ChildUsage;
-use crate::protocol::{Ago, Exit, JobRecord, JobState, Jobs, Label, StuckPeriod, Timeline};
+use crate::protocol::{Ago, Exit, JobRecord, JobState, Jobs, Label, Short, StuckPeriod, Timeline};
 use crate::stuck::Period;
 
 /// The most ended jobs that the daemon remembers. The 65th evicts the
@@ -22,6 +22,10 @@ pub(super) const MAX_ROWS: usize = 100;
 pub(super) struct Ended {
     /// The job's label.
     label: Label,
+    /// The workspace the job ran in.
+    workspace: Option<Label>,
+    /// The job's short command.
+    short: Option<Short>,
     /// The lane the job waited in.
     lane: Lane,
     /// When the job asked to start.
@@ -61,6 +65,8 @@ impl Ended {
         };
         JobRecord {
             label: self.label.clone(),
+            workspace: self.workspace.clone(),
+            short: self.short.clone(),
             lane: self.lane,
             queued: Ago::between(self.queued, now),
             state,
@@ -78,6 +84,8 @@ impl Waiter {
     fn row(&self, now: Instant, state: JobState) -> JobRecord {
         JobRecord {
             label: self.label.clone(),
+            workspace: self.job.workspace.clone(),
+            short: self.job.short.clone(),
             lane: self.job.lane,
             queued: Ago::between(self.queued, now),
             state,
@@ -135,6 +143,8 @@ impl State {
             lane: waiter.job.lane,
             stuck: self.stuck.end(waiter.job.pid),
             label: waiter.label,
+            workspace: waiter.job.workspace,
+            short: waiter.job.short,
             queued: waiter.queued,
             ended,
             run,

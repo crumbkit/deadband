@@ -32,7 +32,7 @@ mod tests;
 mod timeline;
 
 pub use self::timeline::{
-    Ago, Exit, JobRecord, JobState, LABEL_BYTES, Label, StuckPeriod, Timeline,
+    Ago, Exit, JobRecord, JobState, LABEL_BYTES, Label, SHORT_BYTES, Short, StuckPeriod, Timeline,
 };
 
 /// The longest line, in bytes, that either side reads. A longer line is
@@ -40,7 +40,7 @@ pub use self::timeline::{
 /// line in memory.
 pub const MAX_LINE: u64 = 64 * 1024;
 
-/// A job, as a client describes it and `status` shows it.
+/// A job, as a client describes it and the daemon lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Job {
     /// The label that `--label` gave, or the program's name.
@@ -62,6 +62,16 @@ pub struct Job {
     /// sends none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// The workspace the job runs in. A program that embeds deadband may
+    /// name it, and otherwise the daemon finds it from `cwd`. It is `None`
+    /// outside a workspace, and an older daemon sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Label>,
+    /// The job's short command, which the daemon computes from `command`
+    /// when the job arrives and replaces whatever a client sent. An older
+    /// daemon sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short: Option<Short>,
 }
 
 /// What the daemon knows of the processes outside the jobs when a job is
@@ -197,15 +207,17 @@ pub enum Reply {
     },
 }
 
-/// The daemon's running and waiting jobs.
+/// The daemon's running and waiting jobs. The daemon sends each job as a
+/// [`Job`], and `deadband status` prints each one as the type that leaves
+/// out its command line.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct Jobs {
+pub struct Jobs<J = Job> {
     /// The most jobs that the daemon lets run at once.
     pub max_jobs: usize,
     /// The running jobs, in the order they started.
-    pub running: Vec<Job>,
+    pub running: Vec<J>,
     /// The waiting jobs, the oldest first.
-    pub waiting: Vec<Job>,
+    pub waiting: Vec<J>,
     /// Why the first waiting job does not start yet, or `null` when no job
     /// waits or the daemon does not know.
     #[serde(default)]
@@ -225,6 +237,23 @@ pub struct Jobs {
     /// cannot say whether that job is stuck.
     #[serde(default)]
     pub unreadable: bool,
+}
+
+impl<J> Jobs<J> {
+    /// Returns the same jobs with each running and waiting job turned by
+    /// `each`.
+    pub fn map<K>(self, mut each: impl FnMut(J) -> K) -> Jobs<K> {
+        Jobs {
+            max_jobs: self.max_jobs,
+            running: self.running.into_iter().map(&mut each).collect(),
+            waiting: self.waiting.into_iter().map(&mut each).collect(),
+            held: self.held,
+            reclaim: self.reclaim,
+            stuck: self.stuck,
+            busiest: self.busiest,
+            unreadable: self.unreadable,
+        }
+    }
 }
 
 /// A job that has shown no activity for the configured time.

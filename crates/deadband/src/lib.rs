@@ -8,6 +8,7 @@ pub mod daemon;
 pub mod environment;
 pub mod history;
 pub mod job;
+pub mod name;
 pub mod priority;
 pub mod probe;
 pub mod protocol;

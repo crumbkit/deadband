@@ -26,8 +26,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   program's file name alone. Both keys are empty by default. An older binary
   refuses these keys and runs no reclaimer, so add them only after installing
   this release.
+- `deadband status` and `deadband top` show each job's workspace and short
+  command. The workspace is the nearest directory at or above the job's
+  working directory that holds a `.deadband-workspace` file, or the name that
+  a program passes in the new `Asked::workspace` field. The short command is
+  the job-history kind of the job's command line, such as `cargo nextest
+  run`. `deadband top` gains `workspace` and `job` columns.
 
 ### Changed
+
+- `deadband status` prints `running: NAME (pid N): SHORT`, where NAME joins
+  the workspace and the label, in place of the label and the full command
+  line. `deadband status --json` prints the `deadband/status/v2` document,
+  whose jobs carry `workspace` and `short` and no longer carry `command`.
+- `Asked` gains a `workspace` field, so a program that builds one must set it.
 
 - `DEADBAND_HELD=0` no longer marks a job as held, and `DEADBAND_HELD` and
   `DEADBAND_BYPASS` now read their values by the same rule: a variable takes

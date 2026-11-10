@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use super::WINDOW;
 use crate::admit::Lane;
-use crate::protocol::{Ago, Exit, JobRecord, JobState};
+use crate::name::shows_label;
+use crate::protocol::{Ago, Exit, JobRecord, JobState, Label, Short};
 
 /// The time axis, `width` columns wide, whose last column is now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,8 +62,16 @@ pub(in crate::tui) enum Status {
 /// One job's row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::tui) struct Row {
+    /// The workspace the job runs in, or empty outside a workspace or from
+    /// an older daemon.
+    pub(in crate::tui) workspace: String,
     /// The job's label.
     pub(in crate::tui) label: String,
+    /// Whether the job column shows the label, which the name rule leaves
+    /// out when it adds nothing.
+    pub(in crate::tui) shows_label: bool,
+    /// The job's short command, or empty.
+    pub(in crate::tui) short: String,
     /// Whether the job is in the fast lane.
     pub(in crate::tui) fast: bool,
     /// The columns where the job waited.
@@ -155,8 +164,13 @@ pub(super) fn row(record: &JobRecord, elapsed: Duration, axis: Axis) -> Row {
         (Status::Running(_), Some(period)) if record.is_stuck() => Status::Stuck(age(period.since)),
         (status, _) => status,
     };
+    let workspace = record.workspace.as_ref().map(Label::as_str);
+    let short = record.short.as_ref().map(Short::as_str);
     Row {
+        workspace: workspace.unwrap_or_default().to_owned(),
         label: record.label.as_str().to_owned(),
+        shows_label: shows_label(workspace, record.label.as_str(), short),
+        short: short.unwrap_or_default().to_owned(),
         fast: record.lane == Lane::Fast,
         waited,
         ran,

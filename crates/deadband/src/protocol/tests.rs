@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use super::{
     Ago, Exit, Job, JobRecord, JobState, Jobs, LABEL_BYTES, Label, MAX_CWD, MAX_LINE, OutsideJobs,
-    Reply, Request, StuckPeriod, Timeline, job_cwd, read_line, write_line,
+    Reply, Request, SHORT_BYTES, Short, StuckPeriod, Timeline, job_cwd, read_line, write_line,
 };
 use crate::admit::{Hold, Lane};
 use crate::probe::ChildUsage;
@@ -21,7 +21,65 @@ fn job() -> Job {
         lane: Lane::Fast,
         watched: false,
         cwd: None,
+        workspace: None,
+        short: None,
     }
+}
+
+#[test]
+fn a_job_with_a_workspace_and_a_short_command_reads_back_as_itself() {
+    let shown = Job {
+        workspace: Some(Label::new("triage")),
+        short: Some(Short::new("cargo nextest run")),
+        ..job()
+    };
+    let text = line(&Request::Ask(shown.clone()));
+    assert!(
+        text.contains(r#""workspace":"triage","short":"cargo nextest run""#),
+        "{text}"
+    );
+    assert_eq!(
+        read_line::<Request>(&mut BufReader::new(text.as_bytes())).expect("reads"),
+        Some(Request::Ask(shown))
+    );
+}
+
+#[test]
+fn an_empty_short_command_is_sent_so_a_client_tells_it_from_an_older_daemon() {
+    let shown = Job {
+        short: Some(Short::new("")),
+        ..job()
+    };
+    assert!(line(&shown).contains(r#""short":"""#), "{}", line(&shown));
+}
+
+#[test]
+fn a_job_from_an_older_peer_reads_with_no_workspace_or_short_command() {
+    let text = "{\"label\":\"tests\",\"pid\":42,\"command\":\"make\"}\n";
+    let read: Job = read_line(&mut BufReader::new(text.as_bytes()))
+        .expect("reads")
+        .expect("a job");
+    assert_eq!(read.workspace, None);
+    assert_eq!(read.short, None);
+}
+
+#[test]
+fn a_workspace_and_a_short_command_read_from_a_bad_peer_lose_their_control_characters() {
+    let text = "{\"label\":\"a\",\"pid\":1,\"command\":\"x\",\"workspace\":\"w\\u001b[2J\",\"short\":\"s\\u001b]0;\"}\n";
+    let read: Job = read_line(&mut BufReader::new(text.as_bytes()))
+        .expect("reads")
+        .expect("a job");
+    assert_eq!(read.workspace, Some(Label::new("w [2J")));
+    assert_eq!(
+        read.short.map(|short| short.as_str().to_owned()).as_deref(),
+        Some("s ]0;")
+    );
+}
+
+#[test]
+fn a_short_command_is_cut_to_its_limit_on_a_character_boundary() {
+    let short = Short::new(&format!("{}é", "a".repeat(SHORT_BYTES - 1)));
+    assert_eq!(short.as_str(), "a".repeat(SHORT_BYTES - 1));
 }
 
 /// Returns `message` as the line that `write_line` writes.
@@ -308,6 +366,8 @@ fn an_older_daemon_reads_a_done_line_that_carries_a_signal() {
 fn timeline() -> Timeline {
     let record = |label: &str, queued, state| JobRecord {
         label: Label::new(label),
+        workspace: None,
+        short: None,
         lane: Lane::Normal,
         queued: Ago::from_millis(queued),
         state,
@@ -368,11 +428,35 @@ fn a_timeline_reply_is_one_json_line_that_reads_back() {
 }
 
 #[test]
-fn the_largest_timeline_reply_fits_in_one_line() {
-    let row = JobRecord {
+fn a_timeline_row_with_a_workspace_and_a_short_command_reads_back() {
+    let mut shown = timeline();
+    shown.jobs[0].workspace = Some(Label::new("triage"));
+    shown.jobs[0].short = Some(Short::new("cargo test"));
+    let reply = Reply::Timeline(shown);
+    let text = line(&reply);
+    assert!(
+        text.contains(r#"{"label":"a","workspace":"triage","short":"cargo test","lane""#),
+        "{text}"
+    );
+    assert_eq!(
+        read_line::<Reply>(&mut BufReader::new(text.as_bytes())).expect("reads"),
+        Some(reply)
+    );
+}
+
+#[test]
+fn a_timeline_that_fits_keeps_every_row() {
+    assert_eq!(timeline().fit(), timeline());
+}
+
+#[test]
+fn the_largest_timeline_reply_leaves_out_its_oldest_rows_until_it_fits_in_one_line() {
+    let row = |name: &str| JobRecord {
         // A quote takes two bytes of JSON, so this label is the longest to
         // write.
         label: Label::new(&"\"".repeat(LABEL_BYTES)),
+        workspace: Some(Label::new(&"\"".repeat(LABEL_BYTES))),
+        short: Some(Short::new(&format!("{name:a<width$}", width = SHORT_BYTES))),
         lane: Lane::Normal,
         queued: Ago::from_millis(u64::MAX),
         state: JobState::Finished {
@@ -388,10 +472,11 @@ fn the_largest_timeline_reply_fits_in_one_line() {
             4
         ],
     };
-    let reply = Reply::Timeline(Timeline {
+    let jobs: Vec<_> = (0..100).map(|n| row(&n.to_string())).collect();
+    let fitted = Timeline {
         up: Ago::from_millis(u64::MAX),
-        jobs: vec![row; 100],
-        hidden: usize::MAX,
+        jobs: jobs.clone(),
+        hidden: 0,
         held: Some(Hold::Load {
             projected: f64::MAX,
             cores: usize::MAX,
@@ -401,7 +486,12 @@ fn the_largest_timeline_reply_fits_in_one_line() {
             cpu_percent: u32::MAX,
         }),
         unreadable: true,
-    });
+    }
+    .fit();
+    assert!(fitted.hidden > 0, "every row fits: {}", fitted.jobs.len());
+    assert_eq!(fitted.jobs.len() + fitted.hidden, 100);
+    assert_eq!(fitted.jobs[..], jobs[..fitted.jobs.len()]);
+    let reply = Reply::Timeline(fitted);
     let length = line(&reply).len();
     assert!(
         u64::try_from(length).expect("fits") <= MAX_LINE,

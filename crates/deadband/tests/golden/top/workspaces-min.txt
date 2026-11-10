@@ -1,0 +1,16 @@
+ deadband  last 10 minutes · 4 more jobs not shown                       OPEN
+
+ workspace    job               -10m   -8m   -6m   -4m   -2m now  state
+ triage       mise run lint     │   ▒▒▒▒▒▒✓  │     │     │        ok 1m
+              crumbkit-docs  …  │      ░▒▒▒▒✓│     │     │        ok 1m
+ reading-list cargo build       │      │     │  ░███████████████  run 4m
+ triage       api-tests  carg…  │      │     │     ░░███████████  run 3m
+────────────────────────────────────────────────────────────────────────────────
+ load   6.4
+ cores  14                       ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                 ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀
+                                 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+ held by                         ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+        ▀ open   ▀ full   ▀ load   ▀ memory   ▀ disk     ░ waiting    █ running
+
+ q quit

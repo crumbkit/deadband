@@ -29,7 +29,7 @@ mod kind;
 pub(crate) mod tests;
 mod writer;
 
-pub use self::kind::{Arrival, Place, kind, options};
+pub use self::kind::{Arrival, Place, WORKSPACE_MARKER, kind, options};
 pub use self::writer::{LOCK_FILE, Recorder};
 
 /// The format version that each line carries.

@@ -4,19 +4,38 @@
 
 use std::time::{Duration, Instant};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::OutsideJobs;
+use super::{MAX_LINE, OutsideJobs};
 use crate::admit::{Hold, Lane};
 
 /// The most bytes that a [`Label`] holds.
 pub const LABEL_BYTES: usize = 64;
 
-/// A job's label as `deadband top` shows it: at most [`LABEL_BYTES`] bytes,
-/// cut on a character boundary, with each control character replaced by a
-/// space. Deserializing runs the same constructor, so a label cannot carry
-/// a terminal escape into the view, even from a bad daemon.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The most bytes that a [`Short`] holds: three words of at most 32 bytes
+/// each and the two spaces between them.
+pub const SHORT_BYTES: usize = 98;
+
+/// Returns `text` cut to at most `most` bytes on a character boundary, with
+/// each control character replaced by a space.
+fn clean(text: &str, most: usize) -> String {
+    let mut kept = String::new();
+    for each in text.chars() {
+        if kept.len() + each.len_utf8() > most {
+            break;
+        }
+        kept.push(if each.is_control() { ' ' } else { each });
+    }
+    kept
+}
+
+/// A job's label or workspace as `deadband status` and `deadband top` show
+/// it: at most [`LABEL_BYTES`] bytes, cut on a character boundary, with each
+/// control character replaced by a space. Deserializing runs the same
+/// constructor, so a label cannot carry a terminal escape into the view,
+/// even from a bad daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(from = "String")]
 pub struct Label(String);
 
@@ -24,14 +43,7 @@ impl Label {
     /// Returns the label for `text`.
     #[must_use]
     pub fn new(text: &str) -> Self {
-        let mut label = String::new();
-        for each in text.chars() {
-            if label.len() + each.len_utf8() > LABEL_BYTES {
-                break;
-            }
-            label.push(if each.is_control() { ' ' } else { each });
-        }
-        Self(label)
+        Self(clean(text, LABEL_BYTES))
     }
 
     /// Returns the label's text.
@@ -42,6 +54,35 @@ impl Label {
 }
 
 impl From<String> for Label {
+    fn from(text: String) -> Self {
+        Self::new(&text)
+    }
+}
+
+/// A job's short command: the kind that the history module's rule gives
+/// its command line, such as `cargo nextest run`, at most [`SHORT_BYTES`]
+/// bytes. The daemon computes it, and the full command line never reaches
+/// a display through it. Deserializing cleans the text as [`Label`] does.
+/// An empty short command says that the rule kept no word.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(from = "String")]
+pub struct Short(String);
+
+impl Short {
+    /// Returns the short command for `text`.
+    #[must_use]
+    pub fn new(text: &str) -> Self {
+        Self(clean(text, SHORT_BYTES))
+    }
+
+    /// Returns the short command's text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for Short {
     fn from(text: String) -> Self {
         Self::new(&text)
     }
@@ -143,6 +184,13 @@ pub enum JobState {
 pub struct JobRecord {
     /// The job's label.
     pub label: Label,
+    /// The workspace the job runs in, or `None` outside a workspace or from
+    /// an older daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Label>,
+    /// The job's short command, or `None` from an older daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short: Option<Short>,
     /// The lane the job waited in.
     pub lane: Lane,
     /// When the job asked to start.
@@ -172,6 +220,31 @@ impl JobRecord {
                 .stuck
                 .last()
                 .is_some_and(|period| period.until.is_none())
+    }
+}
+
+impl Timeline {
+    /// Returns the timeline with its last rows, the oldest ended jobs, left
+    /// out and counted in `hidden` until its reply fits in one line of
+    /// [`MAX_LINE`] bytes.
+    ///
+    /// A row holds at most about 800 bytes of JSON, so 100 rows fit unless
+    /// most of their labels and workspaces are long and full of characters
+    /// that JSON escapes. Only then does a row leave, and each one costs a
+    /// new serialization of the reply.
+    #[must_use]
+    pub fn fit(mut self) -> Self {
+        // The reply wraps the timeline as `{"timeline":...}`, and its line
+        // ends in a newline.
+        let room = usize::try_from(MAX_LINE)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(r#"{"timeline":}"#.len() + 1);
+        while serde_json::to_vec(&self).map_or(0, |bytes| bytes.len()) > room
+            && self.jobs.pop().is_some()
+        {
+            self.hidden = self.hidden.saturating_add(1);
+        }
+        self
     }
 }
 

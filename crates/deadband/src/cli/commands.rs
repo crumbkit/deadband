@@ -156,6 +156,7 @@ pub(super) fn run<O: Write, W: Write, P>(
         cores: machine.cores,
         label: &label,
         command: &command,
+        workspace: None,
         lane: args.lane,
         notices: Some(&notices),
     };

@@ -17,9 +17,10 @@ use crate::admit::{GIB, Hold, Lane};
 use crate::history::FILE;
 use crate::history::tests::{Scratch, lines_of, write_file};
 use crate::probe::{ChildUsage, Disk, Pressure, Probe, Sample, Unreadable};
-use crate::protocol::{Job, JobState, Jobs, Reply, Request, read_line, write_line};
+use crate::protocol::{Job, JobState, Jobs, Reply, Request, Short, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
+mod shown;
 mod timeline;
 mod watch;
 
@@ -182,6 +183,17 @@ fn job(label: &str) -> Job {
         lane: Lane::Normal,
         watched: false,
         cwd: None,
+        workspace: None,
+        short: None,
+    }
+}
+
+/// Returns `job(label)` as the daemon lists it, with the short command that
+/// it computes from `make <label>`.
+fn shown_job(label: &str) -> Job {
+    Job {
+        short: Some(Short::new("make")),
+        ..job(label)
     }
 }
 
@@ -259,7 +271,7 @@ fn a_seated_job_shows_in_status_and_a_new_job_waits_behind_it() {
     let (path, _) = start(1, &Dial::new(Pressure::Normal));
     let _seated = seat(&path, "a", 16, 0);
     let listed = until_running(&path, 1);
-    assert_eq!(listed.running, [job("a")]);
+    assert_eq!(listed.running, [shown_job("a")]);
     assert_eq!(Client::ask(&path, "b").reply(), queued(0, 1));
 }
 
@@ -356,8 +368,8 @@ fn status_lists_the_running_and_the_waiting_jobs() {
         jobs(&path),
         Jobs {
             max_jobs: 1,
-            running: vec![job("a")],
-            waiting: vec![job("b")],
+            running: vec![shown_job("a")],
+            waiting: vec![shown_job("b")],
             held: Some(Hold::Full { max_jobs: 1 }),
             reclaim: None,
             stuck: Vec::new(),
@@ -598,7 +610,7 @@ fn a_waiting_client_that_disconnects_leaves_the_queue_and_the_next_moves_up() {
         // observable round trip.
         listed = jobs(&path);
     }
-    assert_eq!(listed.waiting, vec![job("c")]);
+    assert_eq!(listed.waiting, vec![shown_job("c")]);
     first.send(&Request::Done {
         exit_code: Some(0),
         signal: None,

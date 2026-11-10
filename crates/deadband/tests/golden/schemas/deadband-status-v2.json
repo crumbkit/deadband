@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "deadband/status/v1",
-  "description": "One sample of the machine's 1-minute load average, memory pressure and swap, and the daemon's running and waiting jobs.",
+  "title": "deadband/status/v2",
+  "description": "One sample of the machine's 1-minute load average, memory pressure and swap, and the daemon's running and waiting jobs, each with its workspace and short command.",
   "type": "object",
   "properties": {
     "data": {
@@ -387,7 +387,7 @@
     },
     "schema": {
       "description": "The id of this document.",
-      "const": "deadband/status/v1"
+      "const": "deadband/status/v2"
     }
   },
   "required": [
@@ -512,50 +512,8 @@
         }
       ]
     },
-    "Job": {
-      "description": "A job, as a client describes it and `status` shows it.",
-      "type": "object",
-      "properties": {
-        "command": {
-          "description": "The job's command line, with its words joined by spaces.",
-          "type": "string"
-        },
-        "cwd": {
-          "description": "The working directory of the job, at most 1 KiB. An older client\nsends none.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "label": {
-          "description": "The label that `--label` gave, or the program's name.",
-          "type": "string"
-        },
-        "lane": {
-          "description": "The lane the job waits in. A client that names none asks for the\nnormal lane.",
-          "$ref": "#/$defs/Lane",
-          "default": "normal"
-        },
-        "pid": {
-          "description": "The process ID of the `deadband run` that asked for the job.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "watched": {
-          "description": "Whether the daemon watches this job's process tree, whose root is\n`pid`. A client that names none, and every job that a program embeds,\nis not watched.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "label",
-        "pid",
-        "command",
-        "lane"
-      ]
-    },
     "Jobs": {
-      "description": "The daemon's running and waiting jobs.",
+      "description": "The daemon's running and waiting jobs. The daemon sends each job as a\n[`Job`], and `deadband status` prints each one as the type that leaves\nout its command line.",
       "type": "object",
       "properties": {
         "busiest": {
@@ -604,7 +562,7 @@
           "description": "The running jobs, in the order they started.",
           "type": "array",
           "items": {
-            "$ref": "#/$defs/Job"
+            "$ref": "#/$defs/ShownJob"
           }
         },
         "stuck": {
@@ -624,7 +582,7 @@
           "description": "The waiting jobs, the oldest first.",
           "type": "array",
           "items": {
-            "$ref": "#/$defs/Job"
+            "$ref": "#/$defs/ShownJob"
           }
         }
       },
@@ -638,6 +596,10 @@
         "busiest",
         "unreadable"
       ]
+    },
+    "Label": {
+      "description": "A job's label or workspace as `deadband status` and `deadband top` show\nit: at most [`LABEL_BYTES`] bytes, cut on a character boundary, with each\ncontrol character replaced by a space. Deserializing runs the same\nconstructor, so a label cannot carry a terminal escape into the view,\neven from a bad daemon.",
+      "type": "string"
     },
     "Lane": {
       "description": "The lane a job waits in. Waiting fast jobs start before waiting normal\nones, and get one more thread.",
@@ -757,6 +719,68 @@
         "need",
         "freed_bytes",
         "failed"
+      ]
+    },
+    "Short": {
+      "description": "A job's short command: the kind that the history module's rule gives\nits command line, such as `cargo nextest run`, at most [`SHORT_BYTES`]\nbytes. The daemon computes it, and the full command line never reaches\na display through it. Deserializing cleans the text as [`Label`] does.\nAn empty short command says that the rule kept no word.",
+      "type": "string"
+    },
+    "ShownJob": {
+      "description": "A job as `deadband status` shows it, which leaves out its command line.",
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "description": "The working directory of the job, or absent from an older client.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "description": "The label that `--label` gave, or the program's name.",
+          "type": "string"
+        },
+        "lane": {
+          "description": "The lane the job waits in.",
+          "$ref": "#/$defs/Lane"
+        },
+        "pid": {
+          "description": "The process ID of the `deadband run` that asked for the job.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "short": {
+          "description": "The job's short command, at most three plain words such as `cargo\nnextest run`, or absent from an older daemon. It is empty when the\nrule kept no word of the command line.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Short"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "watched": {
+          "description": "Whether the daemon watches this job's process tree.",
+          "type": "boolean"
+        },
+        "workspace": {
+          "description": "The workspace the job runs in, or absent outside a workspace or from\nan older daemon.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "pid",
+        "lane"
       ]
     },
     "Status": {

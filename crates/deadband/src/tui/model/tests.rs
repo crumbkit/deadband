@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use super::{Absence, Axis, Gate, MAX_SAMPLES, Model, Phase, Rows, Status, WINDOW};
 use crate::admit::{Hold, Lane};
 use crate::client::Unasked;
-use crate::protocol::{Ago, Exit, JobRecord, JobState, Label, StuckPeriod, Timeline};
+use crate::protocol::{Ago, Exit, JobRecord, JobState, Label, Short, StuckPeriod, Timeline};
 
 /// An axis of 60 columns over 600 seconds, so a column is 10 seconds.
 const AXIS: Axis = Axis::new(60);
@@ -23,11 +23,57 @@ fn ago(n: u64) -> Ago {
 fn record(label: &str, queued: u64, state: JobState) -> JobRecord {
     JobRecord {
         label: Label::new(label),
+        workspace: None,
+        short: None,
         lane: Lane::Normal,
         queued: ago(queued),
         state,
         stuck: Vec::new(),
     }
+}
+
+/// Returns a waiting job labelled `label` in `workspace` whose short
+/// command is `short`.
+fn shown(label: &str, workspace: Option<&str>, short: &str) -> JobRecord {
+    JobRecord {
+        workspace: workspace.map(Label::new),
+        short: Some(Short::new(short)),
+        ..record(label, 30, JobState::Waiting)
+    }
+}
+
+#[test]
+fn a_row_carries_the_workspace_label_and_short_command_of_its_job() {
+    let row = only(vec![shown(
+        "api-tests",
+        Some("triage"),
+        "cargo nextest run",
+    )]);
+    assert_eq!(row.workspace, "triage");
+    assert_eq!(row.label, "api-tests");
+    assert!(row.shows_label);
+    assert_eq!(row.short, "cargo nextest run");
+}
+
+#[test]
+fn a_row_leaves_out_a_label_that_equals_the_workspace_or_the_first_word_of_its_command() {
+    let same = only(vec![shown(
+        "reading-list",
+        Some("reading-list"),
+        "cargo build",
+    )]);
+    assert!(!same.shows_label);
+    let default = only(vec![shown("tool", None, "tool")]);
+    assert!(!default.shows_label);
+    assert_eq!(default.short, "tool");
+}
+
+#[test]
+fn a_row_from_an_older_daemon_shows_its_label_with_no_workspace_or_command() {
+    let row = only(vec![record("build", 30, JobState::Waiting)]);
+    assert_eq!(row.workspace, "");
+    assert!(row.shows_label);
+    assert_eq!(row.short, "");
 }
 
 fn timeline(up: u64, jobs: Vec<JobRecord>) -> Timeline {
