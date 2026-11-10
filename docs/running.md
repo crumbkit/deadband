@@ -131,6 +131,63 @@ running after 60 seconds is logged once and left running, because deadband
 never signals it. At most 8 run at once; a job that becomes stuck while 8 run
 gets none, and the log says so.
 
+## The job history
+
+Each daemon keeps a record of the jobs that end on its machine, so an offline
+script can compare admission policies. It appends one line of JSON for each
+job that leaves the daemon, and one line about the machine every 60 seconds.
+Nothing in deadband reads the file, and nothing leaves the machine.
+
+The file is `deadband/jobs.jsonl` in `$XDG_STATE_HOME`, or
+`~/.local/state/deadband/jobs.jsonl` when `XDG_STATE_HOME` is not set. Its
+directory has mode 0700 and the file has mode 0600. A daemon started with
+`DEADBAND_SOCKET` set records nothing.
+
+When the file passes 64 MiB, the daemon renames it to `jobs.1.jsonl`, replacing
+any earlier one, and starts a new file. The two files together hold about
+128 MiB, and this rotation is the only thing that deletes history.
+
+A failure to record never holds a job. When the file cannot be written, the
+daemon logs one line and tries again with the next record, and it logs one line
+when writing works again. When more than 256 lines wait for the disk, a line is
+dropped and the `dropped` field of the machine lines rises. A crash can leave
+a torn last line. The next open adds a newline, so a reader skips the one line
+it cannot parse.
+
+Each line has `"type":"job"` or `"type":"machine"`, and `"v":1`. A reader must
+refuse a line with a higher `v`. `jq` reads the file.
+
+A job line has these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `queued_at_ms`, `started_at_ms`, `ended_at_ms` | Wall-clock times in Unix milliseconds. `started_at_ms` is null for a job that left before it ran. |
+| `seated` | True when a new daemon took over the running job, so its wait is unknown. Such a job counts as starting when it asked, and its `load_at_start` and `warm` are null. |
+| `label` | The label, at most 64 bytes. |
+| `kind` | Up to the first three plain lowercase words of the command, with the program reduced to its file name, such as `cargo nextest run`. A leading `env` and the `NAME=value` words after it are skipped. The program's file name may hold digits and dots, such as `wait-for-stack.sh`. Collecting stops at the first word that starts with `-`. |
+| `options` | The names of up to 32 options, without any value: each `--name` form and each exact `-x` form. |
+| `repo`, `checkout` | The final directory name of the main checkout and of the worktree, or null outside git. |
+| `warm` | True when a directory that `warm_dirs` names has an entry under the checkout when the job asks. Null when `warm_dirs` is empty or the job is outside git. |
+| `lane`, `threads`, `ahead` | The lane, the threads granted, and the jobs ahead when it asked. |
+| `exit` | `{"exited":{"code":N}}`, `{"signalled":{"signal":N}}`, `"lost"` or `"left"`. `"left"` is a job that left before it ran. |
+| `child_cpu_ms`, `child_peak_rss_bytes` | What the kernel reports of the job's waited-for children, or null when the client sent none. |
+| `load_at_start`, `load_mean`, `load_max` | The 1-minute load average when the job started and across the run. |
+| `pressure_s`, `samples`, `running_max` | The seconds of the run with memory pressure above normal, the readings behind the load figures, and the most jobs that ran at once. |
+
+`child_cpu_ms` and `child_peak_rss_bytes` are lower bounds on a cold build. A
+compiler that a cache's server runs is not a child of the job, so its work is
+almost invisible. Peak memory is the largest single process, and it is not a
+sum across parallel compilers.
+
+A machine line has `at_ms`, `load_1m`, `pressure`, `running`, `waiting`, `held`
+(why the first waiting job waits), `max_jobs`, `cores` and `dropped`, the lines
+that the daemon has dropped since it started.
+
+The line never holds the command's arguments or option values, environment
+variables, job output or absolute paths. A job that never reaches a daemon,
+because the daemon was down, the caller set `DEADBAND_BYPASS`, or the job runs
+inside a granted job, has no line.
+
 ## Threads
 
 The daemon gives each job a number of threads: the logical cores divided
@@ -230,11 +287,12 @@ The daemon reads its config file once, when it starts. The file is
 `[[reclaim]]` table names one reclaimer:
 
 ```toml
-# All four settings are optional; these are the defaults.
+# All five settings are optional; these are the defaults.
 reclaim_after = "60s"     # how long memory stays short before a reclaim, and the wait between reclaims; at least 10s
 reclaim_timeout = "5m"    # how long the daemon waits for one run of a reclaimer; more than 0
 reclaim_memory = "4G"     # the memory each reclaim asks for
 reclaim_disk = "20G"      # the disk each reclaim asks for
+warm_dirs = []            # directories under a job's checkout that show a warm build, such as ["target"]
 
 [[reclaim]]
 name = "workspaces"
@@ -250,7 +308,8 @@ shell.
 A size is a whole number with an optional `K`, `M`, `G` or `T`, each a
 power of 1024. An age is a number with a unit, such as `90s`, `5m` or
 `1h`. `reclaim_after` must be at least 10 seconds, and `reclaim_timeout`
-more than 0. Without the file, or without a `[[reclaim]]` table, the daemon
+more than 0. `warm_dirs` lists directories, relative to a job's checkout, and
+only the job history reads it. Without the file, or without a `[[reclaim]]` table, the daemon
 never reclaims. A file that cannot be read, has an unknown key or breaks
 one of these limits turns reclaiming off, and the daemon's log says why in
 one line.
@@ -355,6 +414,11 @@ let admitted = admit(&asked, &mut notify);
 let status = start_the_job(admitted.variables());
 admitted.end(status.code());
 ```
+
+A program that measures its child can call `admitted.end_measured(status,
+usage)` to give the daemon the job's usage for the job history.
+`deadband::probe::child_usage` reads it on macOS. Without that call, the job's
+line records null usage.
 
 A short-lived process that exists to run one job may also call
 `admitted.lower_priority(&mut notify)` before it starts the job, as

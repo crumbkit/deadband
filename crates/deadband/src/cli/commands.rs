@@ -13,7 +13,7 @@ use super::{DaemonArgs, Machine, RunArgs};
 use crate::admission::{self, Asked, Notices};
 use crate::daemon::note;
 use crate::job;
-use crate::probe::Probe;
+use crate::probe::{Probe, child_usage};
 use crate::protocol::Jobs;
 use crate::serve;
 
@@ -160,7 +160,7 @@ pub(super) fn run<O: Write, W: Write, P>(
     admitted.lower_priority(&mut notify);
     let ended = job::run(&args.command, admitted.variables());
     match &ended {
-        Ok(status) => admitted.end_status(*status),
+        Ok(status) => admitted.end_measured(*status, child_usage()),
         Err(_) => admitted.end(None),
     }
     finish(sink, output, program, ended)

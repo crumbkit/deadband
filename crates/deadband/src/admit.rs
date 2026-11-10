@@ -352,6 +352,13 @@ impl<J> Queue<J> {
             .map(|each| &each.job)
     }
 
+    /// Returns the threads of the running job numbered `id`.
+    #[must_use]
+    pub fn threads_of(&self, id: JobId) -> Option<usize> {
+        let job = self.running.iter().find(|each| each.id == id)?;
+        Some(job.jobs)
+    }
+
     /// Returns how many jobs start before the waiting job numbered `id`, or
     /// `None` when that job does not wait.
     #[must_use]

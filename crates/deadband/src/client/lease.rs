@@ -30,6 +30,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::connect;
+use crate::probe::ChildUsage;
 use crate::protocol::{Job, Reply, Request, read_line, write_line};
 use crate::stuck::{active_line, still_line, stuck_line};
 
@@ -114,21 +115,34 @@ impl Lease {
     /// connection. A daemon that cannot be told sees the connection close,
     /// which frees the job's place as well.
     pub fn end(self, exit_code: Option<i32>) {
-        self.send_done(exit_code, None);
+        self.send_done(exit_code, None, None);
     }
 
     /// Tells the daemon how the job ended, the exit code or the signal, and
     /// closes the connection, as [`Lease::end`] does.
     pub fn end_status(self, status: ExitStatus) {
-        self.send_done(status.code(), status.signal());
+        self.send_done(status.code(), status.signal(), None);
+    }
+
+    /// Tells the daemon how the job ended, and what the kernel reported of
+    /// the job's children, and closes the connection.
+    pub fn end_measured(self, status: ExitStatus, usage: Option<ChildUsage>) {
+        self.send_done(status.code(), status.signal(), usage);
     }
 
     /// Writes the `Done` line to the current connection, if the lease has
     /// one. A failed write closes the connection all the same when `self`
     /// drops.
-    fn send_done(self, exit_code: Option<i32>, signal: Option<i32>) {
+    fn send_done(self, exit_code: Option<i32>, signal: Option<i32>, usage: Option<ChildUsage>) {
         if let SeatState::Held(stream) = &*self.seat.lock() {
-            let _ = write_line(&mut &*stream, &Request::Done { exit_code, signal });
+            let _ = write_line(
+                &mut &*stream,
+                &Request::Done {
+                    exit_code,
+                    signal,
+                    usage,
+                },
+            );
         }
     }
 }

@@ -62,7 +62,8 @@ regex-lite = "0.1.9"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"], optional = true }
 
 # libc calls getloadavg and sysctlbyname, which read the load average, the
-# memory pressure level and swap use on macOS. A measured comparison chose
+# memory pressure level and swap use on macOS, and getrusage, which reads the
+# CPU time and peak memory of a job's waited-for children. A measured comparison chose
 # libc over the sysinfo crate, which has no memory pressure level.
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2.191"

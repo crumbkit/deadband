@@ -10,9 +10,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use serde_json::Value;
+
 use super::{Log, Settings, Unbound, bind, default_max_jobs, lock_path, serve};
 use crate::admit::{GIB, Hold, Lane};
-use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
+use crate::history::tests::{Scratch, lines_of, write_file};
+use crate::history::{FILE, ROTATED_FILE};
+use crate::probe::{ChildUsage, Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::{Job, JobState, Jobs, Reply, Request, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
@@ -96,11 +100,21 @@ impl Probe for Dial {
 /// Starts a daemon with `max_jobs` and `dial` on a new socket, and returns
 /// the socket and the daemon's log.
 fn start(max_jobs: usize, dial: &Dial) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
+    start_with(max_jobs, dial, |_| {})
+}
+
+/// Starts a daemon as [`start`] does, after `change` has changed its
+/// settings.
+fn start_with(
+    max_jobs: usize,
+    dial: &Dial,
+    change: impl FnOnce(&mut Settings),
+) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
     let path = socket_path();
     let bound = bind(&path).expect("the test socket binds");
     let written = Arc::new(Mutex::new(Vec::new()));
     let log: Log = written.clone();
-    let settings = Settings {
+    let mut settings = Settings {
         max_jobs: NonZeroUsize::new(max_jobs).expect("the test passes a positive maximum"),
         cores: NonZeroUsize::new(CORES),
         home: Some(std::env::temp_dir()),
@@ -109,7 +123,10 @@ fn start(max_jobs: usize, dial: &Dial) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
         first_line_within: FIRST_LINE_WITHIN,
         reclaim: crate::reclaim::Config::default(),
         watching: crate::daemon::Watching::default(),
+        history: None,
+        machine_every: Duration::from_secs(3600),
     };
+    change(&mut settings);
     let probe = dial.clone();
     // The closure takes the whole `Bound`, so its lock lives as long as the
     // daemon's thread.
@@ -164,6 +181,7 @@ fn job(label: &str) -> Job {
         command: format!("make {label}"),
         lane: Lane::Normal,
         watched: false,
+        cwd: None,
     }
 }
 
@@ -266,6 +284,7 @@ fn a_seated_job_that_says_it_ended_frees_its_place() {
     seated.send(&Request::Done {
         exit_code: Some(0),
         signal: None,
+        usage: None,
     });
     assert_eq!(waiting.reply(), granted(1));
 }
@@ -310,6 +329,7 @@ fn a_second_job_waits_until_the_first_job_says_it_ended() {
     first.send(&Request::Done {
         exit_code: Some(0),
         signal: None,
+        usage: None,
     });
     assert_eq!(second.reply(), granted(1));
 }
@@ -388,6 +408,7 @@ fn status_reports_the_hold_that_follows_the_machine_and_none_once_the_queue_drai
     first.send(&Request::Done {
         exit_code: Some(0),
         signal: None,
+        usage: None,
     });
     assert_eq!(third.reply(), granted(2));
     let drained = jobs(&path);
@@ -482,11 +503,13 @@ fn a_waiting_fast_job_starts_before_a_normal_job_that_waited_longer() {
     first.send(&Request::Done {
         exit_code: Some(0),
         signal: None,
+        usage: None,
     });
     assert_eq!(fast.reply(), Reply::Granted { jobs: 17 });
     fast.send(&Request::Done {
         exit_code: Some(0),
         signal: None,
+        usage: None,
     });
     assert_eq!(normal.reply(), granted(1));
 }
@@ -579,6 +602,7 @@ fn a_waiting_client_that_disconnects_leaves_the_queue_and_the_next_moves_up() {
     first.send(&Request::Done {
         exit_code: Some(0),
         signal: None,
+        usage: None,
     });
     assert_eq!(third.reply(), granted(1));
 }
@@ -610,4 +634,248 @@ fn the_default_maximum_is_a_quarter_of_the_cores_rounded_up_and_at_least_one() {
     assert_eq!(default_max_jobs(NonZeroUsize::new(10)).get(), 3);
     assert_eq!(default_max_jobs(NonZeroUsize::new(1)).get(), 1);
     assert_eq!(default_max_jobs(None).get(), 1);
+}
+
+/// Starts a daemon of `max_jobs` jobs that records into `directory`.
+fn recording(max_jobs: usize, directory: &Path) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
+    start_with(max_jobs, &Dial::new(Pressure::Normal), |settings| {
+        settings.history = Some(directory.to_owned());
+    })
+}
+
+/// Reads the lines of the history file in `directory` until `count` lines
+/// of `kind` are there. The writer works on its own thread and each read is
+/// an observable step.
+fn lines_until(directory: &Path, kind: &str, count: usize) -> Vec<Value> {
+    let begun = Instant::now();
+    loop {
+        let lines: Vec<Value> = lines_of(&directory.join(FILE))
+            .into_iter()
+            .filter(|line| line["type"] == kind)
+            .collect();
+        if lines.len() >= count {
+            return lines;
+        }
+        assert!(begun.elapsed() < REPLY_WITHIN, "{lines:?}");
+    }
+}
+
+/// Returns the one job line of a job that ran and then met `end`.
+fn line_of_run(end: impl FnOnce(Client)) -> Value {
+    let scratch = Scratch::new();
+    let (path, _log) = recording(1, scratch.path());
+    let mut client = Client::ask(&path, "a");
+    assert_eq!(client.reply(), granted(1));
+    end(client);
+    lines_until(scratch.path(), "job", 1).remove(0)
+}
+
+#[test]
+fn a_job_that_exits_writes_one_line_with_each_field_of_its_run() {
+    let scratch = Scratch::new();
+    let (path, log) = recording(1, scratch.path());
+    let mut client = Client::ask(&path, "a");
+    assert_eq!(client.reply(), granted(1));
+    client.send(&Request::Done {
+        exit_code: Some(3),
+        signal: None,
+        usage: Some(ChildUsage {
+            cpu_ms: 120,
+            peak_rss_bytes: 4096,
+        }),
+    });
+    let line = lines_until(scratch.path(), "job", 1).remove(0);
+    assert_eq!(line["v"], 1);
+    assert_eq!(line["label"], "a");
+    assert_eq!(line["kind"], "make a");
+    assert_eq!(line["seated"], false);
+    assert_eq!(line["lane"], "normal");
+    assert_eq!(line["threads"], CORES);
+    assert_eq!(line["ahead"], 0);
+    assert_eq!(line["exit"]["exited"]["code"], 3);
+    assert_eq!(line["child_cpu_ms"], 120);
+    assert_eq!(line["child_peak_rss_bytes"], 4096);
+    assert_eq!(line["load_at_start"], 1.0);
+    assert_eq!(line["load_mean"], 1.0);
+    assert_eq!(line["load_max"], 1.0);
+    assert_eq!(line["running_max"], 1);
+    assert_eq!(line["repo"], Value::Null);
+    assert_eq!(line["warm"], Value::Null);
+    let at = |name: &str| line[name].as_u64().expect("a time");
+    assert!(at("queued_at_ms") <= at("started_at_ms"), "{line}");
+    assert!(at("started_at_ms") <= at("ended_at_ms"), "{line}");
+    assert_eq!(lines_of(&scratch.path().join(FILE)).len(), 1);
+    assert!(log.lock().expect("locks").is_empty());
+}
+
+#[test]
+fn a_job_that_a_signal_ended_records_the_signal() {
+    let line = line_of_run(|mut client| {
+        client.send(&Request::Done {
+            exit_code: None,
+            signal: Some(15),
+            usage: None,
+        });
+    });
+    assert_eq!(line["exit"]["signalled"]["signal"], 15);
+    assert_eq!(line["child_cpu_ms"], Value::Null);
+}
+
+#[test]
+fn a_job_whose_client_closes_while_it_runs_is_recorded_as_lost_with_no_usage() {
+    let line = line_of_run(drop);
+    assert_eq!(line["exit"], "lost");
+    assert_eq!(line["child_cpu_ms"], Value::Null);
+    assert_eq!(line["child_peak_rss_bytes"], Value::Null);
+    assert!(line["started_at_ms"].is_u64(), "{line}");
+}
+
+#[test]
+fn a_job_that_leaves_before_it_runs_is_recorded_as_left_with_the_jobs_ahead_of_it() {
+    let scratch = Scratch::new();
+    let (path, _log) = recording(1, scratch.path());
+    let mut first = Client::ask(&path, "a");
+    assert_eq!(first.reply(), granted(1));
+    let mut second = Client::ask(&path, "b");
+    assert_eq!(second.reply(), queued(0, 1));
+    let mut third = Client::ask(&path, "c");
+    assert_eq!(third.reply(), queued(1, 1));
+    drop(third);
+    let line = lines_until(scratch.path(), "job", 1).remove(0);
+    assert_eq!(line["label"], "c");
+    assert_eq!(line["exit"], "left");
+    assert_eq!(line["ahead"], 1);
+    assert_eq!(line["started_at_ms"], Value::Null);
+    assert_eq!(line["threads"], Value::Null);
+    assert_eq!(line["load_mean"], Value::Null);
+}
+
+#[test]
+fn a_job_that_a_new_daemon_takes_over_is_recorded_as_seated_with_the_time_it_has_run() {
+    let scratch = Scratch::new();
+    let (path, _log) = recording(1, scratch.path());
+    let mut seated = seat(&path, "a", 16, 5000);
+    until_running(&path, 1);
+    seated.send(&Request::Done {
+        exit_code: Some(0),
+        signal: None,
+        usage: None,
+    });
+    let line = lines_until(scratch.path(), "job", 1).remove(0);
+    assert_eq!(line["seated"], true);
+    assert_eq!(line["exit"]["exited"]["code"], 0);
+    assert_eq!(line["threads"], CORES);
+    assert_eq!(line["load_at_start"], Value::Null);
+    assert_eq!(line["warm"], Value::Null);
+    assert_eq!(line["queued_at_ms"], line["started_at_ms"]);
+    let ended = line["ended_at_ms"].as_u64().expect("a time");
+    let queued = line["queued_at_ms"].as_u64().expect("a time");
+    assert!(ended - queued >= 5000, "{line}");
+}
+
+#[test]
+fn a_job_in_a_checkout_names_it_and_says_it_started_warm() {
+    let scratch = Scratch::new();
+    let history = scratch.path().join("history");
+    let root = scratch.path().join("repo");
+    std::fs::create_dir_all(root.join(".git")).expect("the directory is made");
+    std::fs::create_dir_all(root.join("target/debug")).expect("the directory is made");
+    let (path, _log) = start_with(1, &Dial::new(Pressure::Normal), |settings| {
+        settings.history = Some(history.clone());
+        settings.reclaim.warm_dirs = vec!["target".to_owned()];
+    });
+    let mut client = Client::connect(&path);
+    client.send(&Request::Ask(Job {
+        cwd: Some(root.display().to_string()),
+        ..job("a")
+    }));
+    assert_eq!(client.reply(), granted(1));
+    drop(client);
+    let line = lines_until(&history, "job", 1).remove(0);
+    assert_eq!(line["repo"], "repo");
+    assert_eq!(line["checkout"], "repo");
+    assert_eq!(line["warm"], true);
+}
+
+#[test]
+fn a_job_outside_git_on_a_daemon_with_warm_directories_has_no_warmth() {
+    let scratch = Scratch::new();
+    let history = scratch.path().join("history");
+    let outside = scratch.path().join("outside");
+    std::fs::create_dir_all(&outside).expect("the directory is made");
+    let (path, _log) = start_with(1, &Dial::new(Pressure::Normal), |settings| {
+        settings.history = Some(history.clone());
+        settings.reclaim.warm_dirs = vec!["target".to_owned()];
+    });
+    let mut client = Client::connect(&path);
+    client.send(&Request::Ask(Job {
+        cwd: Some(outside.display().to_string()),
+        ..job("a")
+    }));
+    assert_eq!(client.reply(), granted(1));
+    drop(client);
+    let line = lines_until(&history, "job", 1).remove(0);
+    assert_eq!(line["repo"], Value::Null);
+    assert_eq!(line["warm"], Value::Null);
+}
+
+#[test]
+fn an_unwritable_history_still_admits_every_job_and_the_log_says_so_once() {
+    let scratch = Scratch::new();
+    let blocker = scratch.path().join("blocker");
+    write_file(&blocker, "").expect("the file writes");
+    let (path, log) = recording(1, &blocker.join("deadband"));
+    for label in ["a", "b", "c"] {
+        let mut client = Client::ask(&path, label);
+        assert_eq!(client.reply(), granted(1));
+        client.send(&Request::Done {
+            exit_code: Some(0),
+            signal: None,
+            usage: None,
+        });
+        until_running(&path, 0);
+    }
+    let begun = Instant::now();
+    let text = loop {
+        let text = String::from_utf8(log.lock().expect("locks").clone()).expect("UTF-8");
+        if !text.is_empty() {
+            break text;
+        }
+        assert!(begun.elapsed() < REPLY_WITHIN, "the log stayed empty");
+    };
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(text.contains("job history"), "{text}");
+    assert!(!scratch.path().join(ROTATED_FILE).exists());
+}
+
+#[test]
+fn a_daemon_writes_a_machine_line_at_each_interval_with_the_queue_and_the_load() {
+    let scratch = Scratch::new();
+    let (path, _log) = start_with(1, &Dial::new(Pressure::Normal), |settings| {
+        settings.history = Some(scratch.path().to_owned());
+        settings.machine_every = Duration::from_millis(20);
+    });
+    let mut client = Client::ask(&path, "a");
+    assert_eq!(client.reply(), granted(1));
+    let _waiting = Client::ask(&path, "b");
+    let begun = Instant::now();
+    let line = loop {
+        let lines = lines_until(scratch.path(), "machine", 1);
+        if let Some(line) = lines.into_iter().find(|line| line["waiting"] == 1) {
+            break line;
+        }
+        assert!(
+            begun.elapsed() < REPLY_WITHIN,
+            "no line shows a waiting job"
+        );
+    };
+    assert_eq!(line["v"], 1);
+    assert_eq!(line["load_1m"], 1.0);
+    assert_eq!(line["pressure"], "normal");
+    assert_eq!(line["running"], 1);
+    assert_eq!(line["max_jobs"], 1);
+    assert_eq!(line["cores"], CORES);
+    assert_eq!(line["dropped"], 0);
+    assert!(line["at_ms"].is_u64(), "{line}");
+    assert_eq!(line["held"]["hold"], "full", "{line}");
 }

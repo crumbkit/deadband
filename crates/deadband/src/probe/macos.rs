@@ -1,15 +1,17 @@
 //! The macOS reader. It is the only module with unsafe code.
 //!
 //! The invariant: each unsafe call writes only into a buffer that this
-//! module owns, and passes that buffer's exact length, so the kernel or libc
-//! never writes past its end. Every name passed to `sysctlbyname` is a
-//! NUL-terminated `CStr`, and no call passes a new value to the kernel. The
-//! libproc calls and `mach_timebase_info` only read, and write only into a
+//! module owns, and passes that buffer's exact length or a pointer to one
+//! value of the type the call fills, so the kernel or libc never writes past
+//! its end. Every name passed to `sysctlbyname` is a NUL-terminated `CStr`,
+//! and no call passes a new value to the kernel. The libproc calls,
+//! `mach_timebase_info` and `getrusage` only read, and write only into a
 //! buffer that this module owns.
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
 use std::io;
+use std::mem::MaybeUninit;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -17,7 +19,7 @@ use super::sysctl::{
     PRESSURE_BYTES, PRESSURE_SYSCTL, SWAP_SYSCTL, SWAP_USAGE_BYTES, parse_pressure, parse_swap,
     ticks,
 };
-use super::{ProcessUse, Sample, TreeUnreadable, Unreadable};
+use super::{ChildUsage, ProcessUse, Sample, TreeUnreadable, Unreadable};
 
 // The parser reads `vm.swapusage` at the length of macOS's `xsw_usage`.
 const _: () = assert!(size_of::<libc::xsw_usage>() == SWAP_USAGE_BYTES);
@@ -40,6 +42,32 @@ pub(super) fn sample() -> Result<Sample, Unreadable> {
         swap_used_bytes: swap.used_bytes,
         swap_total_bytes: swap.total_bytes,
     })
+}
+
+/// Returns what the kernel reports of this process's waited-for children,
+/// or `None` when the call fails or a value is negative.
+pub(super) fn child_usage() -> Option<ChildUsage> {
+    let mut usage = MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: `usage` is writable for one `rusage`, the only value that
+    // getrusage writes.
+    let status = unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, usage.as_mut_ptr()) };
+    if status != 0 {
+        return None;
+    }
+    // SAFETY: getrusage returned 0, so it filled `usage`, and an `rusage`
+    // of zeroes was already a valid value of the plain C struct.
+    let usage = unsafe { usage.assume_init() };
+    Some(ChildUsage {
+        cpu_ms: millis(usage.ru_utime)?.saturating_add(millis(usage.ru_stime)?),
+        peak_rss_bytes: u64::try_from(usage.ru_maxrss).ok()?,
+    })
+}
+
+/// Returns `time` in whole milliseconds, or `None` when it is negative.
+fn millis(time: libc::timeval) -> Option<u64> {
+    let seconds = u64::try_from(time.tv_sec).ok()?;
+    let micros = u64::try_from(time.tv_usec).ok()?;
+    Some(seconds.saturating_mul(1000).saturating_add(micros / 1000))
 }
 
 /// Returns the 1-minute load average.

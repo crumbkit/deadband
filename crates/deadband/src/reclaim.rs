@@ -71,6 +71,9 @@ pub struct Config {
     pub disk: String,
     /// The keys that say how the daemon detects stuck jobs.
     pub stuck: stuck::Config,
+    /// The directories, relative to a job's checkout, whose having an entry
+    /// makes the job's history line say it started warm.
+    pub warm_dirs: Vec<String>,
 }
 
 impl Default for Config {
@@ -82,6 +85,7 @@ impl Default for Config {
             memory: "4G".to_owned(),
             disk: "20G".to_owned(),
             stuck: stuck::Config::default(),
+            warm_dirs: Vec::new(),
         }
     }
 }
@@ -108,6 +112,9 @@ struct File {
     stuck_ignore: Vec<String>,
     /// `stuck::Config::on_stuck`.
     on_stuck: Option<Vec<String>>,
+    /// `Config::warm_dirs`.
+    #[serde(default)]
+    warm_dirs: Vec<String>,
 }
 
 /// Returns the age that `value` gives, or `default` when it is `None`.
@@ -167,6 +174,7 @@ impl Config {
                 &file.stuck_ignore,
                 file.on_stuck,
             )?,
+            warm_dirs: file.warm_dirs,
         })
     }
 

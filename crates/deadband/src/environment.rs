@@ -62,6 +62,18 @@ pub const VARIABLES: &[Variable] = &[
         absent: "deadband uses ~/.config",
     },
     Variable {
+        name: "XDG_STATE_HOME",
+        purpose: "the state directory, which holds `deadband/jobs.jsonl`",
+        form: "a directory path",
+        absent: "deadband uses ~/.local/state",
+    },
+    Variable {
+        name: "DEADBAND_SOCKET",
+        purpose: "names a socket of its own, and a daemon started with it records no job history",
+        form: "a file path",
+        absent: "the daemon records each finished job",
+    },
+    Variable {
         name: "CARGO_BUILD_JOBS",
         purpose: "the threads of a cargo build, which `run` leaves as the caller set it",
         form: "a number",
@@ -104,6 +116,10 @@ pub struct Environment {
     pub home: Option<PathBuf>,
     /// deadband's configuration directory.
     pub config: Option<PathBuf>,
+    /// deadband's state directory, which holds the history file.
+    pub state: Option<PathBuf>,
+    /// `DEADBAND_SOCKET` is set, so a daemon started here records nothing.
+    pub own_socket: bool,
     /// The working directory of `deadband run`.
     pub cwd: Option<PathBuf>,
     /// The parallelism variables that the caller set.
@@ -124,6 +140,11 @@ impl Environment {
             .map(PathBuf::from)
             .or_else(|| home.as_ref().map(|home| home.join(".config")))
             .map(|directory| directory.join(crate::NAME));
+        let state = set("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|home| home.join(".local/state")))
+            .map(|directory| directory.join(crate::NAME));
+        let own_socket = set("DEADBAND_SOCKET").is_some();
         let preset = PARALLELISM
             .into_iter()
             .filter(|name| set(name).is_some())
@@ -133,6 +154,8 @@ impl Environment {
             bypass,
             home,
             config,
+            state,
+            own_socket,
             cwd,
             preset,
         }
@@ -145,6 +168,16 @@ impl Environment {
         self.config
             .as_ref()
             .map(|config| config.join(PRIORITY_FILE))
+    }
+
+    /// Returns the directory of the history file, or `None` when the state
+    /// directory is unknown or a daemon started here records nothing.
+    #[must_use]
+    pub fn history_directory(&self) -> Option<PathBuf> {
+        if self.own_socket {
+            return None;
+        }
+        self.state.clone()
     }
 
     /// Returns the variables that a job with `jobs` threads gets: each

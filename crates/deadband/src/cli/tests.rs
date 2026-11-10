@@ -143,6 +143,7 @@ fn ask(socket: &Path, label: &str) -> (UnixStream, Reply) {
         command: format!("make {label}"),
         lane: Lane::Normal,
         watched: false,
+        cwd: None,
     };
     write_line(&mut stream, &Request::Ask(job)).expect("the request writes");
     let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
@@ -575,6 +576,7 @@ fn listed(label: &str, pid: u32) -> Job {
         command: format!("make {label}"),
         lane: Lane::Normal,
         watched: true,
+        cwd: None,
     }
 }
 

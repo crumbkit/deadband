@@ -495,6 +495,7 @@ fn the_timeline_keeps_a_stuck_period_after_the_job_ends() {
     client.send(&Request::Done {
         exit_code: Some(0),
         signal: None,
+        usage: None,
     });
     let begun = Instant::now();
     let row = loop {
