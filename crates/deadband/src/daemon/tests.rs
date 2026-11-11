@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::{Log, Settings, Unbound, bind, default_max_jobs, lock_path, serve};
 use crate::admit::{GIB, Hold, Lane};
 use crate::history::FILE;
-use crate::history::tests::{Scratch, lines_of, write_file};
+use crate::history::tests::{Scratch, handled, lines_of, write_file};
 use crate::probe::{ChildUsage, Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::{Job, JobState, Jobs, Reply, Request, Short, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
@@ -704,6 +704,20 @@ fn lines_until(directory: &Path, kind: &str, count: usize) -> Vec<Value> {
     }
 }
 
+/// Waits until the history writer of `directory` has handled `count`
+/// lines, written or lost. The writer works on its own thread and each
+/// count is an observable step.
+fn until_handled(directory: &Path, count: u64) {
+    let begun = Instant::now();
+    while handled(directory) < count {
+        assert!(
+            begun.elapsed() < REPLY_WITHIN,
+            "the writer handled {} of {count} lines",
+            handled(directory)
+        );
+    }
+}
+
 /// Returns the one job line of a job that ran and then met `end`.
 fn line_of_run(end: impl FnOnce(Client)) -> Value {
     let scratch = Scratch::new();
@@ -915,11 +929,20 @@ fn an_unwritable_history_still_admits_every_job_and_the_log_says_so_once() {
     for label in ["a", "b", "c"] {
         run(label);
     }
-    // The writer takes lines in order, so once the line of `d` is in the
-    // file, the writer has handled the three that failed before it.
+    // The writer works on its own thread, so the lines of `a`, `b` and `c`
+    // may still wait in its channel. The blocker goes only once the writer
+    // has handled all three, or one of them would be written in place of
+    // `d`.
+    until_handled(&state, 3);
     std::fs::remove_file(&blocker).expect("the blocker goes");
     run("d");
-    let lines = lines_until(&state, "job", 1);
+    // The writer logs that it writes again after it has written the line,
+    // so the log is read once the writer has handled the line of `d`.
+    until_handled(&state, 4);
+    let lines: Vec<Value> = lines_of(&state.join(FILE))
+        .into_iter()
+        .filter(|line| line["type"] == "job")
+        .collect();
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0]["label"], "d");
     let text = String::from_utf8(log.lock().expect("locks").clone()).expect("UTF-8");

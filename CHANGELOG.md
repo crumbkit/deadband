@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-11
+
+### Fixed
+
+- The release binaries are now published. Version 0.2.0 was tagged, but its
+  release did not complete, so it has no binaries.
+
 ## [0.2.0] - 2026-11-11
 
 ### Added
