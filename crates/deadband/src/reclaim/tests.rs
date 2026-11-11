@@ -74,6 +74,16 @@ fn a_config_with_an_unknown_key_is_refused_in_one_line_that_names_the_key() {
 }
 
 #[test]
+fn a_config_that_is_not_toml_is_refused_in_one_line_that_names_the_line_and_column() {
+    let error = Config::parse("reclaim_after = \"60s\"\nreclaim_memory = \n")
+        .expect_err("a key without a value is refused");
+    assert!(error.contains("line 2 column"), "{error}");
+    assert!(!error.contains('\n'), "{error}");
+    let error = Config::parse("reclaim_aftr = \"60s\"\n").expect_err("an unknown key is refused");
+    assert!(error.contains("line 1 column"), "{error}");
+}
+
+#[test]
 fn a_config_refuses_a_reclaimer_without_a_command_and_a_size_without_a_number() {
     let empty = "[[reclaim]]\nname = \"x\"\ncommand = []\n";
     let error = Config::parse(empty).expect_err("an empty command is refused");

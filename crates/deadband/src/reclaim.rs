@@ -23,6 +23,7 @@ use crate::stuck;
 
 #[cfg(test)]
 mod tests;
+mod text;
 mod watch;
 mod worker;
 
@@ -181,7 +182,7 @@ impl Config {
     /// reclaimer with an empty command, or a stuck key that
     /// [`stuck::Config::parse`] refuses.
     pub fn parse(text: &str) -> Result<Self, String> {
-        let file: File = basic_toml::from_str(text).map_err(|error| one_line(&error))?;
+        let file: File = text::from_toml(text)?;
         if let Some(empty) = file.reclaim.iter().find(|each| each.command.is_empty()) {
             return Err(format!("the reclaimer {} has an empty command", empty.name));
         }
