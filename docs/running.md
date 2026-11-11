@@ -13,13 +13,25 @@ deadband prints and the format of its config file, and
 
 ## Installing
 
-Build and install the binary from a checkout:
+Each [GitHub release](https://github.com/crumbkit/deadband/releases) has
+an archive of the `deadband` binary for macOS on Apple silicon and for Linux
+on x86_64 and aarch64, and a SHA256SUMS file that lists each archive's
+checksum. Unpack the archive and put `deadband` on your `PATH`.
+
+Or build and install the binary from a checkout:
 
 ```sh
 cargo install --locked --path crates/deadband
 ```
 
 Cargo puts `deadband` in `~/.cargo/bin`.
+
+To publish a release, land a pull request that sets the new version in the
+workspace `Cargo.toml` and moves CHANGELOG.md's Unreleased entries under that
+version. Then tag the merge commit as `v<version>` and push the tag. The
+Release workflow, `.github/workflows/release.yml`, refuses a tag that differs
+from the version in `Cargo.toml`, runs the advisory check and the tests,
+builds the archives and attaches them to the release.
 
 ## Running jobs through the daemon
 
