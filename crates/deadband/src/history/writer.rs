@@ -179,6 +179,8 @@ impl Writer {
         }
         for line in lines {
             self.append(&line);
+            #[cfg(test)]
+            super::tests::count_handled(&self.directory);
         }
     }
 

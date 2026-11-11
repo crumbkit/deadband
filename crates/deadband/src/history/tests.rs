@@ -1,9 +1,10 @@
 //! Tests of the kind rule, the record types and the writer.
 
+use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -17,6 +18,24 @@ use crate::admit::Lane;
 use crate::daemon::Log;
 use crate::probe::{ChildUsage, Pressure};
 use crate::protocol::{Exit, Job, Label};
+
+/// How many lines each writer thread has handled, by its state directory.
+/// Only test builds count them, so that a daemon test can wait for the
+/// writer's thread instead of sleeping.
+static HANDLED: Mutex<BTreeMap<PathBuf, u64>> = Mutex::new(BTreeMap::new());
+
+/// Counts one line that the writer of `directory` has handled, whether it
+/// wrote the line or lost it.
+pub(crate) fn count_handled(directory: &Path) {
+    let mut handled = HANDLED.lock().unwrap_or_else(PoisonError::into_inner);
+    *handled.entry(directory.to_owned()).or_default() += 1;
+}
+
+/// Returns how many lines the writer of `directory` has handled.
+pub(crate) fn handled(directory: &Path) -> u64 {
+    let handled = HANDLED.lock().unwrap_or_else(PoisonError::into_inner);
+    handled.get(directory).copied().unwrap_or_default()
+}
 
 /// A new directory in the temporary directory. Dropping it removes it.
 #[derive(Debug)]
