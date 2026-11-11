@@ -6,8 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-11
+
 ### Added
 
+- Each version tag gets a GitHub release with `deadband` binaries for macOS
+  on Apple silicon and for Linux on x86_64 and aarch64, as tar.gz archives
+  with a SHA256SUMS file.
 - `deadband skills install` writes deadband's agent skill into each agent
   skills directory that exists, `~/.claude/skills`, `~/.agents/skills` and
   `$CODEX_HOME/skills`, or into the directory that `--dir` names.

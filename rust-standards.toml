@@ -18,9 +18,10 @@ requirement = """
 - Lane: `lane` in .github/workflows/ci.yml, on each pull request and each push to main. It runs every step of the pull-request lane in the standards' order (format, workflows, deny, shear, clippy, tests, doctests, rustdoc). It leaves out the `features` step, which the library profile needs and deadband does not adopt. Its budget is ten minutes, the job's timeout.
 - Lane: `macos` in .github/workflows/ci.yml, on each pull request and each push to main, on a macOS runner. It runs clippy on all targets and the tests, so the macOS reader of the probe, which compiles only on macOS, is compiled, linted and tested. Its budget is ten minutes, the job's timeout.
 - Lane: `advisories` in .github/workflows/ci.yml, daily at 06:43 UTC and on demand (BASE-29). Nothing waits for it.
+- Lane: `release` in .github/workflows/release.yml, on each pushed `v*` tag, on demand, and on a pull request that changes the workflow. It runs the advisory check (BASE-29) and the tests on Linux and macOS, builds auditable binaries (BASE-30) for aarch64-apple-darwin, x86_64-unknown-linux-gnu and aarch64-unknown-linux-gnu, and attaches them to a GitHub release only when it runs for a tag. Its budget is thirty minutes per job, the jobs' timeout.
 """
 purpose = "The pull-request lane stays within ten minutes on a small workspace and grows with the code. A daily advisory run catches an advisory published against a dependency already on main, and finding it after merge is safe because the advisory concerns code that is already on main."
-realizations = [".github/workflows/ci.yml"]
+realizations = [".github/workflows/ci.yml", ".github/workflows/release.yml"]
 
 [[decision]]
 id = "unsafe"
