@@ -242,8 +242,8 @@ pub(super) fn service<O: Write, W: Write, P>(
                 dry_run: output.is_dry_run(),
             };
             // A daemon that does not answer counts as having no jobs.
-            let jobs = || {
-                client::jobs(&machine.socket, ANSWER_WITHIN)
+            let jobs = |socket: &Path| {
+                client::jobs(socket, ANSWER_WITHIN)
                     .map_or(0, |jobs| jobs.running.len() + jobs.waiting.len())
             };
             let result = service::install(agent, &install, jobs);

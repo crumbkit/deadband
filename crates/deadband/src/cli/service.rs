@@ -158,7 +158,7 @@ pub fn state(agent: &LaunchAgent) -> Option<DaemonState> {
 pub fn install(
     agent: Option<&LaunchAgent>,
     install: &Install,
-    jobs: impl FnOnce() -> usize,
+    jobs: impl FnOnce(&Path) -> usize,
 ) -> Result<Prose<Report>, ServiceFailed> {
     let agent = agent.ok_or(ServiceFailed::Unsupported)?;
     let home = located(agent.home.as_deref(), "the home directory")?;
@@ -176,31 +176,38 @@ pub fn install(
         report.plist = Some(text.clone());
     }
     let changed = existing.as_deref() != Some(text.as_str());
-    if !changed {
-        report.steps.push(Step::Unchanged { path: path.clone() });
-        if loaded {
-            report.steps.push(Step::AlreadyLoaded);
+    if loaded {
+        if !changed && !install.restart {
+            report.steps.push(Step::UpToDate { path });
             return Ok(Prose::new(report));
         }
-    } else {
+        // The daemon that launchd runs listens under the directory that
+        // getconf prints, whatever the caller's TMPDIR says.
+        let socket = crate::socket::path(|name| {
+            (name == "TMPDIR").then(|| temp_dir.clone().into_os_string())
+        });
+        let jobs = jobs(&socket);
+        if jobs > 0 && !install.restart {
+            // The old plist stays, so a later install still sees the change.
+            report.steps.push(Step::Kept { jobs });
+            return Ok(Prose::new(report));
+        }
+        if !install.dry_run {
+            agent
+                .launchd
+                .bootout(&agent.target())
+                .map_err(ServiceFailed::Launchctl)?;
+            wait_until_unloaded(agent);
+        }
+        report.steps.push(Step::Unloaded);
+    }
+    if changed {
         if !install.dry_run {
             write(&path, &text)?;
         }
         report.steps.push(Step::Wrote { path: path.clone() });
-        if loaded {
-            let jobs = jobs();
-            if jobs > 0 && !install.restart {
-                report.steps.push(Step::Kept { jobs });
-                return Ok(Prose::new(report));
-            }
-            if !install.dry_run {
-                agent
-                    .launchd
-                    .bootout(&agent.target())
-                    .map_err(ServiceFailed::Launchctl)?;
-            }
-            report.steps.push(Step::Unloaded);
-        }
+    } else {
+        report.steps.push(Step::Unchanged { path: path.clone() });
     }
     if !install.dry_run {
         agent
@@ -247,13 +254,30 @@ pub fn uninstall(
         return Ok(Prose::new(report));
     }
     if !dry_run {
-        std::fs::remove_file(&path).map_err(|error| ServiceFailed::Write {
+        std::fs::remove_file(&path).map_err(|error| ServiceFailed::Delete {
             path: path.clone(),
             error,
         })?;
     }
     report.steps.push(Step::Deleted { path });
     Ok(Prose::new(report))
+}
+
+/// The most `launchctl print` polls that install makes after a bootout,
+/// [`PAUSE`](crate::job::launchd::PAUSE) apart, about five seconds in all.
+const UNLOAD_POLLS: u32 = 50;
+
+/// Waits until launchd no longer lists the agent, which happens once the
+/// booted-out daemon has exited, so the bootstrap that follows is not
+/// refused. After [`UNLOAD_POLLS`] polls, or when a poll fails, it stops
+/// waiting and the bootstrap reports what launchd says.
+fn wait_until_unloaded(agent: &LaunchAgent) {
+    for _ in 0..UNLOAD_POLLS {
+        match agent.launchd.is_loaded(&agent.target()) {
+            Ok(true) => agent.launchd.pause(),
+            Ok(false) | Err(_) => return,
+        }
+    }
 }
 
 /// Returns `found`, or the refusal that names `what` when it is `None`.

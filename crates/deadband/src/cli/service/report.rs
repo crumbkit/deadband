@@ -23,15 +23,20 @@ pub enum Step {
         /// The plist's path.
         path: PathBuf,
     },
+    /// The plist already held what install would write, launchd had loaded
+    /// it, and nothing changed.
+    UpToDate {
+        /// The plist's path.
+        path: PathBuf,
+    },
     /// launchd loaded the agent.
     Loaded,
-    /// launchd had already loaded the agent and nothing changed.
-    AlreadyLoaded,
     /// launchd unloaded the agent, which stopped its daemon.
     Unloaded,
     /// launchd had not loaded the agent.
     NotLoaded,
-    /// The daemon has jobs, so install left it running with the old plist.
+    /// The daemon has jobs, so install left the old plist in place and the
+    /// daemon running.
     Kept {
         /// The daemon's running and waiting jobs.
         jobs: usize,
@@ -101,11 +106,14 @@ impl Report {
             Step::Wrote { path } => format!("{} {}", self.verb("write", "wrote"), self.shown(path)),
             Step::Unchanged { path } => format!("left {} unchanged", self.shown(path)),
             Step::Loaded => format!("{} {LABEL}", self.verb("load", "loaded")),
-            Step::AlreadyLoaded => format!("{LABEL} is already loaded, so nothing changed"),
+            Step::UpToDate { path } => format!(
+                "{} is up to date and {LABEL} is loaded, so nothing changed",
+                self.shown(path)
+            ),
             Step::Unloaded => format!("{} {LABEL}", self.verb("unload", "unloaded")),
             Step::NotLoaded => format!("{LABEL} was not loaded"),
             Step::Kept { jobs } => format!(
-                "the daemon has {jobs} {}, so it keeps running with the old plist; run deadband service install again when no job runs, or add --restart",
+                "the daemon has {jobs} {}, so install left the old plist in place; the new plist waits for deadband service install when no job runs, or for --restart",
                 if *jobs == 1 { "job" } else { "jobs" }
             ),
             Step::Deleted { path } => {

@@ -55,16 +55,28 @@ pub enum ServiceFailed {
         /// Why it cannot be read.
         reason: String,
     },
-    /// Writing or deleting the plist failed.
+    /// Writing the plist failed.
     #[failure(
         code = SERVICE_WRITE_FAILED,
-        hint = "make ~/Library/LaunchAgents writable, or free disk space, and run the command again",
+        hint = "make ~/Library/LaunchAgents writable, or free disk space, and run install again",
         field(path = path.to_string_lossy())
     )]
     Write {
         /// The plist's path.
         path: PathBuf,
         /// The error of the write.
+        error: io::Error,
+    },
+    /// Deleting the plist failed.
+    #[failure(
+        code = SERVICE_WRITE_FAILED,
+        hint = "make ~/Library/LaunchAgents writable and run the command again",
+        field(path = path.to_string_lossy())
+    )]
+    Delete {
+        /// The plist's path.
+        path: PathBuf,
+        /// The error of the delete.
         error: io::Error,
     },
     /// A launchctl or getconf run failed.
@@ -80,8 +92,11 @@ impl fmt::Display for ServiceFailed {
             Self::Unreadable { path, reason } => {
                 write!(f, "deadband cannot read {} as a plist: {reason}", path.display())
             }
+            Self::Delete { path, error } => {
+                write!(f, "deadband could not delete {}: {error}", path.display())
+            }
             Self::Write { path, error } => {
-                write!(f, "deadband could not change {}: {error}", path.display())
+                write!(f, "deadband could not write {}: {error}", path.display())
             }
             Self::Launchctl(failed) => failed.fmt(f),
         }

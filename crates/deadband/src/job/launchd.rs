@@ -19,6 +19,10 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::Duration;
+
+#[cfg(test)]
+mod tests;
 
 /// The exit code of `launchctl print` for a service that launchd has not
 /// loaded.
@@ -70,7 +74,14 @@ pub trait Launchd: fmt::Debug + Send + Sync {
     ///
     /// Returns [`Failed`] when launchctl fails.
     fn bootout(&self, target: &str) -> Result<(), Failed>;
+
+    /// Waits [`PAUSE`] before the next [`Launchd::is_loaded`] poll, while a
+    /// booted-out daemon exits.
+    fn pause(&self);
 }
+
+/// How long [`Launchd::pause`] waits between two polls.
+pub const PAUSE: Duration = Duration::from_millis(100);
 
 /// The launchd of the machine deadband runs on.
 #[derive(Debug, Clone, Copy, Default)]
@@ -90,11 +101,7 @@ impl Launchd for System {
     fn is_loaded(&self, target: &str) -> Result<bool, Failed> {
         let words = ["print", target];
         let output = output("/bin/launchctl", &words)?;
-        match output.status.code() {
-            Some(0) => Ok(true),
-            Some(NOT_LOADED) => Ok(false),
-            _ => Err(failed("/bin/launchctl", &words, &output)),
-        }
+        loaded_from(output.status.code()).ok_or_else(|| failed("/bin/launchctl", &words, &output))
     }
 
     fn bootstrap(&self, domain: &str, plist: &Path) -> Result<(), Failed> {
@@ -104,6 +111,25 @@ impl Launchd for System {
 
     fn bootout(&self, target: &str) -> Result<(), Failed> {
         launchctl(&["bootout", target])
+    }
+
+    fn pause(&self) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "launchd sends no event when a booted-out service has exited, so install polls launchctl print; PAUSE names the wait"
+        )]
+        std::thread::sleep(PAUSE);
+    }
+}
+
+/// Returns what an exit code of `launchctl print` says: `Some(true)` for a
+/// loaded service, `Some(false)` for one that launchd has not loaded, and
+/// `None` for a failure.
+fn loaded_from(code: Option<i32>) -> Option<bool> {
+    match code {
+        Some(0) => Some(true),
+        Some(NOT_LOADED) => Some(false),
+        _ => None,
     }
 }
 

@@ -491,25 +491,30 @@
           ]
         },
         {
+          "description": "The plist already held what install would write, launchd had loaded\nit, and nothing changed.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "description": "The plist's path.",
+              "type": "string"
+            },
+            "step": {
+              "type": "string",
+              "const": "up_to_date"
+            }
+          },
+          "required": [
+            "step",
+            "path"
+          ]
+        },
+        {
           "description": "launchd loaded the agent.",
           "type": "object",
           "properties": {
             "step": {
               "type": "string",
               "const": "loaded"
-            }
-          },
-          "required": [
-            "step"
-          ]
-        },
-        {
-          "description": "launchd had already loaded the agent and nothing changed.",
-          "type": "object",
-          "properties": {
-            "step": {
-              "type": "string",
-              "const": "already_loaded"
             }
           },
           "required": [
@@ -543,7 +548,7 @@
           ]
         },
         {
-          "description": "The daemon has jobs, so install left it running with the old plist.",
+          "description": "The daemon has jobs, so install left the old plist in place and the\ndaemon running.",
           "type": "object",
           "properties": {
             "jobs": {

@@ -1,11 +1,15 @@
 //! Tests of `deadband service` and of the daemon's state that `deadband
 //! status` names, run against a fake launchd and a temporary home.
 
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
 
-use super::{Fixed, Test};
+use super::{Fixed, Test, ask};
 use crate::cli::{EXIT_SERVICE, LaunchAgent};
+use crate::daemon::{Settings, bind, serve};
+use crate::protocol::Reply;
 use crate::testing::{FakeLaunchd, TestHome};
 
 /// Returns a test machine whose launch agent lives in `home`.
@@ -153,4 +157,53 @@ fn service_uninstall_with_yes_unloads_the_agent_and_deletes_the_plist() {
         out,
         "unloaded io.github.crumbkit.deadband\ndeleted ~/Library/LaunchAgents/io.github.crumbkit.deadband.plist\n"
     );
+}
+
+/// A directory under `/tmp`, short enough for a socket path, that only this
+/// test uses. Dropping it removes the directory.
+struct ShortDir(PathBuf);
+
+impl Drop for ShortDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn service_install_counts_the_jobs_of_the_daemon_under_the_getconf_directory_whatever_the_callers_tmpdir()
+ {
+    let dir = ShortDir(PathBuf::from(format!("/tmp/dbs-{}", std::process::id())));
+    std::fs::create_dir_all(&dir.0).expect("writable");
+    let home = TestHome::new();
+    std::fs::create_dir_all(home.join("Library/LaunchAgents")).expect("writable");
+    #[expect(clippy::disallowed_methods, reason = "the test writes a fixture")]
+    std::fs::write(
+        plist_path(&home),
+        "<plist version=\"1.0\"><dict></dict></plist>\n",
+    )
+    .expect("writable");
+    let launchd = Arc::new(FakeLaunchd {
+        temp: Some(dir.0.clone()),
+        ..FakeLaunchd::new(true)
+    });
+    // The caller's socket, from its own TMPDIR, has no daemon; the daemon
+    // that launchd runs listens under the getconf directory and runs a job.
+    let test = with_agent(&home, &launchd);
+    let real = dir.0.join("deadband.sock");
+    let bound = bind(&real).expect("the socket binds");
+    let log = Arc::clone(&test.machine.log);
+    thread::spawn(move || {
+        let bound = bound;
+        let max_jobs = NonZeroUsize::new(2).expect("positive");
+        let settings = Settings::new(max_jobs, NonZeroUsize::new(4), None, None);
+        serve(&bound.listener, Fixed, settings, &log)
+    });
+    let (_job, reply) = ask(&real, "build");
+    assert!(matches!(reply, Reply::Granted { .. }), "{reply:?}");
+
+    let (code, out, err) = test.run(&["service", "install"]);
+
+    assert_eq!(code, 0, "{err}");
+    assert!(out.starts_with("the daemon has 1 job, "), "{out}");
+    assert!(launchd.changes().is_empty(), "{:?}", launchd.changes());
 }

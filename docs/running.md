@@ -595,10 +595,21 @@ can set them to private or temporary directories.
 `deadband service install --dry-run` prints the plist and the launchctl steps
 and changes nothing. Running install again leaves an identical plist alone
 and says so. When the plist changes and the daemon has no running or
-waiting jobs, install reloads the agent with `launchctl bootout` and
-`launchctl bootstrap`. When the daemon has jobs, install writes the plist
-and leaves the running daemon alone, and says to run install again when no
-job runs; `--restart` reloads it anyway. A plist written by hand, or by an
+waiting jobs, install unloads the agent with `launchctl bootout`, waits up
+to five seconds for the old daemon to exit, writes the new plist and loads
+it with `launchctl bootstrap`. Install counts the jobs of the daemon whose
+socket is under the directory that `getconf DARWIN_USER_TEMP_DIR` prints,
+whatever the caller's `TMPDIR` is, and a daemon that does not answer counts
+as having no jobs. When the daemon has jobs, install leaves the old plist in
+place and the daemon running, and says that the new plist waits for an
+install when no job runs. Running install again then finds the change and
+reloads the agent. `--restart` reloads the agent even while the daemon has
+jobs, and reloads it even when the plist is unchanged.
+
+When a launchctl step fails, install says which and exits 6. A failed
+bootout leaves the old plist and the old daemon, and a failed bootstrap
+leaves the plist installed but not loaded; running install again finishes
+either. A plist written by hand, or by an
 earlier install script, with the same label is replaced like any other
 changed plist. Install refuses a file at that path that is not an XML
 property list, and changes nothing.

@@ -49,6 +49,14 @@ pub(crate) struct FakeLaunchd {
     pub(crate) calls: std::sync::Mutex<Vec<String>>,
     /// The launchctl word, such as `bootstrap`, whose call fails.
     pub(crate) fail: Option<&'static str>,
+    /// How many `print` calls after a bootout still find the agent loaded,
+    /// as launchd does while the booted-out daemon exits. A bootstrap in
+    /// that time fails, as launchctl's does.
+    pub(crate) lingering: std::sync::Mutex<u32>,
+    /// How many `print` calls a bootout leaves lingering.
+    pub(crate) linger: u32,
+    /// The directory that getconf prints, or the default when `None`.
+    pub(crate) temp: Option<PathBuf>,
 }
 
 impl FakeLaunchd {
@@ -69,12 +77,13 @@ impl FakeLaunchd {
         }
     }
 
-    /// Returns the calls that changed something: every call but `print`.
+    /// Returns the calls that changed something: every call but `print`
+    /// and `pause`.
     pub(crate) fn changes(&self) -> Vec<String> {
         let calls = self.calls.lock().expect("the calls lock");
         calls
             .iter()
-            .filter(|call| !call.starts_with("print"))
+            .filter(|call| !call.starts_with("print") && call.as_str() != "pause")
             .cloned()
             .collect()
     }
@@ -97,16 +106,35 @@ impl FakeLaunchd {
 
 impl crate::job::launchd::Launchd for FakeLaunchd {
     fn temp_dir(&self) -> Result<PathBuf, crate::job::launchd::Failed> {
-        Ok(PathBuf::from("/var/folders/xy/abc123/T/"))
+        Ok(self
+            .temp
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/var/folders/xy/abc123/T/")))
     }
 
     fn is_loaded(&self, target: &str) -> Result<bool, crate::job::launchd::Failed> {
         self.call(format!("print {target}"))?;
+        let mut lingering = self.lingering.lock().expect("the lingering lock");
+        if *lingering > 0 {
+            *lingering -= 1;
+            return Ok(true);
+        }
         Ok(*self.loaded.lock().expect("the loaded lock"))
     }
 
     fn bootstrap(&self, domain: &str, plist: &Path) -> Result<(), crate::job::launchd::Failed> {
-        self.call(format!("bootstrap {domain} {}", plist.display()))?;
+        let line = format!("bootstrap {domain} {}", plist.display());
+        if *self.lingering.lock().expect("the lingering lock") > 0 {
+            self.calls
+                .lock()
+                .expect("the calls lock")
+                .push(line.clone());
+            return Err(crate::job::launchd::Failed {
+                command: format!("launchctl {line}"),
+                detail: "it exited with 5: Input/output error".to_owned(),
+            });
+        }
+        self.call(line)?;
         *self.loaded.lock().expect("the loaded lock") = true;
         Ok(())
     }
@@ -114,7 +142,15 @@ impl crate::job::launchd::Launchd for FakeLaunchd {
     fn bootout(&self, target: &str) -> Result<(), crate::job::launchd::Failed> {
         self.call(format!("bootout {target}"))?;
         *self.loaded.lock().expect("the loaded lock") = false;
+        *self.lingering.lock().expect("the lingering lock") = self.linger;
         Ok(())
+    }
+
+    fn pause(&self) {
+        self.calls
+            .lock()
+            .expect("the calls lock")
+            .push("pause".to_owned());
     }
 }
 
