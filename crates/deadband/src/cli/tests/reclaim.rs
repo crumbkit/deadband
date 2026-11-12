@@ -95,6 +95,7 @@ fn start_daemon_command(test: &Test<Warn>) {
         log: test.machine.log.clone(),
         cores: test.machine.cores,
         environment: test.machine.environment.clone(),
+        service: None,
     };
     thread::spawn(move || {
         let (mut out, mut err) = (Vec::new(), Vec::new());

@@ -1,0 +1,16 @@
+Install the launchd agent that runs the daemon at login and restarts it when it stops
+
+Usage: deadband service install [OPTIONS]
+
+Options:
+      --max-jobs <N>  The most jobs that the daemon runs at once, passed to `deadband daemon`. The default is the daemon's own
+      --restart       Reload a changed agent even while the daemon has running or waiting jobs. The jobs keep running
+      --dry-run       Report what the command would change, and change nothing
+  -h, --help          Print help (see more with '--help')
+
+Examples:
+  deadband service install
+  deadband service install --dry-run
+
+Effects: additive, idempotent, closed-world.
+Global flags: --json, --no-input. `deadband service install --help` describes them.

@@ -12,6 +12,9 @@ See the machine and its jobs
 Admit jobs
   daemon      Run the daemon that admits jobs, in the foreground
 
+Start the daemon at login
+  service     Install or uninstall the launchd agent that runs the daemon at login
+
 Explore the commands
   commands    Explore deadband's commands
   schemas     Explore the JSON documents that deadband prints and the files it reads
@@ -34,6 +37,9 @@ Options:
 
       --full
           With --json, print every field of every row. The default prints only the fields of the columns.
+
+      --no-input
+          Fail instead of asking a question
 
   -h, --help
           Print help (see a summary with '-h')

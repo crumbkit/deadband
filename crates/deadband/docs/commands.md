@@ -11,6 +11,7 @@ Keep a busy machine usable while many heavy jobs compete for it
 - [`deadband status`](#deadband-status): Print the machine's load, memory pressure and swap, and the daemon's jobs
 - [`deadband run`](#deadband-run): Wait until the daemon admits a job, then run it
 - [`deadband daemon`](#deadband-daemon): Run the daemon that admits jobs, in the foreground
+- [`deadband service`](#deadband-service): Install or uninstall the launchd agent that runs the daemon at login
 - [`deadband top`](#deadband-top): Show the last ten minutes of jobs, load and holds in the terminal
 - [`deadband commands`](#deadband-commands): Explore deadband's commands
 - [`deadband schemas`](#deadband-schemas): Explore the JSON documents that deadband prints and the files it reads
@@ -23,6 +24,7 @@ Keep a busy machine usable while many heavy jobs compete for it
 - `--fields <FIELD>`: Print only these comma-separated fields, in this order. The default prints the compact columns. Takes more than one value. Works after every subcommand.
 - `--long`: Add the long columns after the compact ones. The default prints only the compact columns. Works after every subcommand.
 - `--full`: With --json, print every field of every row. The default prints only the fields of the columns. Works after every subcommand.
+- `--no-input`: Fail instead of asking a question. Works after every subcommand.
 
 ### Exit codes
 
@@ -107,6 +109,77 @@ Effects: additive, not idempotent, closed-world.
 
 - `3`: deadband could not read the machine.
 - `4`: the daemon could not listen on its socket.
+
+## `deadband service`
+
+Install or uninstall the launchd agent that runs the daemon at login
+
+### Commands
+
+- [`deadband service install`](#deadband-service-install): Install the launchd agent that runs the daemon at login and restarts it when it stops
+- [`deadband service uninstall`](#deadband-service-uninstall): Unload the launchd agent and delete its plist. Running jobs keep running
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+
+## `deadband service install`
+
+Install the launchd agent that runs the daemon at login and restarts it when it stops
+
+### Arguments
+
+- `--max-jobs <N>`: The most jobs that the daemon runs at once, passed to `deadband daemon`. The default is the daemon's own
+- `--restart`: Reload a changed agent even while the daemon has running or waiting jobs. The jobs keep running
+- `--dry-run`: Report what the command would change, and change nothing
+
+### Examples
+
+Install the launchd agent that runs the daemon at login.
+
+```sh
+deadband service install
+```
+
+Print the plist and the launchctl steps.
+
+```sh
+deadband service install --dry-run
+```
+
+Effects: additive, idempotent, closed-world.
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+- `6`: deadband could not install or uninstall its launchd agent.
+
+## `deadband service uninstall`
+
+Unload the launchd agent and delete its plist. Running jobs keep running
+
+### Arguments
+
+- `--yes`: Proceed without asking for confirmation
+- `--dry-run`: Report what the command would change, and change nothing
+
+### Examples
+
+Unload the launchd agent and delete its plist without asking.
+
+```sh
+deadband service uninstall --yes
+```
+
+Effects: destructive, idempotent, closed-world.
+
+### Exit codes
+
+- `3`: deadband could not read the machine.
+- `4`: the daemon could not listen on its socket.
+- `6`: deadband could not install or uninstall its launchd agent.
 
 ## `deadband top`
 

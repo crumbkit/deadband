@@ -1,0 +1,13 @@
+Install or uninstall the launchd agent that runs the daemon at login
+
+Usage: deadband service [OPTIONS] <COMMAND>
+
+Commands:
+  install    Install the launchd agent that runs the daemon at login and restarts it when it stops
+  uninstall  Unload the launchd agent and delete its plist. Running jobs keep running
+
+Options:
+  -h, --help  Print help (see more with '--help')
+
+Global flags: --json, --fields <FIELD>, --long, --full, --no-input. `deadband service --help` describes them.
+Next: deadband service <COMMAND> -h

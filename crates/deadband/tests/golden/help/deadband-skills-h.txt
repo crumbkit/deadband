@@ -10,5 +10,5 @@ Commands:
 Options:
   -h, --help  Print help (see more with '--help')
 
-Global flags: --json, --fields <FIELD>, --long, --full. `deadband skills --help` describes them.
+Global flags: --json, --fields <FIELD>, --long, --full, --no-input. `deadband skills --help` describes them.
 Next: deadband skills <COMMAND> -h

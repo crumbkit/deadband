@@ -48,12 +48,12 @@ status.
 | protocol | The messages over the socket, one JSON object per line. |
 | name | The rule that names a job in `status` and `top` from its workspace, its label and its short command, and leaves the label out when it repeats the workspace or the command's first word. |
 | socket | Finds the socket's path from the environment, and lists the variables deadband reads. |
-| job | The only module that starts a process: the job that `deadband run` was given, the reclaimers and the `on_stuck` command that the daemon's config file names, and `/bin/ps`, which names the busiest process outside the jobs. |
+| job | The only module that starts a process: the job that `deadband run` was given, the reclaimers and the `on_stuck` command that the daemon's config file names, `/bin/ps`, which names the busiest process outside the jobs, and `launchctl` and `getconf`, behind a trait so tests use a fake launchd. |
 | reclaim | Reads the daemon's config file, decides when to reclaim memory or disk, runs the reclaimers on a thread of their own, and keeps the last reclaim for `deadband status`. |
 | environment | Reads the variables that `deadband run` uses, and gives a granted job its parallelism variables. |
 | priority | Chooses a job's lane from the priority file. |
 | throttle | The only module that changes the priority of a job. `deadband run` lowers its own priority to nice 5 before it starts a normal-lane job, and the job inherits it. |
-| cli | The commands `deadband run`, `status`, `daemon` and `top`, built on crumbkit. [running.md](running.md) says how to install and run them. |
+| cli | The commands `deadband run`, `status`, `daemon`, `service` and `top`, built on crumbkit. Its service module renders the launch agent's plist as a pure function and moves the agent between not installed, installed but not loaded, and loaded. [running.md](running.md) says how to install and run them. |
 | tui | `deadband top`, behind the default-on Cargo feature `tui`: the terminal guard, the poll loop, a pure model and a ratatui view. It reads the daemon once a second through a request of its own, and draws its load graph from the local probe. |
 
 ## Rules that shape the code

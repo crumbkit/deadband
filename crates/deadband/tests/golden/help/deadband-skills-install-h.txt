@@ -12,5 +12,5 @@ Examples:
   deadband skills install --force
 
 Effects: additive, idempotent, closed-world.
-Global flags: --json, --fields <FIELD>, --long, --full. `deadband skills install --help` describes them.
+Global flags: --json, --fields <FIELD>, --long, --full, --no-input. `deadband skills install --help` describes them.
 Next: deadband skills install --help explains each column.

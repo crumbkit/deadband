@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use deadband::cli::Machine;
+use deadband::cli::{LaunchAgent, Machine};
 
 /// Reads the environment once (BASE-6), runs the command and returns its
 /// exit code, so destructors run before the process ends (BASE-7).
@@ -40,5 +40,33 @@ fn main() -> ExitCode {
         log: Arc::new(Mutex::new(stderr)),
         cores: thread::available_parallelism().ok(),
         environment,
+        service: launch_agent(),
     })
+}
+
+/// Returns deadband's launchd agent: the home directory, the binary's path
+/// as invoked, and the user's id. It reads the environment, the working
+/// directory and the process's executable path once.
+#[cfg(target_os = "macos")]
+fn launch_agent() -> Option<LaunchAgent> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the entry point reads the working directory once, to make a relative executable path absolute"
+    )]
+    let cwd = std::env::current_dir().ok();
+    let binary = std::env::current_exe()
+        .ok()
+        .map(|exe| deadband::cli::service::plist::binary_path(&exe, cwd.as_deref()));
+    Some(LaunchAgent {
+        home: crumbkit::files::home(),
+        binary,
+        uid: rustix::process::getuid().as_raw(),
+        launchd: Arc::new(deadband::job::launchd::System),
+    })
+}
+
+/// Returns `None`, because deadband installs its service only with launchd.
+#[cfg(not(target_os = "macos"))]
+const fn launch_agent() -> Option<LaunchAgent> {
+    None
 }

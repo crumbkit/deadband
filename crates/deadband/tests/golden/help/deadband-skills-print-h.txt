@@ -9,4 +9,4 @@ Examples:
   deadband skills print
 
 Effects: read-only, closed-world.
-Global flags: --json. `deadband skills print --help` describes them.
+Global flags: --json, --no-input. `deadband skills print --help` describes them.

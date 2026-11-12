@@ -5,6 +5,7 @@ Usage: deadband [OPTIONS] <COMMAND>
 Run a heavy job when the machine has room:  run
 See the machine and its jobs:               status, top
 Admit jobs:                                 daemon
+Start the daemon at login:                  service
 Explore the commands:                       commands, schemas
 Install deadband's skill:                   skills
 Set up shell completion:                    completion
@@ -12,6 +13,6 @@ Set up shell completion:                    completion
 Options:
   -h, --help  Print help (see more with '--help')
 
-Global flags: --json, --fields <FIELD>, --long, --full. `deadband --help` describes them.
+Global flags: --json, --fields <FIELD>, --long, --full, --no-input. `deadband --help` describes them.
 Topics: exit-codes. `deadband help <TOPIC>` prints one.
 Next: deadband <COMMAND> -h

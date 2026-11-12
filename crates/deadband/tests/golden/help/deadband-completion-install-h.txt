@@ -12,5 +12,5 @@ Examples:
   deadband completion install --shell zsh --force
 
 Effects: additive, idempotent, closed-world.
-Global flags: --json, --fields <FIELD>, --full. `deadband completion install --help` describes them.
+Global flags: --json, --fields <FIELD>, --full, --no-input. `deadband completion install --help` describes them.
 Next: deadband completion install --help explains each column.

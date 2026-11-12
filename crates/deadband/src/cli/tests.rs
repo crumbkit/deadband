@@ -25,6 +25,7 @@ use crate::protocol::{
 use crate::testing::{TestSocket, socket_path};
 
 mod reclaim;
+mod service;
 
 /// How long a test waits for a reply that it expects.
 const REPLY_WITHIN: Duration = Duration::from_secs(10);
@@ -85,6 +86,7 @@ impl<P: Probe + Clone + Send + 'static> Test<P> {
             log: shared,
             cores: NonZeroUsize::new(4),
             environment: Environment::default(),
+            service: None,
         };
         Self {
             machine,

@@ -11,5 +11,5 @@ Examples:
   deadband schemas list
 
 Effects: read-only, closed-world.
-Global flags: --json, --fields <FIELD>, --long, --full. `deadband schemas list --help` describes them.
+Global flags: --json, --fields <FIELD>, --long, --full, --no-input. `deadband schemas list --help` describes them.
 Next: deadband schemas list --help explains each column.

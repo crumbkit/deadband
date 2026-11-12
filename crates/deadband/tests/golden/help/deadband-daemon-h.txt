@@ -11,4 +11,4 @@ Examples:
 
 Effects: additive, not idempotent, closed-world.
 Output: no result on standard output, and --json prints a failure as JSON.
-Global flags: --json. `deadband daemon --help` describes them.
+Global flags: --json, --no-input. `deadband daemon --help` describes them.
