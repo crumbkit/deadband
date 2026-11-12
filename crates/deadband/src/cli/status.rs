@@ -113,7 +113,7 @@ impl fmt::Display for Status {
                 Some(DaemonState::NotLoaded) => {
                     "daemon: installed but not loaded; run deadband service install"
                 }
-                _ => "daemon: not running",
+                Some(DaemonState::Running) | None => "daemon: not running",
             });
         };
         write!(

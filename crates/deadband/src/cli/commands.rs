@@ -244,7 +244,8 @@ pub(super) fn service<O: Write, W: Write, P>(
             // A daemon that does not answer counts as having no jobs.
             let jobs = |socket: &Path| {
                 client::jobs(socket, ANSWER_WITHIN)
-                    .map_or(0, |jobs| jobs.running.len() + jobs.waiting.len())
+                    .ok()
+                    .map(|jobs| jobs.running.len() + jobs.waiting.len())
             };
             let result = service::install(agent, &install, jobs);
             crumbkit::finish_to(sink, output, SERVICE_INSTALL, result)

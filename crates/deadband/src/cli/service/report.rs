@@ -41,6 +41,9 @@ pub enum Step {
         /// The daemon's running and waiting jobs.
         jobs: usize,
     },
+    /// launchd has loaded the agent and its daemon did not answer, so
+    /// install left the old plist in place and the daemon running.
+    Unanswered,
     /// The plist was deleted.
     Deleted {
         /// The plist's path.
@@ -116,6 +119,7 @@ impl Report {
                 "the daemon has {jobs} {}, so install left the old plist in place; the new plist waits for deadband service install when no job runs, or for --restart",
                 if *jobs == 1 { "job" } else { "jobs" }
             ),
+            Step::Unanswered => "the daemon did not answer, so install left the old plist in place; the new plist waits for deadband service install when the daemon answers with no jobs, or for --restart".to_owned(),
             Step::Deleted { path } => {
                 format!("{} {}", self.verb("delete", "deleted"), self.shown(path))
             }

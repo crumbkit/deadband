@@ -568,6 +568,19 @@
           ]
         },
         {
+          "description": "launchd has loaded the agent and its daemon did not answer, so\ninstall left the old plist in place and the daemon running.",
+          "type": "object",
+          "properties": {
+            "step": {
+              "type": "string",
+              "const": "unanswered"
+            }
+          },
+          "required": [
+            "step"
+          ]
+        },
+        {
           "description": "The plist was deleted.",
           "type": "object",
           "properties": {

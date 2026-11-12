@@ -12,11 +12,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `deadband daemon` at login and restarts it when it stops, with `TMPDIR`
   and `PATH` set for launchd. It leaves an identical, loaded plist alone. It
   reloads a changed one only when the daemon under the per-user temporary
-  directory has no jobs; otherwise it keeps the old plist, so running
-  install again when no job runs reloads it. `--restart` reloads the agent
-  even while the daemon has jobs. `deadband service uninstall` unloads the agent and deletes the
-  plist after it asks, or at once with `--yes`. Both take `--dry-run`, and
-  on platforms other than macOS both exit with
+  directory answers with no jobs; otherwise it keeps the old plist, so
+  running install again when no job runs reloads it. `--restart` reloads the
+  agent even while the daemon has jobs. `deadband service uninstall` unloads
+  the agent and deletes the plist after it asks, or at once with `--yes`.
+  Both take `--dry-run`, and on platforms other than macOS both exit with
   `deadband::service::unsupported`.
 - When no daemon answers on macOS, `deadband status` says whether the agent
   is not installed or not loaded and names `deadband service install`.

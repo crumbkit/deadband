@@ -148,8 +148,9 @@ pub fn state(agent: &LaunchAgent) -> Option<DaemonState> {
     }
 }
 
-/// Installs the agent as `install` asks. `jobs` returns the daemon's
-/// running and waiting jobs, or 0 when no daemon answers.
+/// Installs the agent as `install` asks. `jobs` returns the running and
+/// waiting jobs of the daemon on the socket it is given, or `None` when no
+/// daemon answers there.
 ///
 /// # Errors
 ///
@@ -158,7 +159,7 @@ pub fn state(agent: &LaunchAgent) -> Option<DaemonState> {
 pub fn install(
     agent: Option<&LaunchAgent>,
     install: &Install,
-    jobs: impl FnOnce(&Path) -> usize,
+    jobs: impl FnOnce(&Path) -> Option<usize>,
 ) -> Result<Prose<Report>, ServiceFailed> {
     let agent = agent.ok_or(ServiceFailed::Unsupported)?;
     let home = located(agent.home.as_deref(), "the home directory")?;
@@ -181,16 +182,26 @@ pub fn install(
             report.steps.push(Step::UpToDate { path });
             return Ok(Prose::new(report));
         }
-        // The daemon that launchd runs listens under the directory that
-        // getconf prints, whatever the caller's TMPDIR says.
-        let socket = crate::socket::path(|name| {
-            (name == "TMPDIR").then(|| temp_dir.clone().into_os_string())
-        });
-        let jobs = jobs(&socket);
-        if jobs > 0 && !install.restart {
-            // The old plist stays, so a later install still sees the change.
-            report.steps.push(Step::Kept { jobs });
-            return Ok(Prose::new(report));
+        if !install.restart {
+            // The daemon that launchd runs listens under the directory that
+            // getconf prints, whatever the caller's TMPDIR says.
+            let socket = crate::socket::path(|name| {
+                (name == "TMPDIR").then(|| temp_dir.clone().into_os_string())
+            });
+            // The old plist stays when the reload waits, so a later install
+            // still sees the change. A loaded agent whose daemon does not
+            // answer may hold jobs, so it counts as busy.
+            match jobs(&socket) {
+                Some(0) => {}
+                Some(jobs) => {
+                    report.steps.push(Step::Kept { jobs });
+                    return Ok(Prose::new(report));
+                }
+                None => {
+                    report.steps.push(Step::Unanswered);
+                    return Ok(Prose::new(report));
+                }
+            }
         }
         if !install.dry_run {
             agent

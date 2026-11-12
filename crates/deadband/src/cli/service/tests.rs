@@ -128,7 +128,7 @@ fn a_fresh_install_writes_the_plist_and_loads_the_agent() {
     let home = TestHome::new();
     let launchd = Arc::new(FakeLaunchd::new(false));
 
-    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| 0).expect("installs");
+    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| Some(0)).expect("installs");
 
     assert_eq!(
         std::fs::read_to_string(plist_path(&home)).expect("written"),
@@ -150,7 +150,7 @@ fn an_unchanged_rerun_changes_nothing_and_says_so() {
     write_plist(&home, &rendered(&home));
     let launchd = Arc::new(FakeLaunchd::new(true));
 
-    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| 0).expect("installs");
+    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| Some(0)).expect("installs");
 
     assert!(launchd.changes().is_empty(), "{:?}", launchd.changes());
     assert_eq!(
@@ -165,7 +165,7 @@ fn an_unchanged_plist_that_launchd_has_not_loaded_is_loaded() {
     write_plist(&home, &rendered(&home));
     let launchd = Arc::new(FakeLaunchd::new(false));
 
-    install(Some(&agent(&home, &launchd)), &PLAIN, |_| 0).expect("installs");
+    install(Some(&agent(&home, &launchd)), &PLAIN, |_| Some(0)).expect("installs");
 
     assert_eq!(
         launchd.changes(),
@@ -179,7 +179,7 @@ fn a_changed_plist_with_no_jobs_reloads_the_agent() {
     write_plist(&home, "<plist version=\"1.0\"><dict></dict></plist>\n");
     let launchd = Arc::new(FakeLaunchd::new(true));
 
-    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| 0).expect("installs");
+    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| Some(0)).expect("installs");
 
     assert_eq!(
         std::fs::read_to_string(plist_path(&home)).expect("written"),
@@ -207,7 +207,7 @@ fn a_changed_plist_with_jobs_keeps_the_old_plist_and_leaves_the_running_daemon_a
     write_plist(&home, OLD);
     let launchd = Arc::new(FakeLaunchd::new(true));
 
-    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| 2).expect("installs");
+    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| Some(2)).expect("installs");
 
     assert_eq!(
         std::fs::read_to_string(plist_path(&home)).expect("kept"),
@@ -226,9 +226,9 @@ fn a_rerun_after_jobs_held_the_reload_reloads_once_the_daemon_is_idle() {
     write_plist(&home, OLD);
     let launchd = Arc::new(FakeLaunchd::new(true));
     let agent = agent(&home, &launchd);
-    install(Some(&agent), &PLAIN, |_| 2).expect("installs");
+    install(Some(&agent), &PLAIN, |_| Some(2)).expect("installs");
 
-    install(Some(&agent), &PLAIN, |_| 0).expect("installs");
+    install(Some(&agent), &PLAIN, |_| Some(0)).expect("installs");
 
     assert_eq!(
         std::fs::read_to_string(plist_path(&home)).expect("written"),
@@ -253,7 +253,7 @@ fn restart_reloads_a_loaded_agent_whose_plist_is_unchanged() {
         ..PLAIN
     };
 
-    install(Some(&agent(&home, &launchd)), &restart, |_| 2).expect("installs");
+    install(Some(&agent(&home, &launchd)), &restart, |_| Some(2)).expect("installs");
 
     assert_eq!(
         launchd.changes(),
@@ -273,7 +273,7 @@ fn install_asks_the_daemon_on_the_socket_under_the_getconf_temporary_directory()
 
     install(Some(&agent(&home, &launchd)), &PLAIN, |socket| {
         asked = Some(socket.to_path_buf());
-        2
+        Some(2)
     })
     .expect("installs");
 
@@ -286,7 +286,7 @@ fn a_failed_bootout_during_install_keeps_the_old_plist_so_a_rerun_reloads() {
     write_plist(&home, OLD);
     let failing = Arc::new(FakeLaunchd::failing(true, "bootout"));
 
-    let refused = install(Some(&agent(&home, &failing)), &PLAIN, |_| 0);
+    let refused = install(Some(&agent(&home, &failing)), &PLAIN, |_| Some(0));
 
     assert!(
         matches!(refused, Err(ServiceFailed::Launchctl(_))),
@@ -297,7 +297,7 @@ fn a_failed_bootout_during_install_keeps_the_old_plist_so_a_rerun_reloads() {
         OLD
     );
     let launchd = Arc::new(FakeLaunchd::new(true));
-    install(Some(&agent(&home, &launchd)), &PLAIN, |_| 0).expect("installs");
+    install(Some(&agent(&home, &launchd)), &PLAIN, |_| Some(0)).expect("installs");
     assert_eq!(launchd.changes().len(), 2, "{:?}", launchd.changes());
 }
 
@@ -308,7 +308,7 @@ fn a_failed_bootstrap_after_bootout_leaves_the_agent_not_loaded_and_a_rerun_load
     let failing = Arc::new(FakeLaunchd::failing(true, "bootstrap"));
     let failing_agent = agent(&home, &failing);
 
-    let refused = install(Some(&failing_agent), &PLAIN, |_| 0);
+    let refused = install(Some(&failing_agent), &PLAIN, |_| Some(0));
 
     assert!(
         matches!(refused, Err(ServiceFailed::Launchctl(_))),
@@ -316,7 +316,7 @@ fn a_failed_bootstrap_after_bootout_leaves_the_agent_not_loaded_and_a_rerun_load
     );
     assert_eq!(state(&failing_agent), Some(DaemonState::NotLoaded));
     let launchd = Arc::new(FakeLaunchd::new(false));
-    install(Some(&agent(&home, &launchd)), &PLAIN, |_| 0).expect("installs");
+    install(Some(&agent(&home, &launchd)), &PLAIN, |_| Some(0)).expect("installs");
     assert_eq!(
         launchd.changes(),
         [format!("bootstrap gui/501 {}", plist_path(&home).display())]
@@ -332,7 +332,7 @@ fn a_reload_waits_until_launchd_has_unloaded_the_old_daemon_before_bootstrap() {
         ..FakeLaunchd::new(true)
     });
 
-    install(Some(&agent(&home, &launchd)), &PLAIN, |_| 0).expect("installs");
+    install(Some(&agent(&home, &launchd)), &PLAIN, |_| Some(0)).expect("installs");
 
     let calls = launchd.calls.lock().expect("the calls lock").clone();
     let pauses = calls.iter().filter(|call| call.as_str() == "pause").count();
@@ -355,7 +355,7 @@ fn a_changed_plist_with_jobs_and_restart_reloads_the_agent() {
         ..PLAIN
     };
 
-    install(Some(&agent(&home, &launchd)), &restart, |_| 2).expect("installs");
+    install(Some(&agent(&home, &launchd)), &restart, |_| Some(2)).expect("installs");
 
     assert_eq!(launchd.changes().len(), 2, "{:?}", launchd.changes());
     assert!(
@@ -374,7 +374,7 @@ fn a_dry_run_prints_the_plist_and_the_steps_and_changes_nothing() {
         ..PLAIN
     };
 
-    let report = install(Some(&agent(&home, &launchd)), &dry, |_| 0).expect("plans");
+    let report = install(Some(&agent(&home, &launchd)), &dry, |_| Some(0)).expect("plans");
 
     assert!(!plist_path(&home).exists());
     assert!(launchd.changes().is_empty(), "{:?}", launchd.changes());
@@ -393,7 +393,7 @@ fn install_refuses_an_existing_file_that_is_not_a_plist_and_writes_nothing() {
     write_plist(&home, "not a plist\n");
     let launchd = Arc::new(FakeLaunchd::new(false));
 
-    let refused = install(Some(&agent(&home, &launchd)), &PLAIN, |_| 0);
+    let refused = install(Some(&agent(&home, &launchd)), &PLAIN, |_| Some(0));
 
     assert!(
         matches!(refused, Err(ServiceFailed::Unreadable { .. })),
@@ -408,7 +408,7 @@ fn install_refuses_an_existing_file_that_is_not_a_plist_and_writes_nothing() {
 
 #[test]
 fn install_without_a_launch_agent_refuses_as_unsupported() {
-    let refused = install(None, &PLAIN, |_| 0);
+    let refused = install(None, &PLAIN, |_| Some(0));
 
     assert!(
         matches!(refused, Err(ServiceFailed::Unsupported)),
@@ -422,7 +422,7 @@ fn a_failed_bootstrap_leaves_the_plist_installed_but_not_loaded() {
     let launchd = Arc::new(FakeLaunchd::failing(false, "bootstrap"));
     let agent = agent(&home, &launchd);
 
-    let refused = install(Some(&agent), &PLAIN, |_| 0);
+    let refused = install(Some(&agent), &PLAIN, |_| Some(0));
 
     assert!(
         matches!(refused, Err(ServiceFailed::Launchctl(_))),
@@ -511,4 +511,123 @@ fn state_names_a_missing_plist_and_a_plist_that_launchd_has_not_loaded() {
 
     let loaded = Arc::new(FakeLaunchd::new(true));
     assert_eq!(state(&agent(&home, &loaded)), None);
+}
+
+#[test]
+fn a_loaded_agent_whose_daemon_does_not_answer_holds_the_reload_and_keeps_the_old_plist() {
+    let home = TestHome::new();
+    write_plist(&home, OLD);
+    let launchd = Arc::new(FakeLaunchd::new(true));
+
+    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| None).expect("installs");
+
+    assert_eq!(
+        std::fs::read_to_string(plist_path(&home)).expect("kept"),
+        OLD
+    );
+    assert!(launchd.changes().is_empty(), "{:?}", launchd.changes());
+    assert_eq!(
+        text(&report),
+        "the daemon did not answer, so install left the old plist in place; the new plist waits for deadband service install when the daemon answers with no jobs, or for --restart",
+    );
+}
+
+#[test]
+fn restart_reloads_a_loaded_agent_without_asking_the_daemon_for_its_jobs() {
+    let home = TestHome::new();
+    write_plist(&home, OLD);
+    let launchd = Arc::new(FakeLaunchd::new(true));
+    let restart = Install {
+        restart: true,
+        ..PLAIN
+    };
+    let mut asked = false;
+
+    install(Some(&agent(&home, &launchd)), &restart, |_| {
+        asked = true;
+        None
+    })
+    .expect("installs");
+
+    assert!(!asked);
+    assert_eq!(launchd.changes().len(), 2, "{:?}", launchd.changes());
+}
+
+#[test]
+fn a_reload_whose_old_daemon_outlasts_the_polls_fails_at_bootstrap_after_fifty_polls() {
+    let home = TestHome::new();
+    write_plist(&home, OLD);
+    let launchd = Arc::new(FakeLaunchd {
+        linger: 60,
+        ..FakeLaunchd::new(true)
+    });
+
+    let refused = install(Some(&agent(&home, &launchd)), &PLAIN, |_| Some(0));
+
+    assert!(
+        matches!(refused, Err(ServiceFailed::Launchctl(_))),
+        "{refused:?}"
+    );
+    let calls = launchd.calls.lock().expect("the calls lock").clone();
+    let pauses = calls.iter().filter(|call| call.as_str() == "pause").count();
+    assert_eq!(pauses, 50, "{calls:?}");
+}
+
+/// Makes the plist's directory read-only, or writable again.
+fn set_read_only(home: &Path, read_only: bool) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = if read_only { 0o555 } else { 0o755 };
+    std::fs::set_permissions(
+        home.join("Library/LaunchAgents"),
+        std::fs::Permissions::from_mode(mode),
+    )
+    .expect("the mode changes");
+}
+
+#[test]
+fn a_write_that_fails_after_bootout_leaves_the_old_plist_not_loaded_and_a_rerun_loads_the_new_one()
+{
+    let home = TestHome::new();
+    write_plist(&home, OLD);
+    let launchd = Arc::new(FakeLaunchd::new(true));
+    let agent = agent(&home, &launchd);
+    set_read_only(&home, true);
+
+    let refused = install(Some(&agent), &PLAIN, |_| Some(0));
+
+    set_read_only(&home, false);
+    assert!(
+        matches!(refused, Err(ServiceFailed::Write { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(plist_path(&home)).expect("kept"),
+        OLD
+    );
+    assert_eq!(state(&agent), Some(DaemonState::NotLoaded));
+    install(Some(&agent), &PLAIN, |_| Some(0)).expect("installs");
+    assert_eq!(
+        std::fs::read_to_string(plist_path(&home)).expect("written"),
+        rendered(&home)
+    );
+}
+
+#[test]
+fn a_delete_that_fails_after_uninstalls_bootout_keeps_the_plist_and_a_rerun_deletes_it() {
+    let home = TestHome::new();
+    write_plist(&home, &rendered(&home));
+    let launchd = Arc::new(FakeLaunchd::new(true));
+    let agent = agent(&home, &launchd);
+    set_read_only(&home, true);
+
+    let refused = uninstall(Some(&agent), false);
+
+    set_read_only(&home, false);
+    assert!(
+        matches!(refused, Err(ServiceFailed::Delete { .. })),
+        "{refused:?}"
+    );
+    assert!(plist_path(&home).exists());
+    uninstall(Some(&agent), false).expect("uninstalls");
+    assert!(!plist_path(&home).exists());
 }
