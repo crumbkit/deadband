@@ -1,0 +1,25 @@
+Unload the launchd agent and delete its plist. Running jobs keep running
+
+Usage: deadband service uninstall [OPTIONS]
+
+Options:
+      --yes
+          Proceed without asking for confirmation
+
+      --dry-run
+          Report what the command would change, and change nothing
+
+      --json
+          Print the result as a JSON document. The default prints text.
+
+      --no-input
+          Fail instead of asking a question
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  deadband service uninstall --yes
+          Unload the launchd agent and delete its plist without asking
+
+Effects: destructive, idempotent, closed-world.

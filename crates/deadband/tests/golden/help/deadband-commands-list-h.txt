@@ -15,5 +15,5 @@ Examples:
   deadband commands list run
 
 Effects: read-only, closed-world.
-Global flags: --json, --fields <FIELD>, --full. `deadband commands list --help` describes them.
+Global flags: --json, --fields <FIELD>, --full, --no-input. `deadband commands list --help` describes them.
 Next: deadband commands list --help explains each column.

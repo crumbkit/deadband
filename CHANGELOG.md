@@ -6,6 +6,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `deadband service install` writes and loads the launchd agent that runs
+  `deadband daemon` at login and restarts it when it stops, with `TMPDIR`
+  and `PATH` set for launchd. It leaves an identical plist alone, and it
+  reloads a changed one only when the daemon has no jobs, unless `--restart`
+  is given. `deadband service uninstall` unloads the agent and deletes the
+  plist after it asks, or at once with `--yes`. Both take `--dry-run`, and
+  on platforms other than macOS both exit with
+  `deadband::service::unsupported`.
+- When no daemon answers on macOS, `deadband status` says whether the agent
+  is not installed or not loaded and names `deadband service install`.
+  `deadband status --json` gives the state in `daemon_state`.
+- Every command accepts `--no-input`, which makes a command that would ask
+  a question refuse instead.
+
 ## [0.2.1] - 2026-11-11
 
 ### Fixed

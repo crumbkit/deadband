@@ -3,7 +3,8 @@
 deadband has four commands that do its work. `deadband daemon` admits jobs,
 `deadband run` asks the daemon before it starts a job, `deadband status`
 shows the machine and the daemon's jobs, and `deadband top` draws the last
-ten minutes in the terminal.
+ten minutes in the terminal. On macOS, `deadband service install` makes
+launchd run the daemon at login.
 
 Three more commands describe deadband to a program or an agent.
 `deadband commands list` lists every command with its arguments and
@@ -566,62 +567,58 @@ path, the daemon refuses to start and removes nothing.
 
 ## Running the daemon under launchd
 
-launchd starts a user agent with few environment variables, so the agent
-sets `TMPDIR` to the directory that a terminal's `TMPDIR` names. It also
-sets `PATH`, with your home directory written out in full, because
-launchd does not expand `~` or `$HOME`. The jobs that `deadband run` starts
-inherit their caller's `PATH`, but reclaimers inherit the daemon's. Print it
-with:
+On macOS, `deadband service install` sets up a launchd user agent that
+starts `deadband daemon` at login and starts it again whenever it stops:
 
 ```sh
-getconf DARWIN_USER_TEMP_DIR
-```
-
-Save this plist as `~/Library/LaunchAgents/io.github.crumbkit.deadband.plist`,
-with your home directory and that temporary directory in place of the
-examples:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>io.github.crumbkit.deadband</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/Users/me/.cargo/bin/deadband</string>
-    <string>daemon</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>TMPDIR</key>
-    <string>/var/folders/ab/abcdefgh/T/</string>
-    <key>PATH</key>
-    <string>/Users/me/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardErrorPath</key>
-  <string>/Users/me/Library/Logs/deadband.log</string>
-</dict>
-</plist>
-```
-
-Load it, and check that the daemon answers:
-
-```sh
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.crumbkit.deadband.plist
+deadband service install
 deadband status
 ```
 
-Stop it with:
+It writes `~/Library/LaunchAgents/io.github.crumbkit.deadband.plist` and
+loads it with `launchctl bootstrap`. The plist runs the binary at the path
+that started `deadband service install`, without following a symbolic link,
+so a package manager's link keeps working after an upgrade. `--max-jobs N`
+passes the same flag to the daemon.
+
+launchd starts a user agent with few environment variables, so the plist
+sets two. `TMPDIR` is what `getconf DARWIN_USER_TEMP_DIR` prints, which is
+the directory that a terminal's `TMPDIR` names, so the daemon's socket is
+where `deadband run` looks. `PATH` is the binary's own directory, then
+`~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, `/usr/local/bin` and
+the system directories, with your home directory written out in full,
+because launchd does not expand `~` or `$HOME`. The jobs that `deadband run`
+starts inherit their caller's `PATH`, but reclaimers inherit the daemon's.
+Install copies neither variable from its caller, because an agent's sandbox
+can set them to private or temporary directories.
+
+`deadband service install --dry-run` prints the plist and the launchctl steps
+and changes nothing. Running install again leaves an identical plist alone
+and says so. When the plist changes and the daemon has no running or
+waiting jobs, install reloads the agent with `launchctl bootout` and
+`launchctl bootstrap`. When the daemon has jobs, install writes the plist
+and leaves the running daemon alone, and says to run install again when no
+job runs; `--restart` reloads it anyway. A plist written by hand, or by an
+earlier install script, with the same label is replaced like any other
+changed plist. Install refuses a file at that path that is not an XML
+property list, and changes nothing.
+
+When no daemon answers, `deadband status` says
+`daemon: not installed; run deadband service install` when the plist is
+missing, and `daemon: installed but not loaded; run deadband service
+install` when launchd has not loaded it. `deadband status --json` gives the
+same state in `daemon_state`: `running`, `not_loaded` or `not_installed`.
+
+Stop the daemon and remove the agent with:
 
 ```sh
-launchctl bootout gui/$(id -u)/io.github.crumbkit.deadband
+deadband service uninstall
 ```
+
+Uninstall asks before it acts; `--yes` skips the question, and `--no-input`
+without `--yes` refuses. It deletes the plist only after launchd has
+unloaded the agent, or when launchd had not loaded it. On other platforms
+both commands exit with `deadband::service::unsupported`.
 
 Stopping the daemon does not stop any job. Each running `deadband run`
 keeps running its job, and each waiting one starts its job at once.

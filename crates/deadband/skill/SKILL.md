@@ -14,3 +14,6 @@ Start every build, test suite and other heavy job as
 
 When deadband holds a job, wait for it, or push and let CI test. Never bypass
 the hold.
+
+When `deadband status` says the daemon is not installed or not loaded, run
+`deadband service install`.

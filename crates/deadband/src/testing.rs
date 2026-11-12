@@ -38,3 +38,113 @@ pub(crate) fn socket_path() -> TestSocket {
     let n = NEXT.fetch_add(1, Ordering::SeqCst);
     TestSocket(std::env::temp_dir().join(format!("db-{}-{n}.sock", std::process::id())))
 }
+
+/// A launchd that records each call in `calls`, answers `is_loaded` from
+/// `loaded`, and fails the call whose first word is `fail`.
+#[derive(Debug, Default)]
+pub(crate) struct FakeLaunchd {
+    /// Whether launchd has loaded the agent.
+    pub(crate) loaded: std::sync::Mutex<bool>,
+    /// Each call, as the words of its launchctl command line.
+    pub(crate) calls: std::sync::Mutex<Vec<String>>,
+    /// The launchctl word, such as `bootstrap`, whose call fails.
+    pub(crate) fail: Option<&'static str>,
+}
+
+impl FakeLaunchd {
+    /// Returns a launchd that has loaded the agent when `loaded` is true.
+    pub(crate) fn new(loaded: bool) -> Self {
+        Self {
+            loaded: std::sync::Mutex::new(loaded),
+            ..Self::default()
+        }
+    }
+
+    /// Returns a launchd as [`FakeLaunchd::new`] does whose `fail` call
+    /// fails.
+    pub(crate) fn failing(loaded: bool, fail: &'static str) -> Self {
+        Self {
+            fail: Some(fail),
+            ..Self::new(loaded)
+        }
+    }
+
+    /// Returns the calls that changed something: every call but `print`.
+    pub(crate) fn changes(&self) -> Vec<String> {
+        let calls = self.calls.lock().expect("the calls lock");
+        calls
+            .iter()
+            .filter(|call| !call.starts_with("print"))
+            .cloned()
+            .collect()
+    }
+
+    fn call(&self, line: String) -> Result<(), crate::job::launchd::Failed> {
+        let word = line.split(' ').next().unwrap_or_default().to_owned();
+        self.calls
+            .lock()
+            .expect("the calls lock")
+            .push(line.clone());
+        if self.fail == Some(word.as_str()) {
+            return Err(crate::job::launchd::Failed {
+                command: format!("launchctl {line}"),
+                detail: "it exited with 5: Input/output error".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl crate::job::launchd::Launchd for FakeLaunchd {
+    fn temp_dir(&self) -> Result<PathBuf, crate::job::launchd::Failed> {
+        Ok(PathBuf::from("/var/folders/xy/abc123/T/"))
+    }
+
+    fn is_loaded(&self, target: &str) -> Result<bool, crate::job::launchd::Failed> {
+        self.call(format!("print {target}"))?;
+        Ok(*self.loaded.lock().expect("the loaded lock"))
+    }
+
+    fn bootstrap(&self, domain: &str, plist: &Path) -> Result<(), crate::job::launchd::Failed> {
+        self.call(format!("bootstrap {domain} {}", plist.display()))?;
+        *self.loaded.lock().expect("the loaded lock") = true;
+        Ok(())
+    }
+
+    fn bootout(&self, target: &str) -> Result<(), crate::job::launchd::Failed> {
+        self.call(format!("bootout {target}"))?;
+        *self.loaded.lock().expect("the loaded lock") = false;
+        Ok(())
+    }
+}
+
+/// A home directory in the temporary directory that no other test of this
+/// process uses. Dropping it removes the directory.
+#[derive(Debug)]
+pub(crate) struct TestHome(PathBuf);
+
+impl TestHome {
+    /// Returns a new, empty home.
+    pub(crate) fn new() -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!("db-home-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("the test home is writable");
+        Self(path)
+    }
+}
+
+impl Deref for TestHome {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TestHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}

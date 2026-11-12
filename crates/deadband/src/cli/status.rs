@@ -11,6 +11,7 @@ use crumbkit::{Document, Prose};
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use super::service::DaemonState;
 use crate::admit::Lane;
 use crate::name::name;
 use crate::probe::Sample;
@@ -94,13 +95,26 @@ pub struct Status {
     /// The daemon's running and waiting jobs, or `null` when no daemon
     /// answers.
     pub daemon: Option<Jobs<ShownJob>>,
+    /// Whether the daemon runs, or why it does not: its launchd agent is
+    /// not installed or not loaded. It is absent when no daemon answers and
+    /// deadband cannot say why, such as on a platform without launchd.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_state: Option<DaemonState>,
 }
 
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", self.sample)?;
         let Some(jobs) = &self.daemon else {
-            return f.write_str("daemon: not running");
+            return f.write_str(match self.daemon_state {
+                Some(DaemonState::NotInstalled) => {
+                    "daemon: not installed; run deadband service install"
+                }
+                Some(DaemonState::NotLoaded) => {
+                    "daemon: installed but not loaded; run deadband service install"
+                }
+                _ => "daemon: not running",
+            });
         };
         write!(
             f,

@@ -428,6 +428,26 @@
     "failures"
   ],
   "$defs": {
+    "DaemonState": {
+      "description": "The daemon's state, which `deadband status --json` gives as\n`daemon_state`.",
+      "oneOf": [
+        {
+          "description": "A daemon answers on the socket.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "The plist exists and launchd has not loaded it.",
+          "type": "string",
+          "const": "not_loaded"
+        },
+        {
+          "description": "No plist exists.",
+          "type": "string",
+          "const": "not_installed"
+        }
+      ]
+    },
     "Hold": {
       "description": "Why a waiting job does not start yet.",
       "oneOf": [
@@ -824,6 +844,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/Jobs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "daemon_state": {
+          "description": "Whether the daemon runs, or why it does not: its launchd agent is\nnot installed or not loaded. It is absent when no daemon answers and\ndeadband cannot say why, such as on a platform without launchd.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DaemonState"
             },
             {
               "type": "null"

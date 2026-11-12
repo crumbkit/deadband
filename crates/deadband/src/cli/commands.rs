@@ -1,5 +1,5 @@
 //! The commands `deadband run` and `deadband daemon`, which print no result
-//! on standard output.
+//! on standard output, and the glue of `deadband service`.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -7,10 +7,12 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use crumbkit::{Code, Failure, Field, Recovery, Run, Sink};
+use crumbkit::{Code, Failure, Field, Prose, Recovery, Run, Sink};
 
+use super::service::{self, Install, Report, SERVICE_INSTALL, SERVICE_UNINSTALL, ServiceCommand};
 use super::{DaemonArgs, Machine, RunArgs};
 use crate::admission::{self, Asked, Notices};
+use crate::client::{self, ANSWER_WITHIN};
 use crate::daemon::note;
 use crate::job;
 use crate::probe::{Probe, child_usage};
@@ -214,6 +216,51 @@ pub(super) fn top<O: Write, W: Write, P: Probe>(
         Err(failure) => {
             output.print_failure(sink, &failure);
             output.failure_exit(failure.code())
+        }
+    }
+}
+
+/// The question that `deadband service uninstall` asks before it acts.
+const UNINSTALL_QUESTION: &str = "Unload deadband's launchd agent and delete its plist?";
+
+/// Runs `deadband service install|uninstall` and prints the result to
+/// `sink`. Uninstall asks at the terminal when `terminal` is true, and
+/// through `sink` otherwise, which a test passes.
+pub(super) fn service<O: Write, W: Write, P>(
+    sink: &mut Sink<O, W>,
+    mut output: Run,
+    machine: &Machine<P>,
+    command: &ServiceCommand,
+    terminal: bool,
+) -> u8 {
+    let agent = machine.service.as_ref();
+    match command {
+        ServiceCommand::Install(args) => {
+            let install = Install {
+                max_jobs: args.max_jobs,
+                restart: args.restart,
+                dry_run: output.is_dry_run(),
+            };
+            // A daemon that does not answer counts as having no jobs.
+            let jobs = || {
+                client::jobs(&machine.socket, ANSWER_WITHIN)
+                    .map_or(0, |jobs| jobs.running.len() + jobs.waiting.len())
+            };
+            let result = service::install(agent, &install, jobs);
+            crumbkit::finish_to(sink, output, SERVICE_INSTALL, result)
+        }
+        ServiceCommand::Uninstall(args) => {
+            let confirmed = if terminal {
+                output.confirm(args.yes, UNINSTALL_QUESTION)
+            } else {
+                output.confirm_to(sink, args.yes, UNINSTALL_QUESTION)
+            };
+            if let Err(refused) = confirmed {
+                let refused = Err::<Prose<Report>, _>(refused);
+                return crumbkit::finish_to(sink, output, SERVICE_UNINSTALL, refused);
+            }
+            let result = service::uninstall(agent, output.is_dry_run());
+            crumbkit::finish_to(sink, output, SERVICE_UNINSTALL, result)
         }
     }
 }

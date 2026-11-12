@@ -8,35 +8,34 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use crumbkit::commands::COMMANDS_LIST;
-use crumbkit::completion::{COMPLETION_CHECK, COMPLETION_INSTALL, COMPLETION_PRINT};
-use crumbkit::help::{Effects, Example, FileFormat, Goal, Group, Help, Leaf};
-use crumbkit::schemas::{SCHEMAS_LIST, SCHEMAS_SHOW};
-use crumbkit::tool::{Exit, Failures};
-use crumbkit::{Prose, Sink, Tool, ViewFlags};
-use crumbkit_skills::{SKILLS_CHECK, SKILLS_INSTALL, SKILLS_PRINT};
+use crumbkit::{NoInput, Prose, Sink, ViewFlags};
 
 use crate::admit::Lane;
 use crate::client::{self, ANSWER_WITHIN};
-use crate::daemon::{DAEMON_RUNNING, Log, SOCKET_UNUSABLE};
+use crate::daemon::Log;
 use crate::environment::Environment;
-use crate::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED, Probe, Unreadable};
-use crate::reclaim::CONFIG;
-#[cfg(feature = "tui")]
-use crate::tui::{EXIT_INTERRUPTED, TOP_NOT_A_TERMINAL, TOP_TERMINAL_FAILED};
+use crate::probe::{Probe, Unreadable};
 
 mod commands;
 mod explore;
+pub mod service;
 mod setup;
 mod status;
 #[cfg(test)]
 mod tests;
+mod tool;
 
 use self::commands::Flagged;
 pub use self::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED, JOB_STUCK, JOB_UNREADABLE, NotStarted};
 pub use self::explore::{CommandsCommand, SchemasCommand};
+pub use self::service::{LaunchAgent, ServiceCommand};
 pub use self::setup::{CompletionCommand, SKILL, SkillsCommand};
 pub use self::status::{STATUS, ShownJob, Status};
+#[cfg(feature = "tui")]
+pub use self::tool::EXIT_TOP;
+pub use self::tool::{
+    EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_FOUND, EXIT_NOT_STARTED, EXIT_SERVICE, TOOL,
+};
 
 /// Keep a busy machine usable while many heavy jobs compete for it.
 #[derive(Debug, Parser)]
@@ -49,6 +48,10 @@ pub struct Cli {
     /// The flags that choose how the result prints.
     #[command(flatten)]
     pub view: ViewFlags,
+
+    /// The flag that says no person can answer a question.
+    #[command(flatten)]
+    pub no_input: NoInput,
 }
 
 /// The commands of `deadband`.
@@ -66,6 +69,12 @@ pub enum Command {
     Run(RunArgs),
     /// Run the daemon that admits jobs, in the foreground.
     Daemon(DaemonArgs),
+    /// Install or uninstall the launchd agent that runs the daemon at login.
+    Service {
+        /// What to do with the agent.
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
     /// Show the last ten minutes of jobs, load and holds in the terminal.
     #[cfg(feature = "tui")]
     Top,
@@ -138,6 +147,8 @@ pub struct Machine<P> {
     pub cores: Option<NonZeroUsize>,
     /// What deadband read from the environment.
     pub environment: Environment,
+    /// deadband's launchd agent, or `None` on a platform without launchd.
+    pub service: Option<LaunchAgent>,
 }
 
 impl<P: fmt::Debug> fmt::Debug for Machine<P> {
@@ -147,172 +158,10 @@ impl<P: fmt::Debug> fmt::Debug for Machine<P> {
             .field("socket", &self.socket)
             .field("cores", &self.cores)
             .field("environment", &self.environment)
+            .field("service", &self.service)
             .finish_non_exhaustive()
     }
 }
-
-/// The exit code of a run that could not read the machine.
-pub const EXIT_MACHINE: u8 = 3;
-
-/// The exit code of a daemon that could not listen on its socket.
-pub const EXIT_DAEMON: u8 = 4;
-
-/// The exit code of a `deadband top` that has no terminal or lost it.
-#[cfg(feature = "tui")]
-pub const EXIT_TOP: u8 = 5;
-
-/// The exit code of a `deadband run` whose program was found but could not
-/// start, as `env` and `timeout` report it.
-pub const EXIT_NOT_STARTED: u8 = 126;
-
-/// The exit code of a `deadband run` whose program was not found, as `env`
-/// and `timeout` report it.
-pub const EXIT_NOT_FOUND: u8 = 127;
-
-/// deadband's tool record: the examples, effects and document of each
-/// command, and the exit codes with the failures that produce them.
-pub const TOOL: Tool = Tool::new()
-    .help(
-        Help::new()
-            .groups(&[Group::new(
-                &[],
-                &[
-                    Goal::new("Run a heavy job when the machine has room", &["run"]),
-                    Goal::new("See the machine and its jobs", &["status", "top"]),
-                    Goal::new("Admit jobs", &["daemon"]),
-                    Goal::new("Explore the commands", &["commands", "schemas"]),
-                    Goal::new("Install deadband's skill", &["skills"]),
-                    Goal::new("Set up shell completion", &["completion"]),
-                ],
-            )
-            .compact()])
-            .leaves(&[
-                Leaf::new(&["status"])
-                    .examples(&[
-                        Example::new(&[], "Print the machine's load, memory pressure and swap"),
-                        Example::new(&["--json"], "Print the same sample as a JSON document"),
-                    ])
-                    .effects(Effects::read_only())
-                    .document(STATUS),
-                Leaf::new(&["run"])
-                    .examples(&[Example::new(
-                        &["--label", "tests", "--", "cargo", "test"],
-                        "Run cargo test once the daemon admits it",
-                    )])
-                    .effects(Effects::additive().all_or_none().open_world())
-                    .passes_on_exit("the job")
-                    .prints_no_result(),
-                Leaf::new(&["daemon"])
-                    .examples(&[Example::new(
-                        &["--max-jobs", "2"],
-                        "Admit jobs while at most 2 run at once",
-                    )])
-                    .effects(Effects::additive())
-                    .prints_no_result(),
-                #[cfg(feature = "tui")]
-                Leaf::new(&["top"])
-                    .examples(&[Example::new(
-                        &[],
-                        "Show the last ten minutes of jobs in the terminal",
-                    )])
-                    .effects(Effects::read_only())
-                    .prints_no_result(),
-                Leaf::new(&["commands", "list"])
-                    .examples(&[
-                        Example::new(&[], "List every command with its arguments"),
-                        Example::new(&["run"], "List only `deadband run` and its arguments"),
-                    ])
-                    .document(COMMANDS_LIST)
-                    .effects(Effects::read_only()),
-                Leaf::new(&["schemas", "list"])
-                    .examples(&[Example::new(
-                        &[],
-                        "List the documents deadband prints and its config file format",
-                    )])
-                    .document(SCHEMAS_LIST)
-                    .effects(Effects::read_only()),
-                Leaf::new(&["schemas", "show"])
-                    .examples(&[Example::new(
-                        &["deadband/config/v1"],
-                        "Print the JSON Schema of the daemon's config file",
-                    )])
-                    .document(SCHEMAS_SHOW)
-                    .effects(Effects::read_only()),
-                Leaf::new(&["skills", "install"])
-                    .examples(&[
-                        Example::new(
-                            &[],
-                            "Install deadband's skill into each agent skills directory that exists",
-                        ),
-                        Example::new(
-                            &["--force"],
-                            "Install it, replacing a file or a link that install did not write",
-                        ),
-                    ])
-                    .effects(Effects::additive().idempotent())
-                    .document(SKILLS_INSTALL),
-                Leaf::new(&["skills", "check"])
-                    .examples(&[Example::new(
-                        &[],
-                        "Report each agent skills directory whose copy is missing or differs",
-                    )])
-                    .effects(Effects::read_only())
-                    .document(SKILLS_CHECK),
-                Leaf::new(&["skills", "print"])
-                    .examples(&[Example::new(&[], "Print deadband's skill")])
-                    .effects(Effects::read_only())
-                    .document(SKILLS_PRINT),
-                Leaf::new(&["completion", "install"])
-                    .examples(&[
-                        Example::new(&["--shell", "fish"], "Install deadband's completion for fish"),
-                        Example::new(
-                            &["--shell", "zsh", "--force"],
-                            "Install it for zsh, replacing a file or a link that install did not write",
-                        ),
-                    ])
-                    .effects(Effects::additive().idempotent())
-                    .document(COMPLETION_INSTALL),
-                Leaf::new(&["completion", "check"])
-                    .examples(&[Example::new(
-                        &["--shell", "zsh"],
-                        "Report zsh's completion file when it is missing or differs",
-                    )])
-                    .effects(Effects::read_only())
-                    .document(COMPLETION_CHECK),
-                Leaf::new(&["completion", "print"])
-                    .examples(&[Example::new(
-                        &["--shell", "fish"],
-                        "Print the registration script for fish",
-                    )])
-                    .effects(Effects::read_only())
-                    .document(COMPLETION_PRINT),
-            ])
-            .file_formats(&[FileFormat::new(CONFIG)]),
-    )
-    .failures(
-        Failures::new().exits(&[
-            Exit::new(EXIT_MACHINE, "deadband could not read the machine.")
-                .failures(&[&MACHINE_UNREADABLE, &MACHINE_UNSUPPORTED]),
-            Exit::new(EXIT_DAEMON, "the daemon could not listen on its socket.")
-                .failures(&[&DAEMON_RUNNING, &SOCKET_UNUSABLE]),
-            Exit::new(
-                EXIT_NOT_STARTED,
-                "the program given to `run` was found but could not start.",
-            )
-            .commands(&[&["run"]])
-            .failures(&[&JOB_NOT_STARTED]),
-            Exit::new(EXIT_NOT_FOUND, "the program given to `run` was not found.")
-                .commands(&[&["run"]])
-                .failures(&[&JOB_NOT_FOUND]),
-            #[cfg(feature = "tui")]
-            Exit::new(EXIT_TOP, "`top` has no terminal to draw on, or lost it.")
-                .commands(&[&["top"]])
-                .failures(&[&TOP_NOT_A_TERMINAL, &TOP_TERMINAL_FAILED]),
-            #[cfg(feature = "tui")]
-            Exit::new(EXIT_INTERRUPTED, "the person pressed Ctrl-C in `top`.")
-                .commands(&[&["top"]]),
-        ]),
-    );
 
 /// Parses the process's command line, runs the command against `machine`
 /// and prints the result to standard output and standard error.
@@ -326,6 +175,9 @@ pub fn run<P: Probe + Clone + Send + 'static>(machine: &Machine<P>) -> ExitCode 
         Command::Run(args) => commands::run(&mut Sink::standard(), &mut output, machine, args),
         Command::Daemon(args) => {
             commands::daemon(&mut Sink::standard(), &mut output, machine, &args)
+        }
+        Command::Service { command } => {
+            commands::service(&mut Sink::standard(), output, machine, &command, true)
         }
         #[cfg(feature = "tui")]
         Command::Top => commands::top(&mut Sink::standard(), &mut output, machine),
@@ -355,6 +207,7 @@ pub fn run_to<O: Write, W: Write, T: Into<OsString>, P: Probe + Clone + Send + '
         Command::Status => crumbkit::finish_to(sink, output, STATUS, status(machine)),
         Command::Run(args) => commands::run(sink, &mut output, machine, args),
         Command::Daemon(args) => commands::daemon(sink, &mut output, machine, &args),
+        Command::Service { command } => commands::service(sink, output, machine, &command, false),
         #[cfg(feature = "tui")]
         Command::Top => commands::top(sink, &mut output, machine),
         Command::Commands { command } => explore::commands(sink, output, &command),
@@ -375,6 +228,15 @@ fn status<P: Probe>(machine: &Machine<P>) -> Result<Prose<Status>, Unreadable> {
         .into_iter()
         .map(Into::into)
         .collect();
+    let daemon_state = match &daemon {
+        Some(_) => Some(service::DaemonState::Running),
+        None => machine.service.as_ref().and_then(service::state),
+    };
     let daemon = daemon.map(|jobs| jobs.map(ShownJob::from));
-    Ok(Prose::with_failures(Status { sample, daemon }, failures))
+    let status = Status {
+        sample,
+        daemon,
+        daemon_state,
+    };
+    Ok(Prose::with_failures(status, failures))
 }

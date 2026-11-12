@@ -10,4 +10,4 @@ Examples:
 
 Effects: read-only, closed-world.
 Output: no result on standard output, and --json prints a failure as JSON.
-Global flags: --json. `deadband top --help` describes them.
+Global flags: --json, --no-input. `deadband top --help` describes them.

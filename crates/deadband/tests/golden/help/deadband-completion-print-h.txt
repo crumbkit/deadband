@@ -10,4 +10,4 @@ Examples:
   deadband completion print --shell fish
 
 Effects: read-only, closed-world.
-Global flags: --json. `deadband completion print --help` describes them.
+Global flags: --json, --no-input. `deadband completion print --help` describes them.
