@@ -5,8 +5,10 @@
 //! value of the type the call fills, so the kernel or libc never writes past
 //! its end. Every name passed to `sysctlbyname` is a NUL-terminated `CStr`,
 //! and no call passes a new value to the kernel. The libproc calls,
-//! `mach_timebase_info` and `getrusage` only read, and write only into a
-//! buffer that this module owns.
+//! `mach_timebase_info`, `getrusage` and `confstr` only read, and write only
+//! into a buffer that this module owns. `confstr` is first asked for the
+//! length with a null buffer of length 0, then fills a buffer of exactly that
+//! length.
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;

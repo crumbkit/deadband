@@ -9,7 +9,7 @@ use super::plist::{binary_path, render};
 use super::{DaemonState, Install, LaunchAgent, ServiceFailed, install, state, uninstall};
 use crate::testing::{FakeLaunchd, TestHome};
 
-/// The temporary directory that the fake launchd's getconf prints.
+/// The temporary directory that the fake launchd returns as the per-user directory.
 const TEMP: &str = "/var/folders/xy/abc123/T/";
 
 /// Returns an agent for `home` whose binary is `/Users/me/.local/bin/deadband`.

@@ -55,7 +55,7 @@ pub(crate) struct FakeLaunchd {
     pub(crate) lingering: std::sync::Mutex<u32>,
     /// How many `print` calls a bootout leaves lingering.
     pub(crate) linger: u32,
-    /// The directory that getconf prints, or the default when `None`.
+    /// The per-user temporary directory, or the default when `None`.
     pub(crate) temp: Option<PathBuf>,
 }
 

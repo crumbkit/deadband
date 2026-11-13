@@ -28,7 +28,8 @@ mod tests;
 /// loaded.
 const NOT_LOADED: i32 = 113;
 
-/// A launchctl or getconf run that failed.
+/// A launchctl run that failed, or a per-user temporary directory that the
+/// system has no value for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failed {
     /// The command line that failed, such as `launchctl bootstrap gui/501`.
