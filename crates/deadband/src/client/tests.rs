@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use super::lease::Seat;
 use super::{
-    Admission, Lease, Notices, REASK_FOR, Unasked, ask, ask_noticed, ask_reasking, jobs, timeline,
+    Admission, Lease, Notices, REASK_FOR, Unasked, ask, ask_noticed, ask_reasking, jobs, reply,
+    timeline,
 };
 use crate::admit::{Hold, Lane};
 use crate::protocol::{
@@ -217,8 +218,54 @@ fn a_queued_client_starts_the_job_when_no_daemon_returns_within_the_bound() {
 }
 
 #[test]
-fn the_bound_for_asking_again_is_a_few_seconds() {
-    assert!(REASK_FOR >= Duration::from_secs(2) && REASK_FOR <= Duration::from_secs(10));
+fn a_queued_client_stops_asking_at_the_bound_when_every_daemon_queues_it_and_closes() {
+    let path = socket_path();
+    let listener = UnixListener::bind(&path).expect("the test socket binds");
+    let (done, finished) = mpsc::channel();
+    let asked = path.to_path_buf();
+    thread::spawn(move || {
+        let admission = ask_reasking(
+            &asked,
+            &job(),
+            ANSWER_WITHIN,
+            Duration::from_millis(300),
+            |_, _| {},
+            None,
+        );
+        let _ = done.send(admission);
+    });
+    // The daemon queues each try and closes it. It ends with the process.
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
+            let _ = read_line::<Request>(&mut reader);
+            let queued = Reply::Queued {
+                ahead: 1,
+                held: None,
+            };
+            let _ = write_line(&mut stream, &queued);
+        }
+    });
+    let admission = finished.recv_timeout(Duration::from_secs(3));
+    assert!(
+        matches!(admission, Ok(Admission::Open(Unasked::Closed))),
+        "{admission:?}"
+    );
+}
+
+/// A reader whose read fails as a connection that the peer reset does.
+struct Reset;
+
+impl std::io::Read for Reset {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::ErrorKind::ConnectionReset.into())
+    }
+}
+
+#[test]
+fn a_reset_connection_counts_as_a_closed_one() {
+    let answer = reply(&mut BufReader::new(Reset), Duration::ZERO);
+    assert!(matches!(answer, Err(Unasked::Closed)), "{answer:?}");
 }
 
 #[test]

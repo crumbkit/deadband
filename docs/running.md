@@ -337,8 +337,11 @@ or when it closes the connection, the job starts at once and `deadband run`
 prints one line on standard error that says why. After the daemon has
 queued a job, `deadband run` waits for the grant with no deadline, so a
 daemon that hangs while it keeps the connection open also keeps the job
-waiting. Stopping that daemon closes the connection, and the job then
-starts at once. When the probe cannot read the machine, the
+waiting. Stopping that daemon closes the connection. The waiting
+`deadband run` then tries to reach a daemon every 100 ms for 5 seconds and
+asks again, so a restarted daemon queues the job once more. The job starts at
+once, with the same line on standard error, only when no daemon answers
+within those 5 seconds. When the probe cannot read the machine, the
 daemon admits each job as soon as a place is free, and its log says why.
 The daemon treats a reading that is more than five sampling intervals old
 (at least 250 ms) as a failed probe, so a stalled sampler does not hold jobs
@@ -665,8 +668,9 @@ code.
 The new daemon does not count every job. A new daemon can admit a job in the
 moment before the running jobs have told it about themselves, at most about
 100 ms per retry after it starts listening. The jobs that were waiting on the
-earlier daemon start at once when the connection closes, and the new daemon
-does not count them. Jobs that started while no daemon listened are not
+earlier daemon ask the new daemon again, and the new daemon queues them. A
+waiting job that finds no daemon within 5 seconds starts at once, and the new
+daemon does not count it. Jobs that started while no daemon listened are not
 counted either, because they never held a place. The first restart onto this
 release counts nothing from clients of an older binary, because those clients
 never tell a new daemon about their jobs. In all of these cases the machine

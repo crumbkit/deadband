@@ -9,7 +9,7 @@ use std::fmt;
 use std::io::{self, BufReader, ErrorKind, Read};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::admit::Hold;
@@ -116,6 +116,8 @@ fn reply(reader: &mut BufReader<impl Read>, waited: Duration) -> Result<Reply, U
     match read_line::<Reply>(reader) {
         Ok(Some(reply)) => Ok(reply),
         Ok(None) => Err(Unasked::Closed),
+        // A daemon that stops with unread data on the connection resets it.
+        Err(error) if error.kind() == ErrorKind::ConnectionReset => Err(Unasked::Closed),
         Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
             Err(Unasked::Silent { waited })
         }
@@ -161,7 +163,8 @@ fn ask_reasking(
     notices: Option<&Notices>,
 ) -> Admission {
     let mut queued = Some(queued);
-    // When the connection of a queued job last closed.
+    // When the connection of a queued job first closed. The bound counts
+    // from this moment, however often a daemon queues the job again.
     let mut lost: Option<Instant> = None;
     loop {
         let mut was_queued = false;
@@ -174,24 +177,28 @@ fn ask_reasking(
             notices,
         ) {
             Ok(lease) => return Admission::Granted(lease),
-            Err(Unasked::Closed) if was_queued => lost = Some(Instant::now()),
-            Err(unasked) => match lost {
-                Some(at) if at.elapsed() < reask_for => {}
-                // No daemon came back, so the job starts, and the line
-                // says the connection that queued it closed.
-                Some(_) => return Admission::Open(Unasked::Closed),
-                None => return Admission::Open(unasked),
-            },
+            Err(Unasked::Closed) if was_queued => {
+                lost.get_or_insert_with(Instant::now);
+            }
+            Err(unasked) if lost.is_none() => return Admission::Open(unasked),
+            Err(_) => {}
         }
-        pause(REASK_EVERY);
+        // No daemon kept the job in time, so it starts, and the line says
+        // the connection that queued it closed.
+        if lost.is_some_and(|at| at.elapsed() >= reask_for) {
+            return Admission::Open(Unasked::Closed);
+        }
+        pause();
     }
 }
 
-/// Lets `length` pass. The sender stays alive until the receive ends, so
-/// the receive always takes the whole length.
-fn pause(length: Duration) {
-    let (_sender, never) = mpsc::channel::<()>();
-    let _ = never.recv_timeout(length);
+/// Waits [`REASK_EVERY`] before the next try to reach a daemon.
+fn pause() {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the pause between tries to reach a daemon, which has no event to wait on; REASK_EVERY names it"
+    )]
+    thread::sleep(REASK_EVERY);
 }
 
 /// Asks once as [`ask`] does, and returns the lease or why there is none.
@@ -223,7 +230,9 @@ fn try_ask(
         _ => return Err(wrong_reply()),
     }
     // macOS refuses this call once the daemon has closed the connection.
-    // The read then returns at once, so the refusal costs nothing.
+    // The read then returns at once, so the refusal costs nothing. A
+    // connection that is still open never refuses the call, so the read
+    // that follows always waits without a deadline.
     let _ = stream.set_read_timeout(None);
     match reply(&mut reader, answer_within)? {
         Reply::Granted { jobs } => Ok(Lease::watched(stream, jobs, path, job, notices)),
