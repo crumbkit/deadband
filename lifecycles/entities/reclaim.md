@@ -56,8 +56,9 @@ waiting (reclaim/lock.rs), so two daemons of one user never reclaim at once.
 When another daemon holds it, or when the operating system refuses the
 reclaim thread, the mark is cleared at once (`skip`), and that resource rests
 exactly `reclaim_after`, with its count of fruitless reclaims unchanged
-(daemon.rs:342-376). A lock file that cannot be made or locked fails open, and
-the reclaim runs without it. A daemon started with `DEADBAND_SOCKET` set has
+(daemon.rs:342-376). A lock file that cannot be made or locked, or a state directory that cannot
+be made or whose mode cannot be set, fails open, and the reclaim runs without
+the lock. A daemon started with `DEADBAND_SOCKET` set has
 no reclaimers, so it never sets the mark.
 
 The mark is in memory, and the lock is held by the daemon's own descriptor,

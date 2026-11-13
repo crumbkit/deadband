@@ -431,10 +431,10 @@ that followed it.
 - No test refuses the reclaim thread, because the sampler thread starts it
   and a test's refusal reaches only the threads that the test's own thread
   starts. The code logs one line and starts no reclaim now.
-- The service commands find `service.lock` under `XDG_STATE_HOME`, or
-  `~/.local/state` when it is not set, while the plist's path comes from
-  `HOME`. Two commands with different `XDG_STATE_HOME` values take
-  different locks and can interleave.
+- The service commands find `service.lock` in `$HOME/.local/state/deadband`
+  whatever `XDG_STATE_HOME` says, as the plist's path comes from `HOME`
+  too. That is the state directory of the daemon that launchd starts, since
+  the plist sets no `XDG_STATE_HOME`.
 - A background process that holds a reclaimer's standard output keeps one
   reading thread and one pipe in the daemon until it closes the pipe. The
   reclaim does not wait for it.

@@ -43,12 +43,14 @@ and a mode the person changed is reset by the next call. The makers are these:
 
 - The history writer calls it before it takes `jobs.lock` (`claim`,
   history/writer.rs:274), because the lock file lives in the directory, and
-  again on every open under the lock (history/writer.rs:343).
+  again on every open under the lock (history/writer.rs:354).
 - The reclaim thread calls it before it takes `reclaim.lock`
   (reclaim/lock.rs:32). When the call fails, the reclaim runs without the
   lock, as it does when the lock file cannot be made.
-- The service commands call it before they take `service.lock`
-  (cli/service/lock.rs:40).
+- The service commands call it, on `$HOME/.local/state/deadband` whatever
+  `XDG_STATE_HOME` says, before they take `service.lock`
+  (cli/service/lock.rs:40). That is the directory of the daemon that launchd
+  starts, since the plist sets no `XDG_STATE_HOME`.
 
 The history writer makes the directory when its thread starts
 (history/writer.rs:188-191), before the first sample (daemon.rs:211-214, 227),

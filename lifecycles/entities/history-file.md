@@ -80,7 +80,7 @@ No transition goes there; the history flows' crash points name it in
 file (`reopen`) sets the file's mode to 0600 and writes nothing else.
 
 Before each line the writer checks, by device and inode, that its open file is
-still the file at `jobs.jsonl` (history/writer.rs:243-249). When the path
+still the file at `jobs.jsonl` (history/writer.rs:243-249; the same check guards the rotation). When the path
 names no file or another file, the writer closes its file and opens the path
 again, which is `open-new` for a removed file and `reopen` for a replacement.
 `append` itself writes to the open file descriptor, not to the path, so it
@@ -93,7 +93,14 @@ When something outside deadband removes `jobs.jsonl` (`unlinked`), the next
 line therefore makes a new file at the path, and later lines are recorded
 there.
 
-`rotate` is a `rename` of `jobs.jsonl` to `jobs.1.jsonl` past 64 MiB. It is one
+`rotate` is a `rename` of `jobs.jsonl` to `jobs.1.jsonl` past 64 MiB, and
+only when the open file is still the file at `jobs.jsonl`
+(history/writer.rs:307-317). When another file replaced it, the writer closes
+its file and skips the rename, so the next line opens the file at the path
+(`reopen`) and a later write rotates that file. One `stat` separates the check
+from the rename, and macOS has no conditional rename; a file that replaces
+`jobs.jsonl` in that window is renamed to `jobs.1.jsonl`, which nothing reads.
+The rename is one
 atomic call that changes two stores. An effect writes only its own entity's
 stores, so the rename is split into this transition and rotated-history's,
 and the history-rotate flow lists them as two steps that cannot happen apart.

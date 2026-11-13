@@ -15,12 +15,14 @@ crash:
   leaves_state:
   - lease#lost
 - after: seat
-  leaves: the job ended between the seat and the install, so the new daemon counts a job that has ended
-  recovery: Seat::install refuses and closes the connection, and the new daemon runs job-entry#end with
-    the exit lost
+  leaves: the Seat write failed or timed out inside Seat::install, which closes the connection and leaves
+    the seat lost; the new daemon may have counted a job that its close then frees
+  recovery: the watcher looks again after 100 ms
   tests:
   - {test: crates/deadband/src/client/tests.rs#a_connection_that_opens_after_the_job_ended_is_closed,
     kind: seam}
+  leaves_state:
+  - lease#lost
 ---
 The seat step runs in the new daemon. The old connection closes before the new
 one opens, so the old daemon has freed the place first. The new daemon gives
@@ -29,7 +31,11 @@ line, when it ends, marks it as seated, counts its run from when it started
 on the old daemon (`ran_ms`), counts it as starting when it asked, and has no
 warm directories or load at its start.
 
-The `after: seat` crash point is the order where the job ends before the
-install. When the install lands first, `Seat::end` writes `Done` on the new
-connection and the new daemon records the real exit. `Seat::end` takes the
-seat mutex once, so no install can come between its write and its shutdown.
+`Seat::install` holds the seat mutex while it checks for `Ended`, writes
+`Request::Seat` and sets `Held`, so the seat step and the install are one hold
+of the lock (client/lease.rs:248-255). `Seat::end` runs either before it, and
+no `Seat` is sent and no daemon hears of the job, or after it, and `Done`
+reaches the new connection, so the new daemon records the real exit. The lock
+is held for at most `WRITE_WITHIN` (2 s), and only during a reseat.
+`Seat::end` takes the seat mutex once, so no install can come between its
+write and its shutdown.

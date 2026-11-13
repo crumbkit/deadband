@@ -676,8 +676,8 @@ same label is replaced like any other changed plist. Install refuses a file
 at that path that is not an XML property list, and changes nothing.
 
 `deadband service install` and `deadband service uninstall` each take an
-exclusive lock on `service.lock` in the state directory
-(`$XDG_STATE_HOME/deadband`, or `~/.local/state/deadband`) before they read
+exclusive lock on `service.lock` in `~/.local/state/deadband`, whatever
+`XDG_STATE_HOME` says, before they read
 the plist or ask launchd, and hold it until they finish. A second command
 that starts meanwhile looks for the lock every 100 milliseconds for about
 ten seconds. When the first command finishes in that time, the second one
@@ -709,7 +709,8 @@ When no daemon answers, `deadband status` says
 missing, and `daemon: installed but not loaded; run deadband service
 install` when launchd has not loaded it. When launchd has loaded the agent
 and no daemon answers, it says `daemon: loaded but not answering; see
-~/Library/Logs/deadband.log`, because the daemon may have exited at start.
+~/Library/Logs/deadband.log, or run deadband service install --restart`,
+because the daemon may have exited at start.
 When launchd could not be asked, it says `daemon: not running, and launchd
 could not be asked whether it loaded the agent`. `deadband status --json`
 gives the same state in `daemon_state`: `running`, `not_loaded`,

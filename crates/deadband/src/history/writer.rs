@@ -31,9 +31,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 
-use super::identity::Identity;
 use super::{CHANNEL, FILE, Line, MAX_BYTES, ROTATED_FILE};
 use crate::daemon::{Log, make_state_dir, note, take_lock};
+use crate::file_id::FileId;
 use crate::spawn;
 
 /// The mode of the history file: only its owner may read or write it.
@@ -132,7 +132,7 @@ struct Open {
     /// The file, opened for appending.
     file: File,
     /// The file's identity when the writer opened it.
-    identity: Identity,
+    identity: FileId,
     /// The file's length in bytes.
     size: u64,
 }
@@ -143,7 +143,7 @@ struct Lock {
     /// The locked file, which the lock lasts as long as.
     _file: File,
     /// The lock file's identity when the writer took it.
-    identity: Identity,
+    identity: FileId,
 }
 
 /// The writer of the history file.
@@ -243,7 +243,7 @@ impl Writer {
         if self
             .open
             .as_ref()
-            .is_some_and(|open| !open.identity.still_at(&path))
+            .is_some_and(|open| !still_at(open.identity, &path))
         {
             self.open = None;
         }
@@ -264,7 +264,7 @@ impl Writer {
     fn claim(&mut self) -> io::Result<bool> {
         let path = self.directory.join(LOCK_FILE);
         match &self.lock {
-            Some(lock) if lock.identity.still_at(&path) => return Ok(true),
+            Some(lock) if still_at(lock.identity, &path) => return Ok(true),
             Some(_) => {
                 self.lock = None;
                 self.open = None;
@@ -274,7 +274,7 @@ impl Writer {
         make_state_dir(&self.directory)?;
         match take_lock(&path) {
             Ok(file) => {
-                let identity = Identity::of(&file)?;
+                let identity = FileId::of(&file)?;
                 self.lock = Some(Lock {
                     _file: file,
                     identity,
@@ -299,23 +299,27 @@ impl Writer {
         }
     }
 
-    /// Renames the file to the rotated name when it has passed the limit.
-    /// The size check comes after a successful write. A failed rename is
-    /// logged once, the writer keeps appending, and the next write tries
-    /// again.
+    /// Renames the file to the rotated name when it has passed the limit and
+    /// is still the file at its path. The size check comes after a successful
+    /// write. A file that another file replaced is not renamed, and the
+    /// writer closes it. A failed rename is logged once, the writer keeps
+    /// appending, and the next write tries again.
     fn rotate_past_limit(&mut self) {
-        if self
-            .open
-            .as_ref()
-            .is_none_or(|open| open.size <= self.limit)
-        {
+        let path = self.directory.join(FILE);
+        let Some(open) = self.open.as_ref().filter(|open| open.size > self.limit) else {
+            return;
+        };
+        if !still_at(open.identity, &path) {
+            // Another file replaced the one this writer holds, so the rename
+            // would move that file. The next line opens the file at the path.
+            self.open = None;
             return;
         }
         #[expect(
             clippy::disallowed_methods,
             reason = "crates/deadband/src/history/writer.rs rotates an append-only log; rust-standards.toml's DUR-1 exception says why this file does not use an atomic writer"
         )]
-        let renamed = fs::rename(self.directory.join(FILE), self.directory.join(ROTATED_FILE));
+        let renamed = fs::rename(path, self.directory.join(ROTATED_FILE));
         match renamed {
             Ok(()) => {
                 self.open = None;
@@ -337,6 +341,13 @@ impl Writer {
     }
 }
 
+/// Reports whether `path` still names the file `id`. A path whose file cannot
+/// be read, or that is a link to such a file, counts as naming another file,
+/// so the writer opens the path again.
+fn still_at(id: FileId, path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| id.is(&metadata))
+}
+
 /// Opens the history file in `directory`, making the directory and the file
 /// when they do not exist, and adds a newline when the last line is torn.
 fn open_file(directory: &Path) -> io::Result<Open> {
@@ -353,7 +364,7 @@ fn open_file(directory: &Path) -> io::Result<Open> {
         .open(directory.join(FILE))?;
     file.set_permissions(Permissions::from_mode(FILE_MODE))?;
     let metadata = file.metadata()?;
-    let identity = Identity::from(&metadata);
+    let identity = FileId::from(&metadata);
     let mut size = metadata.len();
     if let Some(last) = size.checked_sub(1) {
         let mut byte = [0_u8];
@@ -369,3 +380,6 @@ fn open_file(directory: &Path) -> io::Result<Open> {
         size,
     })
 }
+
+#[cfg(test)]
+mod tests;

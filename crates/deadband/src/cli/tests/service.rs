@@ -19,7 +19,6 @@ fn with_agent(home: &Path, launchd: &Arc<FakeLaunchd>) -> Test<Fixed> {
     let mut test = Test::new(Fixed);
     test.machine.service = Some(LaunchAgent {
         home: Some(home.to_path_buf()),
-        state: Some(home.join(".local/state/deadband")),
         binary: Some(PathBuf::from("/Users/me/.local/bin/deadband")),
         uid: 501,
         launchd: Arc::clone(launchd) as _,
@@ -67,7 +66,7 @@ fn status_names_service_install_when_launchd_has_not_loaded_the_plist() {
 }
 
 #[test]
-fn status_names_the_log_when_launchd_has_loaded_the_agent_and_no_daemon_answers() {
+fn status_names_install_restart_when_launchd_has_loaded_the_agent_and_no_daemon_answers() {
     let home = TestHome::new();
     write_plist(&home);
     let test = with_agent(&home, &Arc::new(FakeLaunchd::new(true)));
@@ -75,7 +74,7 @@ fn status_names_the_log_when_launchd_has_loaded_the_agent_and_no_daemon_answers(
     let (_, out, _) = test.run(&["status"]);
 
     assert!(
-        out.ends_with("daemon: loaded but not answering; see ~/Library/Logs/deadband.log\n"),
+        out.ends_with("daemon: loaded but not answering; see ~/Library/Logs/deadband.log, or run deadband service install --restart\n"),
         "{out}"
     );
 }
@@ -339,5 +338,23 @@ fn service_install_counts_the_jobs_of_the_daemon_under_the_getconf_directory_wha
 
     assert_eq!(code, 0, "{err}");
     assert!(out.starts_with("the daemon has 1 job, "), "{out}");
+    assert!(launchd.changes().is_empty(), "{:?}", launchd.changes());
+}
+
+#[test]
+fn a_service_command_takes_its_lock_under_home_whatever_xdg_state_home_says() {
+    let home = TestHome::new();
+    let elsewhere = TestHome::new();
+    let launchd = Arc::new(FakeLaunchd::new(false));
+    let mut test = with_agent(&home, &launchd);
+    test.machine.environment.state = Some(elsewhere.join("state"));
+    let state = home.join(".local/state/deadband");
+    std::fs::create_dir_all(&state).expect("the state directory is made");
+    let _held = crate::daemon::take_lock(&state.join("service.lock")).expect("the lock is free");
+
+    let (code, _, err) = test.run(&["service", "install"]);
+
+    assert_eq!(code, EXIT_SERVICE, "{err}");
+    assert!(err.contains("deadband::service::locked"), "{err}");
     assert!(launchd.changes().is_empty(), "{:?}", launchd.changes());
 }

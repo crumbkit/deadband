@@ -128,7 +128,7 @@ Two changes come from outside deadband:
   the one the first daemon holds.
 
 The daemon names its lock file by a stat of the lock path when `serve`
-starts, after `bind` took the lock (daemon/alive.rs:180-196). A lock file
+starts, after `bind` took the lock (daemon/alive.rs:177-193). A lock file
 replaced between `bind` and that stat is recorded as the daemon's own, and
 the daemon never notices that replacement. deadband keeps this as a soft
 limit.

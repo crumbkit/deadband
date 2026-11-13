@@ -188,6 +188,7 @@ pub const TOOL: Tool = Tool::new()
                 EXIT_DAEMON,
                 "the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.",
             )
+            .commands(&[&["daemon"]])
             .failures(&[&SOCKET_UNUSABLE]),
             Exit::new(
                 EXIT_SERVICE,

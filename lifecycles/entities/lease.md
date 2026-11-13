@@ -87,8 +87,9 @@ finds `Ended` and changes nothing after a `Lease::end`. A lease that is
 dropped without `end` shuts the connection down with no `Done`, and the daemon
 records the job as lost.
 
-`end-lost` still leaves a lost exit when the watcher has already sent
-`Request::Seat` to a daemon: `install` then refuses, and that daemon reads the
-close with no `Done` (see reseat and run-ends-while-lost).
+`reseat` holds the seat mutex while it checks `Ended`, writes `Request::Seat`
+and sets `Held` (`Seat::install`, client/lease.rs:248-255), so `end-lost`
+before it sends no `Seat` and an end after it is `end-held`, which writes
+`Done` on the new connection (see reseat and run-ends-while-lost).
 
 Shutting the connection down also ends the watcher's blocked read.

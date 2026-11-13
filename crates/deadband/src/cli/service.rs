@@ -105,9 +105,6 @@ pub struct Install {
 pub struct LaunchAgent {
     /// The home directory, or `None` when the environment names none.
     pub home: Option<PathBuf>,
-    /// deadband's state directory, which holds the lock that service
-    /// commands take, or `None` when the environment names none.
-    pub state: Option<PathBuf>,
     /// The running binary's path as invoked, or `None` when it is unknown.
     pub binary: Option<PathBuf>,
     /// The user's id, which names the launchd domain `gui/<uid>`.
@@ -327,11 +324,16 @@ pub fn uninstall(
     Ok(Prose::new(report))
 }
 
-/// Takes the lock of the service commands in the agent's state directory,
-/// waiting while another command holds it.
+/// Takes the lock of the service commands in `.local/state/deadband` under
+/// the agent's home, waiting while another command holds it. That is the
+/// state directory of the daemon that launchd starts, since the plist sets
+/// no `XDG_STATE_HOME`, and it does not follow the caller's
+/// `XDG_STATE_HOME`, so two commands with one home always share a lock.
 fn locked(agent: &LaunchAgent) -> Result<lock::ServiceLock, ServiceFailed> {
-    let state = located(agent.state.as_deref(), "the state directory")?;
-    lock::hold(state, || agent.launchd.pause())
+    let home = located(agent.home.as_deref(), "the home directory")?;
+    lock::hold(&home.join(".local/state/deadband"), || {
+        agent.launchd.pause()
+    })
 }
 
 /// Returns `found`, or the refusal that names `what` when it is `None`.

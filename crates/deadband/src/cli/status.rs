@@ -115,7 +115,10 @@ impl fmt::Display for Status {
                     "daemon: installed but not loaded; run deadband service install"
                 }
                 Some(DaemonState::LoadedSilent) => {
-                    return write!(f, "daemon: loaded but not answering; see ~/{LOG}");
+                    return write!(
+                        f,
+                        "daemon: loaded but not answering; see ~/{LOG}, or run deadband service install --restart"
+                    );
                 }
                 Some(DaemonState::LaunchdUnasked) => {
                     "daemon: not running, and launchd could not be asked whether it loaded the agent"

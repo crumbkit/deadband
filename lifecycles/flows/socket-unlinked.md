@@ -18,6 +18,6 @@ crash:
 ---
 The daemon notices within 60 samples, about a minute, or sooner through the
 watchdog when its reading is stale. A socket file that another socket
-replaced is noticed the same way (daemon/alive.rs:201-228). The end step is
+replaced is noticed the same way (daemon/alive.rs:198-225). The end step is
 the daemon's own stop; then the path holds no socket at all, so the next
 daemon runs daemon#bind.

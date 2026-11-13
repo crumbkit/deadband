@@ -29,7 +29,6 @@ Keep a busy machine usable while many heavy jobs compete for it
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband status`
 
@@ -54,7 +53,6 @@ Effects: read-only, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband run`
 
@@ -83,7 +81,6 @@ Writes: applies all items or none.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 - `126`: the program given to `run` was found but could not start.
 - `127`: the program given to `run` was not found.
 
@@ -124,7 +121,6 @@ Install or uninstall the launchd agent that runs the daemon at login
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband service install`
 
@@ -155,7 +151,6 @@ Effects: additive, idempotent, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 - `6`: deadband could not install or uninstall its launchd agent.
 
 ## `deadband service uninstall`
@@ -180,7 +175,6 @@ Effects: destructive, idempotent, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 - `6`: deadband could not install or uninstall its launchd agent.
 
 ## `deadband top`
@@ -200,7 +194,6 @@ Effects: read-only, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 - `5`: `top` has no terminal to draw on, or lost it.
 - `130`: the person pressed Ctrl-C in `top`.
 
@@ -215,7 +208,6 @@ Explore deadband's commands
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband commands list`
 
@@ -251,7 +243,6 @@ Effects: read-only, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband schemas`
 
@@ -265,7 +256,6 @@ Explore the JSON documents that deadband prints and the files it reads
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband schemas list`
 
@@ -300,7 +290,6 @@ Effects: read-only, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband schemas show`
 
@@ -328,7 +317,6 @@ Effects: read-only, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband skills`
 
@@ -343,7 +331,6 @@ Give coding agents deadband's skill
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband skills install`
 
@@ -383,7 +370,6 @@ Effects: additive, idempotent, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband skills check`
 
@@ -416,7 +402,6 @@ Effects: read-only, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband skills print`
 
@@ -435,7 +420,6 @@ Effects: read-only, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband completion`
 
@@ -450,7 +434,6 @@ Set up deadband's completion in a shell
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband completion install`
 
@@ -487,7 +470,6 @@ Effects: additive, idempotent, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband completion check`
 
@@ -517,7 +499,6 @@ Effects: read-only, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband completion print`
 
@@ -540,4 +521,3 @@ Effects: read-only, closed-world.
 ### Exit codes
 
 - `3`: deadband could not read the machine.
-- `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.

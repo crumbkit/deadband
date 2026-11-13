@@ -27,8 +27,9 @@ pub(super) struct ServiceLock {
 }
 
 /// Takes the lock in `state`, the state directory, which it makes with mode
-/// 0700 when it does not exist and sets to mode 0700 when it does. While another command holds the lock it calls `pause`
-/// and looks again, up to [`LOCK_POLLS`] times.
+/// 0700 when it does not exist and sets to mode 0700 when it does. While
+/// another command holds the lock it calls `pause` and looks again, up to
+/// [`LOCK_POLLS`] times.
 ///
 /// # Errors
 ///

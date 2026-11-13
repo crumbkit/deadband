@@ -6,6 +6,7 @@ pub mod cli;
 pub mod client;
 pub mod daemon;
 pub mod environment;
+mod file_id;
 pub mod history;
 pub mod job;
 pub mod name;

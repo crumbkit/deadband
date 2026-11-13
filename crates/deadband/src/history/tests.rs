@@ -82,7 +82,7 @@ pub(crate) fn lines_of(path: &Path) -> Vec<Value> {
 }
 
 /// Returns a machine line marked with `at_ms`.
-fn machine(at_ms: u64) -> Line {
+pub(super) fn machine(at_ms: u64) -> Line {
     Line::Machine(MachineLine {
         v: VERSION,
         at_ms,
@@ -98,7 +98,7 @@ fn machine(at_ms: u64) -> Line {
 }
 
 /// Returns a writer of `directory` that rotates past `limit` bytes, and its log.
-fn writer(directory: &Path, limit: u64) -> (Writer, Arc<Mutex<Vec<u8>>>) {
+pub(super) fn writer(directory: &Path, limit: u64) -> (Writer, Arc<Mutex<Vec<u8>>>) {
     let written = Arc::new(Mutex::new(Vec::new()));
     let log: Log = written.clone();
     (Writer::new(directory.to_owned(), limit, log), written)
