@@ -23,7 +23,7 @@
 //!   stopped halfway could leave what it was stopping half stopped.
 //!
 //! `run` reads standard output while the reclaimer runs and stops waiting
-//! for it [`DRAIN_GRACE`] after the reclaimer exits, so a background process
+//! for it `DRAIN_GRACE` after the reclaimer exits, so a background process
 //! that holds standard output open does not hold the reclaim. Output that
 //! such a process writes after that is dropped.
 
