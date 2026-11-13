@@ -8,6 +8,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A client that does not read the daemon's reply no longer stops admission.
+  The daemon now writes each grant and queued reply after it releases the
+  lock that guards the queue, so other threads keep admitting jobs while the
+  write waits. A reply that a client has not taken within one second fails,
+  and the daemon closes that connection. A `deadband run` that had read no
+  queued reply then starts its job at once. One that had read a queued reply
+  asks again every 100 ms for up to 5 seconds, is queued again by a daemon
+  that is still serving, and starts its job once no daemon has kept it for
+  those 5 seconds. Before, the daemon wrote replies while it held the queue
+  lock, so each client that did not read stopped all admission for up to one
+  second, and a client whose grant failed could wait without end.
 - A daemon whose lock file (the socket's path with `.lock` added) is removed
   or replaced now stops serving within about a minute, and `deadband daemon`
   prints `the lock file is gone or replaced, so the daemon stops serving`.

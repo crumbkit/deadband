@@ -6,8 +6,10 @@
 
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::reply::deliver;
 use super::{Shared, State, WRITE_TIMEOUT, Waiter, lock};
 use crate::admit::JobId;
 use crate::history::{Arrival, Tally};
@@ -94,20 +96,18 @@ pub(super) fn ask(
     reader: &mut BufReader<UnixStream>,
     mut job: Job,
 ) {
-    let Ok(grant_stream) = stream.try_clone() else {
-        return;
-    };
+    let stream = Arc::new(stream);
     let arrival = arrive(shared, &mut job, None);
     let queued = Instant::now();
     let label = Label::new(&job.label);
-    let id: JobId = {
+    let (id, replies) = {
         let mut state = lock(shared);
         let lane = job.lane;
         let ahead = state.queue.ahead_in(lane);
         let id = state.queue.push(
             Waiter {
                 job,
-                stream: grant_stream,
+                stream: Arc::clone(&stream),
                 label,
                 queued,
                 arrival,
@@ -115,15 +115,16 @@ pub(super) fn ask(
             },
             lane,
         );
-        state.grant();
+        let mut replies = state.grant();
         if let Some(ahead) = state.queue.ahead_of(id) {
             let held = state.queue.held();
-            // A client that cannot take this reply also closes its
-            // connection, which the read below sees.
-            let _ = write_line(&mut &stream, &Reply::Queued { ahead, held });
+            // A client that cannot take this reply has its connection shut
+            // down, which the read in `finish` sees.
+            replies.tell(stream, Reply::Queued { ahead, held });
         }
-        id
+        (id, replies)
     };
+    deliver(shared, replies);
     finish(shared, reader, id);
 }
 
@@ -156,9 +157,12 @@ pub(super) fn seat(
 /// the job, and starts the jobs that its place lets start.
 fn finish(shared: &Shared, reader: &mut BufReader<UnixStream>, id: JobId) {
     let (exit, usage) = read_end(reader);
-    let mut state = lock(shared);
-    state.record(id, Some(exit), usage);
-    state.grant();
+    let replies = {
+        let mut state = lock(shared);
+        state.record(id, Some(exit), usage);
+        state.grant()
+    };
+    deliver(shared, replies);
 }
 
 /// Reads the job's connection until its client says how the job ended. A
@@ -195,7 +199,7 @@ impl State {
         let label = Label::new(&job.label);
         let waiter = Waiter {
             job,
-            stream,
+            stream: Arc::new(stream),
             label,
             queued: at,
             arrival,
