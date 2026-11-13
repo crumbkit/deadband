@@ -9,7 +9,9 @@ use std::thread;
 use std::time::Duration;
 
 use super::lease::Seat;
-use super::{Admission, Lease, Notices, Unasked, ask, ask_noticed, jobs, timeline};
+use super::{
+    Admission, Lease, Notices, REASK_FOR, Unasked, ask, ask_noticed, ask_reasking, jobs, timeline,
+};
 use crate::admit::{Hold, Lane};
 use crate::protocol::{
     Ago, Job, Jobs, OutsideJobs, Reply, Request, Timeline, read_line, write_line,
@@ -129,9 +131,14 @@ fn ask_starts_the_job_when_the_daemon_closes_the_connection_while_it_waits() {
         held: Some(held),
     }]);
     let mut queued = None;
-    let admission = ask(&path, &job(), ANSWER_WITHIN, |n, why| {
-        queued = Some((n, why));
-    });
+    let admission = ask_reasking(
+        &path,
+        &job(),
+        ANSWER_WITHIN,
+        Duration::from_millis(300),
+        |n, why| queued = Some((n, why)),
+        None,
+    );
     assert_eq!(
         received.recv().expect("the ask arrives"),
         Request::Ask(job())
@@ -141,6 +148,77 @@ fn ask_starts_the_job_when_the_daemon_closes_the_connection_while_it_waits() {
         matches!(admission, Admission::Open(Unasked::Closed)),
         "{admission:?}"
     );
+}
+
+/// Queues a client on a scripted daemon, then closes the connection as a
+/// daemon does when it stops. Returns the listener, the asking thread and
+/// how many times the client reported its place in the queue.
+fn queued_then_lost(
+    path: &Path,
+    reask_for: Duration,
+) -> (
+    UnixListener,
+    thread::JoinHandle<Admission>,
+    mpsc::Receiver<usize>,
+) {
+    let listener = UnixListener::bind(path).expect("the test socket binds");
+    let asked = path.to_path_buf();
+    let (reports, reported) = mpsc::channel();
+    let asking = thread::spawn(move || {
+        ask_reasking(
+            &asked,
+            &job(),
+            ANSWER_WITHIN,
+            reask_for,
+            |ahead, _| reports.send(ahead).expect("the test receives"),
+            None,
+        )
+    });
+    let mut peer = next_connection(&listener, ANSWER_WITHIN).expect("the client connects");
+    assert_eq!(peer.request(), Request::Ask(job()));
+    write_line(
+        &mut peer.stream,
+        &Reply::Queued {
+            ahead: 3,
+            held: None,
+        },
+    )
+    .expect("the queue place writes");
+    assert_eq!(reported.recv().expect("the place is reported"), 3);
+    drop(peer);
+    (listener, asking, reported)
+}
+
+#[test]
+fn a_queued_client_asks_a_restarted_daemon_again_before_it_starts_the_job() {
+    let path = socket_path();
+    let (listener, asking, reported) = queued_then_lost(&path, REASK_FOR);
+    let mut peer = next_connection(&listener, ANSWER_WITHIN).expect("the client asks again");
+    assert_eq!(peer.request(), Request::Ask(job()));
+    write_line(&mut peer.stream, &Reply::Granted { jobs: 4 }).expect("the grant writes");
+    let Admission::Granted(lease) = asking.join().expect("the ask ends") else {
+        panic!("the client started the job instead of asking the new daemon");
+    };
+    assert_eq!(lease.jobs(), 4);
+    assert!(reported.try_recv().is_err(), "the place was reported twice");
+}
+
+#[test]
+fn a_queued_client_starts_the_job_when_no_daemon_returns_within_the_bound() {
+    let path = socket_path();
+    let (listener, asking, _) = queued_then_lost(&path, Duration::from_millis(300));
+    drop(listener);
+    std::fs::remove_file(&path).expect("the socket file goes");
+    let admission = asking.join().expect("the ask ends");
+    assert!(
+        matches!(admission, Admission::Open(Unasked::Closed)),
+        "{admission:?}"
+    );
+}
+
+#[test]
+fn the_bound_for_asking_again_is_a_few_seconds() {
+    assert!(REASK_FOR >= Duration::from_secs(2) && REASK_FOR <= Duration::from_secs(10));
 }
 
 #[test]

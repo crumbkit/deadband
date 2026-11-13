@@ -9,6 +9,7 @@ use std::fmt;
 use std::io::{self, BufReader, ErrorKind, Read};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::admit::Hold;
@@ -23,6 +24,13 @@ pub use self::lease::{Lease, Notices};
 /// How long a client waits for the daemon's first answer before it counts
 /// the daemon as not answering.
 pub const ANSWER_WITHIN: Duration = Duration::from_secs(2);
+
+/// How long a queued client keeps asking for a daemon after its connection
+/// closes. When no daemon answers in this time, the job starts at once.
+pub const REASK_FOR: Duration = Duration::from_secs(5);
+
+/// How long a queued client pauses between two tries to reach a daemon.
+const REASK_EVERY: Duration = Duration::from_millis(100);
 
 /// The daemon's answer to a request to start a job.
 #[derive(Debug)]
@@ -139,18 +147,62 @@ pub fn ask_noticed(
     queued: impl FnOnce(usize, Option<Hold>),
     notices: Option<&Notices>,
 ) -> Admission {
-    match try_ask(path, job, answer_within, queued, notices) {
-        Ok(lease) => Admission::Granted(lease),
-        Err(unasked) => Admission::Open(unasked),
+    ask_reasking(path, job, answer_within, REASK_FOR, queued, notices)
+}
+
+/// Asks as [`ask_noticed`] does, and keeps asking for `reask_for` after a
+/// queued job loses its connection.
+fn ask_reasking(
+    path: &Path,
+    job: &Job,
+    answer_within: Duration,
+    reask_for: Duration,
+    queued: impl FnOnce(usize, Option<Hold>),
+    notices: Option<&Notices>,
+) -> Admission {
+    let mut queued = Some(queued);
+    // When the connection of a queued job last closed.
+    let mut lost: Option<Instant> = None;
+    loop {
+        let mut was_queued = false;
+        match try_ask(
+            path,
+            job,
+            answer_within,
+            &mut queued,
+            &mut was_queued,
+            notices,
+        ) {
+            Ok(lease) => return Admission::Granted(lease),
+            Err(Unasked::Closed) if was_queued => lost = Some(Instant::now()),
+            Err(unasked) => match lost {
+                Some(at) if at.elapsed() < reask_for => {}
+                // No daemon came back, so the job starts, and the line
+                // says the connection that queued it closed.
+                Some(_) => return Admission::Open(Unasked::Closed),
+                None => return Admission::Open(unasked),
+            },
+        }
+        pause(REASK_EVERY);
     }
 }
 
-/// Asks as [`ask`] does, and returns the lease or why there is none.
+/// Lets `length` pass. The sender stays alive until the receive ends, so
+/// the receive always takes the whole length.
+fn pause(length: Duration) {
+    let (_sender, never) = mpsc::channel::<()>();
+    let _ = never.recv_timeout(length);
+}
+
+/// Asks once as [`ask`] does, and returns the lease or why there is none.
+/// `queued` is taken the first time the daemon queues the job, and
+/// `was_queued` says whether the daemon queued it on this try.
 fn try_ask(
     path: &Path,
     job: &Job,
     answer_within: Duration,
-    queued: impl FnOnce(usize, Option<Hold>),
+    queued: &mut Option<impl FnOnce(usize, Option<Hold>)>,
+    was_queued: &mut bool,
     notices: Option<&Notices>,
 ) -> Result<Lease, Unasked> {
     let mut stream = connect(path)?;
@@ -162,10 +214,17 @@ fn try_ask(
     let mut reader = BufReader::new(stream.try_clone().map_err(garbled)?);
     match reply(&mut reader, answer_within)? {
         Reply::Granted { jobs } => return Ok(Lease::watched(stream, jobs, path, job, notices)),
-        Reply::Queued { ahead, held } => queued(ahead, held),
+        Reply::Queued { ahead, held } => {
+            *was_queued = true;
+            if let Some(queued) = queued.take() {
+                queued(ahead, held);
+            }
+        }
         _ => return Err(wrong_reply()),
     }
-    stream.set_read_timeout(None).map_err(garbled)?;
+    // macOS refuses this call once the daemon has closed the connection.
+    // The read then returns at once, so the refusal costs nothing.
+    let _ = stream.set_read_timeout(None);
     match reply(&mut reader, answer_within)? {
         Reply::Granted { jobs } => Ok(Lease::watched(stream, jobs, path, job, notices)),
         _ => Err(wrong_reply()),
