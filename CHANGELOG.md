@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- A waiting `deadband run` whose daemon closes the connection now tries to
+  reach a daemon every 100 ms for 5 seconds and asks again, so a restarted
+  daemon queues the job instead of every waiting job starting at once. The
+  job starts at once only when no daemon answers within the 5 seconds.
+
 ### Added
 
 - `deadband service install` writes and loads the launchd agent that runs

@@ -61,10 +61,12 @@ status.
 - Only the throttle module changes a job's priority. clippy's
   `disallowed-methods` refuses those calls everywhere else.
 - deadband never signals or ends a job.
-- When the daemon cannot be reached, does not answer or closes the connection,
-  the job runs at once and `deadband run` says why in one line on standard
-  error. A daemon that hangs while it keeps the connection open still keeps a
-  queued job waiting, as [running.md](running.md) says.
+- When the daemon cannot be reached or does not answer, the job runs at once
+  and `deadband run` says why in one line on standard error. When a daemon
+  closes the connection of a queued job, `deadband run` asks again for 5
+  seconds, and the job runs at once only if no daemon answers in that time. A
+  daemon that hangs while it keeps the connection open still keeps a queued
+  job waiting, as [running.md](running.md) says.
 - When the probe cannot read the machine, or the sampler has stored no reading
   for five sampling intervals (at least 250 ms), the daemon starts each job
   once a place is free, and its log says why in one line.
