@@ -19,9 +19,8 @@ use crate::reclaim::{self, CONFIG_FILE, program};
 fn reclaim_config<P>(machine: &Machine<P>) -> reclaim::Config {
     let Some(path) = machine
         .environment
-        .config
-        .as_ref()
-        .map(|config| config.join(CONFIG_FILE))
+        .reclaim_directory()
+        .map(|directory| directory.join(CONFIG_FILE))
     else {
         return reclaim::Config::default();
     };

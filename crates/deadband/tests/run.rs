@@ -20,6 +20,13 @@ fn socket(name: &str) -> Socket {
     Socket(std::env::temp_dir().join(format!("db-it-{}-{name}.sock", std::process::id())))
 }
 
+/// Returns a configuration directory in the temporary directory that no
+/// test makes, so a command of the tests never reads the person's
+/// `config.toml`.
+fn config_home() -> PathBuf {
+    std::env::temp_dir().join(format!("db-it-{}-config", std::process::id()))
+}
+
 /// The variables that the environment of the test's caller may set and
 /// that change what `deadband run` does.
 const CALLER_VARIABLES: [&str; 7] = [
@@ -40,7 +47,10 @@ fn deadband(socket: &Path, args: &[&str]) -> Command {
         reason = "the test runs the built binary, as a person would"
     )]
     let mut command = Command::new(env!("CARGO_BIN_EXE_deadband"));
-    command.args(args).env("DEADBAND_SOCKET", socket);
+    command
+        .args(args)
+        .env("DEADBAND_SOCKET", socket)
+        .env("XDG_CONFIG_HOME", config_home());
     for name in CALLER_VARIABLES {
         command.env_remove(name);
     }
@@ -57,7 +67,7 @@ mod support {
         reason = "the test holds the daemon it started, to stop it when it ends"
     )]
     use std::process::Child;
-    use std::process::{Command, Output, Stdio};
+    use std::process::{ChildStderr, Command, Output, Stdio};
 
     use super::deadband;
 
@@ -66,7 +76,12 @@ mod support {
         clippy::disallowed_types,
         reason = "the test holds the daemon it started, to stop it when it ends"
     )]
-    pub(crate) struct Daemon(Child);
+    pub(crate) struct Daemon {
+        /// The daemon's process.
+        child: Child,
+        /// The daemon's log on standard error, after the first line.
+        log: BufReader<ChildStderr>,
+    }
 
     impl Daemon {
         /// Starts a daemon on `socket` that runs at most `max_jobs` jobs, and
@@ -86,17 +101,28 @@ mod support {
                 .spawn()
                 .expect("the daemon starts");
             let err = daemon.stderr.take().expect("piped");
+            let mut log = BufReader::new(err);
             let mut first = String::new();
-            BufReader::new(err).read_line(&mut first).expect("reads");
+            log.read_line(&mut first).expect("reads");
             assert!(first.contains("listens on"), "{first}");
-            Self(daemon)
+            Self { child: daemon, log }
+        }
+
+        /// Stops the daemon and returns what it logged after it began to
+        /// listen.
+        pub(crate) fn logged(&mut self) -> String {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let mut rest = String::new();
+            self.log.read_to_string(&mut rest).expect("the log reads");
+            rest
         }
     }
 
     impl Drop for Daemon {
         fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 
@@ -474,6 +500,87 @@ mod macos {
         assert!(run.status.success(), "{run:?}");
         assert!(started.elapsed() < Duration::from_secs(5));
     }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test writes a config file, and a partial fixture only fails that test"
+)]
+mod reclaim_config {
+    use std::path::PathBuf;
+
+    use super::{Daemon, deadband, output, socket};
+
+    /// A configuration directory whose `deadband/config.toml` lists one
+    /// reclaimer. Dropping it removes the directory.
+    struct Config(PathBuf);
+
+    impl Config {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("db-rc-{}-{name}", std::process::id()));
+            let directory = path.join("deadband");
+            std::fs::create_dir_all(&directory).expect("the directory is made");
+            std::fs::write(
+                directory.join("config.toml"),
+                "[[reclaim]]\nname = \"marker\"\ncommand = [\"/usr/bin/true\"]\n",
+            )
+            .expect("the config writes");
+            Self(path)
+        }
+    }
+
+    impl Drop for Config {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_daemon_started_with_its_own_socket_runs_no_reclaimer_from_the_config_file() {
+        let config = Config::new("own");
+        let socket = socket("own-reclaim");
+        let mut command = deadband(&socket.0, &["daemon", "--max-jobs", "1"]);
+        command.env("XDG_CONFIG_HOME", &config.0);
+        let mut daemon = Daemon::started(command);
+        // The daemon answers a request only after it has read its config.
+        assert!(output(deadband(&socket.0, &["status"])).status.success());
+        let log = daemon.logged();
+        assert!(!log.contains("marker"), "{log}");
+    }
+
+    #[test]
+    fn a_daemon_on_the_default_socket_asks_the_reclaimer_from_the_config_file() {
+        let config = Config::new("default");
+        let tmp = config.0.join("t");
+        std::fs::create_dir_all(&tmp).expect("the directory is made");
+        let mut command = deadband(
+            std::path::Path::new("unused"),
+            &["daemon", "--max-jobs", "1"],
+        );
+        command
+            .env_remove("DEADBAND_SOCKET")
+            .env("TMPDIR", &tmp)
+            .env("XDG_CONFIG_HOME", &config.0);
+        let mut daemon = Daemon::started(command);
+        let mut status = deadband(std::path::Path::new("unused"), &["status"]);
+        status.env_remove("DEADBAND_SOCKET").env("TMPDIR", &tmp);
+        assert!(output(status).status.success());
+        let log = daemon.logged();
+        assert!(log.contains("asks marker to reclaim"), "{log}");
+    }
+}
+
+#[test]
+fn the_socket_helper_removes_the_socket_and_its_lock_file_when_it_ends() {
+    let path = {
+        let socket = socket("removed");
+        let _daemon = Daemon::start(&socket.0, "1");
+        assert!(socket.0.exists());
+        socket.0.clone()
+    };
+    assert!(!path.exists());
+    assert!(!deadband::daemon::lock_path(&path).exists());
 }
 
 #[cfg(feature = "tui")]
