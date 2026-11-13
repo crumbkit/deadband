@@ -672,6 +672,31 @@ either. A plist written by hand, or by an earlier install script, with the
 same label is replaced like any other changed plist. Install refuses a file
 at that path that is not an XML property list, and changes nothing.
 
+`deadband service install` and `deadband service uninstall` each take an
+exclusive lock on `service.lock` in the state directory
+(`$XDG_STATE_HOME/deadband`, or `~/.local/state/deadband`) before they read
+the plist or ask launchd, and hold it until they finish. A second command
+that starts meanwhile looks for the lock every 100 milliseconds for about
+ten seconds. When the first command finishes in that time, the second one
+runs after it. Otherwise the second one changes nothing, names the lock
+file and exits 6 with `deadband::service::locked`; run it again once the
+first has finished. So an install racing an uninstall never loads an agent
+whose plist the uninstall then deletes. The uninstall question names the
+jobs it read before it took the lock, and uninstall asks launchd again once
+it holds it.
+
+The plist sets `KeepAlive`, so launchd starts the daemon again whenever it
+stops, and `ThrottleInterval` to 60 seconds. launchd starts a daemon that
+ran for 60 seconds or longer again at once, and waits out the rest of the
+60 seconds for one that exited sooner. A daemon exits at start when another
+daemon holds its socket, such as one started by hand with `deadband daemon`,
+so while that daemon runs launchd's daemon starts once a minute instead of
+every ten seconds, launchd's own default. When launchd has not loaded the
+agent and a daemon already answers on the socket, install says `a daemon
+that launchd did not start answers on <socket>`, loads the agent and does
+not wait for an answer. Stop that daemon yourself, and launchd's daemon
+takes the socket at its next start.
+
 When no daemon answers, `deadband status` says
 `daemon: not installed; run deadband service install` when the plist is
 missing, and `daemon: installed but not loaded; run deadband service

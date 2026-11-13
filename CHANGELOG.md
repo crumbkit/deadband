@@ -22,6 +22,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for a reclaim, an `on_stuck` command or a `/bin/ps` run is one log line,
   and the next attempt tries again. Before, a refused `/bin/ps` thread
   switched stuck detection off until the daemon restarted.
+- `deadband service install` and `deadband service uninstall` hold a lock on
+  `service.lock` in the state directory while they read and change the plist
+  and launchd. A second command waits up to about ten seconds and then
+  refuses with `deadband::service::locked`, which names the lock file, and
+  changes nothing. Before, an install racing an uninstall could load an
+  agent whose plist the uninstall then deleted.
+- The launch agent's plist sets `ThrottleInterval` to 60 seconds, so a
+  daemon that exits at start, because a daemon started by hand holds the
+  socket, starts again once a minute instead of every ten seconds. Running
+  `deadband service install` again writes the new plist. When a daemon that
+  launchd did not start already answers on the socket, install says so.
 - `deadband run` passes a SIGTERM or SIGINT that it receives on to its job,
   unchanged, keeps waiting, and exits with the job's status (143 or 130 when
   the signal ended it), so a `kill` of `deadband run` ends the job and the

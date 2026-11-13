@@ -4,9 +4,16 @@
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::thread;
 
-use super::plist::{binary_path, render};
-use super::{Counts, DaemonState, Install, LaunchAgent, ServiceFailed, install, state, uninstall};
+use crumbkit::Failure as _;
+
+use super::lock::{LOCK_FILE, LOCK_POLLS, hold};
+use super::plist::{THROTTLE_SECONDS, binary_path, render};
+use super::{
+    Counts, DaemonState, Install, LaunchAgent, SERVICE_LOCKED, ServiceFailed, Step, install, state,
+    uninstall,
+};
 use crate::testing::{FakeLaunchd, TestHome};
 
 /// A daemon with one running job and one waiting job.
@@ -22,9 +29,29 @@ const TEMP: &str = "/var/folders/xy/abc123/T/";
 fn agent(home: &Path, launchd: &Arc<FakeLaunchd>) -> LaunchAgent {
     LaunchAgent {
         home: Some(home.to_path_buf()),
+        state: Some(state_dir(home)),
         binary: Some(PathBuf::from("/Users/me/.local/bin/deadband")),
         uid: 501,
         launchd: Arc::clone(launchd) as _,
+    }
+}
+
+/// Returns the state directory under `home`, which holds the service lock.
+fn state_dir(home: &Path) -> PathBuf {
+    home.join(".local/state/deadband")
+}
+
+/// Returns the jobs closure of a daemon that answers with no jobs once
+/// launchd has loaded the agent, and is silent before, as launchd's own
+/// daemon is.
+fn answers_once_loaded(launchd: &Arc<FakeLaunchd>) -> impl FnMut(&Path) -> Option<Counts> {
+    let launchd = Arc::clone(launchd);
+    move |_| {
+        launchd
+            .loaded
+            .lock()
+            .expect("the loaded lock")
+            .then(Counts::default)
     }
 }
 
@@ -134,9 +161,11 @@ fn a_fresh_install_writes_the_plist_and_loads_the_agent() {
     let home = TestHome::new();
     let launchd = Arc::new(FakeLaunchd::new(false));
 
-    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| {
-        Some(Counts::default())
-    })
+    let report = install(
+        Some(&agent(&home, &launchd)),
+        &PLAIN,
+        answers_once_loaded(&launchd),
+    )
     .expect("installs");
 
     assert_eq!(
@@ -610,10 +639,7 @@ fn a_dry_run_prints_the_plist_and_the_steps_and_changes_nothing() {
         ..PLAIN
     };
 
-    let report = install(Some(&agent(&home, &launchd)), &dry, |_| {
-        Some(Counts::default())
-    })
-    .expect("plans");
+    let report = install(Some(&agent(&home, &launchd)), &dry, |_| None).expect("plans");
 
     assert!(!plist_path(&home).exists());
     assert!(launchd.changes().is_empty(), "{:?}", launchd.changes());
@@ -897,5 +923,217 @@ fn the_counts_line_of_a_dry_run_says_what_would_happen() {
     assert_eq!(
         counts_line(TWO, true),
         "the daemon has 1 running and 1 waiting job; the running jobs would keep running and the waiting jobs would start at once"
+    );
+}
+
+/// Takes the service lock under `home` as another service command would,
+/// and returns the open file that holds it.
+fn hold_lock(home: &Path) -> std::fs::File {
+    std::fs::create_dir_all(state_dir(home)).expect("the state directory is made");
+    crate::daemon::take_lock(&state_dir(home).join(LOCK_FILE)).expect("the lock is free")
+}
+
+/// Returns how many times `launchd` paused.
+fn pauses(launchd: &FakeLaunchd) -> usize {
+    let calls = launchd.calls.lock().expect("the calls lock");
+    calls.iter().filter(|call| *call == "pause").count()
+}
+
+#[test]
+fn install_refuses_while_another_service_command_holds_the_lock_and_changes_nothing() {
+    let home = TestHome::new();
+    let launchd = Arc::new(FakeLaunchd::new(false));
+    let _held = hold_lock(&home);
+
+    let refused = install(
+        Some(&agent(&home, &launchd)),
+        &PLAIN,
+        answers_once_loaded(&launchd),
+    );
+
+    let lock = state_dir(&home).join(LOCK_FILE);
+    match refused {
+        Err(failed @ ServiceFailed::Locked { .. }) => {
+            assert_eq!(failed.code(), &SERVICE_LOCKED);
+            assert!(
+                failed.to_string().contains(&lock.display().to_string()),
+                "{failed}"
+            );
+        }
+        other => panic!("install was not refused as locked: {other:?}"),
+    }
+    assert!(!plist_path(&home).exists());
+    let calls = launchd.calls.lock().expect("the calls lock").clone();
+    assert_eq!(
+        calls,
+        vec!["pause"; LOCK_POLLS as usize],
+        "install did something other than wait for the lock"
+    );
+}
+
+#[test]
+fn uninstall_refuses_while_another_service_command_holds_the_lock_and_keeps_the_plist() {
+    let home = TestHome::new();
+    write_plist(&home, &rendered(&home));
+    let launchd = Arc::new(FakeLaunchd::new(true));
+    let _held = hold_lock(&home);
+
+    let refused = uninstall(Some(&agent(&home, &launchd)), false, None, &[]);
+
+    assert!(
+        matches!(refused, Err(ServiceFailed::Locked { .. })),
+        "{refused:?}"
+    );
+    assert!(plist_path(&home).exists());
+    assert!(launchd.changes().is_empty(), "{:?}", launchd.changes());
+    assert!(*launchd.loaded.lock().expect("the loaded lock"));
+}
+
+#[test]
+fn a_service_command_waits_for_the_lock_and_takes_it_once_the_holder_finishes() {
+    let home = TestHome::new();
+    let mut held = Some(hold_lock(&home));
+    let mut waited = 0;
+
+    let lock = hold(&state_dir(&home), || {
+        waited += 1;
+        if waited == 3 {
+            held = None;
+        }
+    });
+
+    assert!(lock.is_ok(), "{lock:?}");
+    assert!(held.is_none());
+    assert_eq!(waited, 3);
+}
+
+#[test]
+fn the_lock_is_released_when_the_command_ends_so_the_next_command_runs() {
+    let home = TestHome::new();
+    let launchd = Arc::new(FakeLaunchd::new(false));
+    let agent = agent(&home, &launchd);
+
+    install(Some(&agent), &PLAIN, answers_once_loaded(&launchd)).expect("installs");
+    uninstall(Some(&agent), false, None, &[]).expect("uninstalls");
+
+    assert!(!plist_path(&home).exists());
+    assert_eq!(pauses(&launchd), 0, "no command waited for the lock");
+}
+
+#[test]
+fn two_concurrent_installs_load_the_agent_once_and_leave_the_rendered_plist() {
+    for _ in 0..20 {
+        let home = TestHome::new();
+        let launchd = Arc::new(FakeLaunchd::new(false));
+        let agent = agent(&home, &launchd);
+
+        let results: Vec<_> = thread::scope(|scope| {
+            let runs: Vec<_> = (0..2)
+                .map(|_| {
+                    scope.spawn(|| install(Some(&agent), &PLAIN, answers_once_loaded(&launchd)))
+                })
+                .collect();
+            runs.into_iter()
+                .map(|run| run.join().expect("the install ends"))
+                .collect()
+        });
+
+        for result in &results {
+            assert!(
+                matches!(result, Ok(_) | Err(ServiceFailed::Locked { .. })),
+                "{result:?}"
+            );
+        }
+        let bootstraps = launchd
+            .changes()
+            .iter()
+            .filter(|call| call.starts_with("bootstrap"))
+            .count();
+        assert_eq!(bootstraps, 1, "{:?}", launchd.changes());
+        assert_eq!(
+            std::fs::read_to_string(plist_path(&home)).expect("written"),
+            rendered(&home)
+        );
+    }
+}
+
+#[test]
+fn an_install_racing_an_uninstall_leaves_the_plist_only_while_launchd_has_it_loaded() {
+    for round in 0..40 {
+        let home = TestHome::new();
+        let loaded = round % 2 == 0;
+        if loaded {
+            write_plist(&home, &rendered(&home));
+        }
+        let launchd = Arc::new(FakeLaunchd::new(loaded));
+        let agent = agent(&home, &launchd);
+
+        let (installed, uninstalled) = thread::scope(|scope| {
+            let installing =
+                scope.spawn(|| install(Some(&agent), &PLAIN, answers_once_loaded(&launchd)));
+            let uninstalling = scope.spawn(|| uninstall(Some(&agent), false, None, &[]));
+            (
+                installing.join().expect("the install ends"),
+                uninstalling.join().expect("the uninstall ends"),
+            )
+        });
+
+        assert!(
+            matches!(installed, Ok(_) | Err(ServiceFailed::Locked { .. })),
+            "{installed:?}"
+        );
+        assert!(
+            matches!(uninstalled, Ok(_) | Err(ServiceFailed::Locked { .. })),
+            "{uninstalled:?}"
+        );
+        let plist = plist_path(&home).exists();
+        let still_loaded = *launchd.loaded.lock().expect("the loaded lock");
+        assert_eq!(
+            plist,
+            still_loaded,
+            "round {round}: the plist exists is {plist} while launchd has it loaded is {still_loaded}: {:?}",
+            launchd.changes()
+        );
+    }
+}
+
+#[test]
+fn an_install_says_when_a_daemon_that_launchd_did_not_start_holds_the_socket() {
+    let home = TestHome::new();
+    let launchd = Arc::new(FakeLaunchd::new(false));
+
+    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| {
+        Some(Counts::default())
+    })
+    .expect("installs");
+
+    let socket = PathBuf::from(TEMP).join("deadband.sock");
+    assert!(
+        report.value().steps.contains(&Step::HandStarted {
+            socket: socket.clone()
+        }),
+        "{:?}",
+        report.value().steps
+    );
+    assert_eq!(
+        text(&report),
+        format!(
+            "wrote ~/Library/LaunchAgents/io.github.crumbkit.deadband.plist\n\
+             a daemon that launchd did not start answers on {}, so launchd's daemon exits at start and launchd starts it again every {THROTTLE_SECONDS} seconds until that daemon ends\n\
+             loaded io.github.crumbkit.deadband",
+            socket.display()
+        )
+    );
+}
+
+#[test]
+fn the_plist_makes_launchd_wait_between_restarts_of_a_daemon_that_exits_at_start() {
+    let text = rendered(Path::new("/Users/me"));
+
+    assert!(
+        text.contains(&format!(
+            "\t<key>ThrottleInterval</key>\n\t<integer>{THROTTLE_SECONDS}</integer>\n"
+        )),
+        "{text}"
     );
 }

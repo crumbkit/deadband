@@ -37,21 +37,23 @@ fn main() -> ExitCode {
         reason = "the daemon's log and the line that says why `run` starts a job at once go to standard error, which crumbkit's Sink does not lend out"
     )]
     let stderr = std::io::stderr();
+    let service = launch_agent(environment.state.clone());
     deadband::cli::run(&Machine {
         probe: deadband::probe::System,
         socket,
         log: Arc::new(Mutex::new(stderr)),
         cores: thread::available_parallelism().ok(),
         environment,
-        service: launch_agent(),
+        service,
     })
 }
 
 /// Returns deadband's launchd agent: the home directory, the binary's path
-/// as invoked, and the user's id. It reads the environment, the working
+/// as invoked, the user's id, and `state`, the state directory that holds
+/// the service commands' lock. It reads the environment, the working
 /// directory and the process's executable path once.
 #[cfg(target_os = "macos")]
-fn launch_agent() -> Option<LaunchAgent> {
+fn launch_agent(state: Option<std::path::PathBuf>) -> Option<LaunchAgent> {
     #[expect(
         clippy::disallowed_methods,
         reason = "the entry point reads the working directory once, to make a relative executable path absolute"
@@ -62,6 +64,7 @@ fn launch_agent() -> Option<LaunchAgent> {
         .map(|exe| deadband::cli::service::plist::binary_path(&exe, cwd.as_deref()));
     Some(LaunchAgent {
         home: crumbkit::files::home(),
+        state,
         binary,
         uid: rustix::process::getuid().as_raw(),
         launchd: Arc::new(deadband::job::launchd::System),
@@ -70,6 +73,6 @@ fn launch_agent() -> Option<LaunchAgent> {
 
 /// Returns `None`, because deadband installs its service only with launchd.
 #[cfg(not(target_os = "macos"))]
-const fn launch_agent() -> Option<LaunchAgent> {
+fn launch_agent(_state: Option<std::path::PathBuf>) -> Option<LaunchAgent> {
     None
 }

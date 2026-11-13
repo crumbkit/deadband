@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use super::plist::THROTTLE_SECONDS;
 use super::{LABEL, LOG};
 
 /// The jobs that a daemon answered with: those it runs and those that wait
@@ -48,7 +49,8 @@ pub enum Step {
         path: PathBuf,
     },
     /// launchd loaded the agent. `answers` says whether a daemon answered on
-    /// the socket within a few seconds, and is absent in a dry run.
+    /// the socket within a few seconds, and is absent in a dry run and after
+    /// a `hand_started` step, when the daemon that answers is not launchd's.
     Loaded {
         /// Whether the daemon answered.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,6 +71,14 @@ pub enum Step {
     Stays {
         /// The files and directories that exist and stay.
         paths: Vec<PathBuf>,
+    },
+    /// A daemon answered on the socket before launchd loaded the agent, so
+    /// launchd did not start it. launchd's daemon exits at start while it
+    /// runs, and launchd starts it again once a minute, the plist's
+    /// `ThrottleInterval`, until that daemon ends.
+    HandStarted {
+        /// The socket the daemon answered on.
+        socket: PathBuf,
     },
     /// launchd unloaded the agent, which stopped its daemon.
     Unloaded,
@@ -191,6 +201,10 @@ impl Report {
             Step::UpToDate { path } => format!(
                 "{} is up to date and {LABEL} is loaded, so nothing changed",
                 self.shown(path)
+            ),
+            Step::HandStarted { socket } => format!(
+                "a daemon that launchd did not start answers on {}, so launchd's daemon exits at start and launchd starts it again every {THROTTLE_SECONDS} seconds until that daemon ends",
+                self.shown(socket)
             ),
             Step::Unloaded => format!("{} {LABEL}", self.verb("unload", "unloaded")),
             Step::NotLoaded => format!("{LABEL} was not loaded"),

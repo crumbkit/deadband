@@ -53,7 +53,7 @@ status.
 | environment | Reads the variables that `deadband run` uses, and gives a granted job its parallelism variables. |
 | priority | Chooses a job's lane from the priority file. |
 | throttle | The only module that changes the priority of a job. `deadband run` lowers its own priority to nice 5 before it starts a normal-lane job, and the job inherits it. |
-| cli | The commands `deadband run`, `status`, `daemon`, `service` and `top`, built on crumbkit. Its service module renders the launch agent's plist as a pure function and moves the agent between not installed, installed but not loaded, and loaded. [running.md](running.md) says how to install and run them. |
+| cli | The commands `deadband run`, `status`, `daemon`, `service` and `top`, built on crumbkit. Its service module renders the launch agent's plist as a pure function and moves the agent between not installed, installed but not loaded, and loaded. Install and uninstall hold a lock on `service.lock` in the state directory while they read and change the plist and launchd, and the plist's `ThrottleInterval` keeps launchd from restarting a daemon that exits at start more than once a minute. [running.md](running.md) says how to install and run them. |
 | tui | `deadband top`, behind the default-on Cargo feature `tui`: the terminal guard, the poll loop, a pure model and a ratatui view. It reads the daemon once a second through a request of its own, and draws its load graph from the local probe. |
 
 ## Rules that shape the code
