@@ -45,9 +45,11 @@ serde_json = { version = "1.0.154", default-features = false, features = ["std"]
 # rustix sets the umask while the daemon makes its socket, raises the limit
 # on open files, names the errors of a failed accept, and polls the listening
 # socket with a timeout (the `event` feature) so the accept loop notices that
-# the daemon should stop, all without unsafe code. crumbkit already depends on
+# the daemon should stop, all without unsafe code. The `net` feature sends a
+# reply to a client without waiting (MSG_DONTWAIT), so a client that does not
+# read never holds up a reply to another client. crumbkit already depends on
 # it on Unix.
-rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process", "event"] }
+rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process", "event", "net"] }
 
 # signal-hook gives `deadband run` a safe way to receive the SIGTERM or SIGINT
 # that its caller sends, so job/forward.rs can pass it on to the job. The eval

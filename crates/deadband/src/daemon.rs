@@ -7,8 +7,9 @@
 //! the `watch` module that flags jobs with no activity. Each thread that changes
 //! the queue or the pressure starts every job that the admission rule then
 //! lets start, under the one lock that guards the queue, and writes
-//! [`Reply::Granted`] to that job's client. The daemon never starts, stops
-//! or signals a job; each client runs its own job.
+//! [`Reply::Granted`](crate::protocol::Reply::Granted) to that job's client
+//! after it releases the lock, as the `reply` module describes. The daemon
+//! never starts, stops or signals a job; each client runs its own job.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -22,17 +23,19 @@ use std::time::{Duration, Instant};
 
 use self::alive::{Ending, age, passing, unstarted, wait_for_connection};
 use self::reading::{priority_active, read_machine};
+use self::reply::deliver;
 use self::timeline::Ended;
 use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
 use crate::history::{Arrival, Recorder, Tally};
 use crate::probe::{Pressure, Probe};
-use crate::protocol::{Job, Label, Reply, write_line};
+use crate::protocol::{Job, Label};
 use crate::reclaim::{self, ReclaimLock, Reclaimed, Resource, Watch};
 use crate::spawn;
 
 mod alive;
 mod bind;
 mod reading;
+mod reply;
 mod seat;
 mod settings;
 #[cfg(test)]
@@ -50,7 +53,8 @@ pub use self::settings::{Settings, Watching, default_max_jobs};
 pub const SAMPLE_EVERY: Duration = Duration::from_secs(1);
 
 /// How long the daemon waits for a client to take a reply before it counts
-/// the client as gone.
+/// the client as gone. One delivery of grant and queued replies waits at
+/// most this long in all, however many of their clients do not read.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// How long the daemon waits for a new connection's first line before it
@@ -70,8 +74,9 @@ pub type Log = Arc<Mutex<dyn Write + Send>>;
 struct Waiter {
     /// The job as its client described it.
     job: Job,
-    /// The connection that the daemon writes the grant to.
-    stream: UnixStream,
+    /// The connection that the daemon writes the grant to, which a
+    /// delivery shares after the queue lock is released.
+    stream: Arc<UnixStream>,
     /// The job's label as `deadband top` shows it.
     label: Label,
     /// When the job asked to start.
@@ -144,32 +149,6 @@ impl State {
             max_jobs: self.settings.max_jobs,
             cores: self.settings.cores,
             reserve_lanes: self.reserve_lanes,
-        }
-    }
-
-    /// Starts every waiting job that the admission rule lets start, and
-    /// writes the grant to each one's client. A client that cannot take
-    /// the grant is gone, so its job leaves the queue and frees its place.
-    fn grant(&mut self) {
-        let limits = self.limits();
-        loop {
-            let now = Instant::now();
-            let reading = self.fresh_reading(now).copied();
-            let started = self.queue.admit(reading.as_ref(), &limits, now);
-            if started.is_empty() {
-                return;
-            }
-            for (id, jobs) in started {
-                self.count_started(id);
-                let granted = Reply::Granted { jobs };
-                let delivered = self
-                    .queue
-                    .running_job(id)
-                    .is_some_and(|waiter| write_line(&mut &waiter.stream, &granted).is_ok());
-                if !delivered {
-                    self.record(id, None, None);
-                }
-            }
         }
     }
 
@@ -334,13 +313,21 @@ fn sample(
         state.stale_noted = false;
         state.reserve_lanes = reserve_lanes;
         state.observe();
-        state.grant();
+        let replies = state.grant();
         state.write_machine(Instant::now());
-        if let Some(resource) = state.reclaim_now() {
+        let reclaim = state.reclaim_now().map(|resource| {
             let config = state.settings.reclaim.clone();
             let lock_directory = state.settings.history.clone();
-            let quiet = state.watch.quiet(resource);
-            drop(state);
+            (
+                config,
+                lock_directory,
+                resource,
+                state.watch.quiet(resource),
+            )
+        });
+        drop(state);
+        deliver(shared, replies);
+        if let Some((config, lock_directory, resource, quiet)) = reclaim {
             start_reclaim(shared, config, lock_directory, resource, quiet, log);
         }
     }

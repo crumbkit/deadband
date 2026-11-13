@@ -84,6 +84,14 @@ status.
   a new daemon, and clients start their jobs at once while none listens.
 - A failure to record a job never delays, holds or ends that job. The daemon
   does no file I/O while it holds the queue lock.
+- The daemon writes no reply to a client while it holds the queue lock. A
+  thread decides each grant and queued reply under the lock, releases it, and
+  then writes the replies together, each as soon as its socket can take it
+  (`daemon/reply.rs`). A client that does not read delays no other client's
+  reply and no other thread. Its reply gets at most one second from the
+  start of the delivery, and a grant that is not written by then frees the
+  job's place. The daemon then shuts that connection down, so the client
+  sees the daemon close and starts its job at once.
 - No source file outside tests is longer than 400 lines.
 
 ## Reclaiming memory and disk
