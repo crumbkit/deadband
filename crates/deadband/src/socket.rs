@@ -54,6 +54,26 @@ pub const VARIABLES: &[Variable] = &[
     },
 ];
 
+/// Returns the path of the daemon's socket for a caller whose per-user
+/// temporary directory is `user_directory`, which on macOS is the directory
+/// that `getconf DARWIN_USER_TEMP_DIR` prints.
+///
+/// The launchd daemon listens in that directory whatever `TMPDIR` its callers
+/// have, so `run` and `status` look there too. `DEADBAND_SOCKET` still wins.
+/// When `user_directory` is `None`, the path is the one [`path`] returns.
+pub fn path_in_user_directory(
+    read: impl Fn(&str) -> Option<OsString>,
+    user_directory: Option<PathBuf>,
+) -> PathBuf {
+    let Some(directory) = user_directory else {
+        return path(read);
+    };
+    path(|name| match name {
+        "TMPDIR" => Some(directory.clone().into_os_string()),
+        other => read(other),
+    })
+}
+
 /// Returns the path of the daemon's socket, reading each variable with
 /// `read`, which returns `None` for an absent variable.
 ///

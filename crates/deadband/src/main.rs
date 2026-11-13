@@ -20,7 +20,8 @@ fn main() -> ExitCode {
         clippy::disallowed_methods,
         reason = "the entry point reads the environment once, for the variables that deadband::socket::VARIABLES lists"
     )]
-    let socket = deadband::socket::path(|name| std::env::var_os(name));
+    let socket =
+        deadband::socket::path_in_user_directory(|name| std::env::var_os(name), user_temp_dir());
     #[expect(
         clippy::disallowed_methods,
         reason = "the entry point reads the environment and the working directory once, for the variables that deadband::environment::VARIABLES lists"
@@ -42,6 +43,23 @@ fn main() -> ExitCode {
         environment,
         service: launch_agent(),
     })
+}
+
+/// Returns the directory that `getconf DARWIN_USER_TEMP_DIR` prints, which is
+/// where the launchd daemon listens whatever `TMPDIR` the caller has. It
+/// asks once per process, and returns `None` when getconf fails so that the
+/// socket falls back to `TMPDIR`.
+#[cfg(target_os = "macos")]
+fn user_temp_dir() -> Option<std::path::PathBuf> {
+    use deadband::job::launchd::Launchd;
+    deadband::job::launchd::System.temp_dir().ok()
+}
+
+/// Returns `None`, because only macOS has a per-user directory apart from
+/// `TMPDIR`.
+#[cfg(not(target_os = "macos"))]
+const fn user_temp_dir() -> Option<std::path::PathBuf> {
+    None
 }
 
 /// Returns deadband's launchd agent: the home directory, the binary's path

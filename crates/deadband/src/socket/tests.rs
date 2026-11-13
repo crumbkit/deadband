@@ -2,9 +2,9 @@
 
 use std::cell::RefCell;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use super::{VARIABLES, path};
+use super::{VARIABLES, path, path_in_user_directory};
 
 /// Returns a reader of an environment that holds only `vars`.
 fn environment(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
@@ -53,6 +53,30 @@ fn the_socket_is_in_tmp_with_the_user_name_when_no_directory_is_set() {
         Path::new("/tmp/deadband-me.sock")
     );
     assert_eq!(path(environment(&[])), Path::new("/tmp/deadband.sock"));
+}
+
+#[test]
+fn the_per_user_directory_beats_the_callers_tmpdir_for_the_default_socket() {
+    let socket = path_in_user_directory(
+        environment(&[("TMPDIR", "/private/other/"), ("USER", "me")]),
+        Some(PathBuf::from("/var/folders/ab/T/")),
+    );
+    assert_eq!(socket, Path::new("/var/folders/ab/T/deadband.sock"));
+}
+
+#[test]
+fn deadband_socket_beats_the_per_user_directory() {
+    let socket = path_in_user_directory(
+        environment(&[("DEADBAND_SOCKET", "/run/me/db.sock")]),
+        Some(PathBuf::from("/var/folders/ab/T/")),
+    );
+    assert_eq!(socket, Path::new("/run/me/db.sock"));
+}
+
+#[test]
+fn the_callers_tmpdir_names_the_socket_when_no_per_user_directory_is_known() {
+    let socket = path_in_user_directory(environment(&[("TMPDIR", "/tmp/me")]), None);
+    assert_eq!(socket, Path::new("/tmp/me/deadband.sock"));
 }
 
 #[test]
