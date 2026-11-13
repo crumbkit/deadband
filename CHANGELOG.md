@@ -18,9 +18,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reach a daemon every 100 ms for 5 seconds and asks again, so a restarted
   daemon queues the job instead of every waiting job starting at once. The
   job starts at once only when no daemon answers within the 5 seconds.
+- A reclaim ends when its reclaimer exits, even when a background process
+  of the reclaimer still holds its standard output open. Before, such a
+  process kept the reclaim running and the daemon started no later reclaim.
+- `deadband status` prints `reclaiming: <need>, started <age> ago` while a
+  reclaim runs, and the status JSON gains `reclaiming` with the need and the
+  start time.
 
 ### Added
 
+- A daemon started with `DEADBAND_SOCKET` set ignores `config.toml`, logs one
+  line saying so, and runs no reclaimer and no `on_stuck` command. A reclaim
+  holds a lock on `reclaim.lock` in the state directory while it runs, so
+  daemons of one user reclaim one at a time.
 - `deadband service install` writes and loads the launchd agent that runs
   `deadband daemon` at login and restarts it when it stops, with `TMPDIR`
   and `PATH` set for launchd. It leaves an identical, loaded plist alone. It
@@ -31,9 +41,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the agent and deletes the plist after it asks, or at once with `--yes`.
   Both take `--dry-run`, and on platforms other than macOS both exit with
   `deadband::service::unsupported`.
+- `deadband service install` reports `daemon answers` or `daemon does not
+  answer; see ~/Library/Logs/deadband.log` after it loads the agent, having
+  asked the daemon up to 20 times, 100 milliseconds apart.
+- `deadband service uninstall` and `install --restart` print how many jobs
+  the daemon runs and how many wait before they unload the agent, and the
+  uninstall question names them. They ask the daemon that launchd runs, and
+  uninstall asks only when launchd has loaded the agent. Uninstall ends by
+  listing the socket, lock, log, history and configuration that stay.
 - When no daemon answers on macOS, `deadband status` says whether the agent
-  is not installed or not loaded and names `deadband service install`.
-  `deadband status --json` gives the state in `daemon_state`.
+  is not installed, installed but not loaded, loaded but not answering, or
+  could not be checked, and names `deadband service install` or the log.
+  `deadband status --json` gives the state in `daemon_state`: `running`,
+  `not_loaded`, `not_installed`, `loaded_silent` or `launchd_unasked`.
 - Every command accepts `--no-input`, which makes a command that would ask
   a question refuse instead.
 - `DEADBAND_SOCKET_DIR` names the directory that holds `deadband.sock`. It

@@ -76,8 +76,9 @@ pub trait Launchd: fmt::Debug + Send + Sync {
     /// Returns [`Failed`] when launchctl fails.
     fn bootout(&self, target: &str) -> Result<(), Failed>;
 
-    /// Waits [`PAUSE`] before the next [`Launchd::is_loaded`] poll, while a
-    /// booted-out daemon exits.
+    /// Waits [`PAUSE`] before the next poll: the next [`Launchd::is_loaded`]
+    /// while a booted-out daemon exits, or the next ask of a freshly loaded
+    /// daemon's socket.
     fn pause(&self);
 }
 
@@ -114,7 +115,7 @@ impl Launchd for System {
     fn pause(&self) {
         #[expect(
             clippy::disallowed_methods,
-            reason = "launchd sends no event when a booted-out service has exited, so install polls launchctl print; PAUSE names the wait"
+            reason = "launchd sends no event when a booted-out service has exited or a loaded one has bound its socket, so install polls launchctl print and the socket; PAUSE names the wait"
         )]
         std::thread::sleep(PAUSE);
     }

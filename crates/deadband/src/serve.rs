@@ -19,10 +19,17 @@ use crate::reclaim::{self, CONFIG_FILE, program};
 fn reclaim_config<P>(machine: &Machine<P>) -> reclaim::Config {
     let Some(path) = machine
         .environment
-        .config
-        .as_ref()
-        .map(|config| config.join(CONFIG_FILE))
+        .reclaim_directory()
+        .map(|directory| directory.join(CONFIG_FILE))
     else {
+        if machine.environment.own_socket {
+            note(
+                &machine.log,
+                format_args!(
+                    "the daemon runs on its own socket, so it reads no config.toml and runs no reclaimer and no on_stuck command"
+                ),
+            );
+        }
         return reclaim::Config::default();
     };
     let config = reclaim::Config::load(&path).unwrap_or_else(|error| {

@@ -14,6 +14,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -26,7 +27,7 @@ use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
 use crate::history::{Arrival, Recorder, Tally};
 use crate::probe::{Pressure, Probe};
 use crate::protocol::{Job, Label, Reply, Request, read_line, write_line};
-use crate::reclaim::{self, Reclaimed, Resource, Watch};
+use crate::reclaim::{self, ReclaimLock, Reclaimed, Resource, Watch};
 
 mod alive;
 mod bind;
@@ -317,9 +318,10 @@ fn sample(
         state.write_machine(Instant::now());
         if let Some(resource) = state.reclaim_now() {
             let config = state.settings.reclaim.clone();
+            let lock_directory = state.settings.history.clone();
             let quiet = state.watch.quiet(resource);
             drop(state);
-            start_reclaim(shared, config, resource, quiet, log);
+            start_reclaim(shared, config, lock_directory, resource, quiet, log);
         }
     }
 }
@@ -327,10 +329,12 @@ fn sample(
 /// Runs the reclaimers of `config` for `resource` on a thread of their
 /// own, so admission never waits for them, and records each outcome for
 /// `deadband status`. `quiet` says the last reclaim of `resource` freed
-/// nothing.
+/// nothing. The reclaim holds the lock in `lock_directory` (the state
+/// directory) while it runs; a daemon that finds it held logs that and ends.
 fn start_reclaim(
     shared: &Shared,
     config: reclaim::Config,
+    lock_directory: Option<PathBuf>,
     resource: Resource,
     quiet: bool,
     log: &Log,
@@ -338,6 +342,14 @@ fn start_reclaim(
     let shared = Arc::clone(shared);
     let log = Arc::clone(log);
     thread::spawn(move || {
+        let Some(_lock) = ReclaimLock::take(lock_directory.as_deref()) else {
+            note(
+                &log,
+                format_args!("another daemon is reclaiming, so this daemon starts no reclaim now"),
+            );
+            lock(&shared).watch.skipped(Instant::now());
+            return;
+        };
         let freed = reclaim::reclaim(&config, resource, quiet, &log, &mut |reclaimed| {
             lock(&shared).reclaimed = Some(reclaimed);
         });

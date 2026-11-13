@@ -22,6 +22,7 @@ use crate::protocol::{
     Exit, Job, JobState, Jobs, Label, OutsideJobs, Reply, Request, Short, StuckJob, read_line,
     write_line,
 };
+use crate::reclaim::Reclaiming;
 use crate::testing::{TestSocket, socket_path};
 
 mod reclaim;
@@ -699,6 +700,7 @@ fn running_jobs() -> Jobs {
         waiting: Vec::new(),
         held: None,
         reclaim: None,
+        reclaiming: None,
         stuck: Vec::new(),
         busiest: None,
         unreadable: false,
@@ -742,6 +744,48 @@ fn status_lists_a_stuck_job_first_and_exits_1() {
         1,
         "{err}"
     );
+}
+
+#[test]
+fn status_prints_a_reclaim_in_progress_after_the_jobs() {
+    let test = Test::new(Fixed);
+    let now = std::time::SystemTime::now();
+    answer_status(
+        &test,
+        Jobs {
+            reclaiming: Some(Box::new(Reclaiming {
+                need: "memory=4G".to_owned(),
+                since: crumbkit::Age::since(now - Duration::from_secs(185), now),
+            })),
+            ..running_jobs()
+        },
+    );
+    let (_, out, _) = test.run(&["status"]);
+    assert!(
+        out.ends_with("\nreclaiming: memory=4G, started 3m ago\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn status_json_holds_the_reclaim_in_progress() {
+    let test = Test::new(Fixed);
+    let now = std::time::SystemTime::now();
+    answer_status(
+        &test,
+        Jobs {
+            reclaiming: Some(Box::new(Reclaiming {
+                need: "memory=4G".to_owned(),
+                since: crumbkit::Age::since(now - Duration::from_secs(185), now),
+            })),
+            ..running_jobs()
+        },
+    );
+    let (_, json, _) = test.run(&["status", "--json"]);
+    let value: serde_json::Value = serde_json::from_str(&json).expect("JSON");
+    let shown = &value["data"]["daemon"]["reclaiming"];
+    assert_eq!(shown["need"], "memory=4G");
+    assert!(shown["since"].is_string(), "{shown}");
 }
 
 #[test]

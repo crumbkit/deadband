@@ -509,9 +509,16 @@
           ]
         },
         {
-          "description": "launchd loaded the agent.",
+          "description": "launchd loaded the agent. `answers` says whether a daemon answered on\nthe socket within a few seconds, and is absent in a dry run.",
           "type": "object",
           "properties": {
+            "answers": {
+              "description": "Whether the daemon answered.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "step": {
               "type": "string",
               "const": "loaded"
@@ -519,6 +526,67 @@
           },
           "required": [
             "step"
+          ]
+        },
+        {
+          "description": "The daemon held these jobs when the step after this one stopped it.",
+          "type": "object",
+          "properties": {
+            "running": {
+              "description": "The jobs that run.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "step": {
+              "type": "string",
+              "const": "counted"
+            },
+            "waiting": {
+              "description": "The jobs that wait for a place.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "step",
+            "running",
+            "waiting"
+          ]
+        },
+        {
+          "description": "The daemon did not answer before the step after this one stopped it,\nso its jobs are unknown.",
+          "type": "object",
+          "properties": {
+            "step": {
+              "type": "string",
+              "const": "no_count"
+            }
+          },
+          "required": [
+            "step"
+          ]
+        },
+        {
+          "description": "These files stay after uninstall. The person deletes them to remove\ndeadband's data.",
+          "type": "object",
+          "properties": {
+            "paths": {
+              "description": "The files and directories that exist and stay.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "step": {
+              "type": "string",
+              "const": "stays"
+            }
+          },
+          "required": [
+            "step",
+            "paths"
           ]
         },
         {

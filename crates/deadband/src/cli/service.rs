@@ -22,20 +22,27 @@ use serde::Serialize;
 
 use crate::job::launchd::Launchd;
 
+mod daemon;
 mod failed;
 pub mod plist;
 mod report;
 #[cfg(test)]
 mod tests;
 
+pub use self::daemon::held;
+use self::daemon::{socket_in, wait_for_answer, wait_until_unloaded};
 pub use self::failed::{
     SERVICE_LAUNCHCTL_FAILED, SERVICE_PLIST_UNREADABLE, SERVICE_UNLOCATED, SERVICE_UNSUPPORTED,
     SERVICE_WRITE_FAILED, ServiceFailed,
 };
-pub use self::report::{Report, Step};
+pub use self::report::{Counts, Report, Step};
 
 /// The label of deadband's launch agent.
 pub const LABEL: &str = "io.github.crumbkit.deadband";
+
+/// The daemon's log, under the home directory. The launch agent's plist sends
+/// the daemon's standard error to it.
+pub const LOG: &str = "Library/Logs/deadband.log";
 
 /// The commands for deadband's launchd service.
 #[derive(Debug, Subcommand)]
@@ -132,20 +139,27 @@ pub enum DaemonState {
     NotLoaded,
     /// No plist exists.
     NotInstalled,
+    /// launchd has loaded the agent and no daemon answers, so the daemon
+    /// may have exited at start; its log says why.
+    LoadedSilent,
+    /// launchd could not say whether it loaded the agent, and no daemon
+    /// answers.
+    LaunchdUnasked,
 }
 
-/// Returns the agent's state when no daemon answers: not installed or not
-/// loaded, or `None` when launchd has loaded it or cannot say.
+/// Returns the agent's state when no daemon answers, or `None` when the
+/// home directory is unknown.
 #[must_use]
 pub fn state(agent: &LaunchAgent) -> Option<DaemonState> {
     let path = plist_path(agent.home.as_deref()?);
     if !path.exists() {
         return Some(DaemonState::NotInstalled);
     }
-    match agent.launchd.is_loaded(&agent.target()) {
-        Ok(false) => Some(DaemonState::NotLoaded),
-        Ok(true) | Err(_) => None,
-    }
+    Some(match agent.launchd.is_loaded(&agent.target()) {
+        Ok(false) => DaemonState::NotLoaded,
+        Ok(true) => DaemonState::LoadedSilent,
+        Err(_) => DaemonState::LaunchdUnasked,
+    })
 }
 
 /// Installs the agent as `install` asks. `jobs` returns the running and
@@ -159,7 +173,7 @@ pub fn state(agent: &LaunchAgent) -> Option<DaemonState> {
 pub fn install(
     agent: Option<&LaunchAgent>,
     install: &Install,
-    jobs: impl FnOnce(&Path) -> Option<usize>,
+    mut jobs: impl FnMut(&Path) -> Option<Counts>,
 ) -> Result<Prose<Report>, ServiceFailed> {
     let agent = agent.ok_or(ServiceFailed::Unsupported)?;
     let home = located(agent.home.as_deref(), "the home directory")?;
@@ -177,30 +191,32 @@ pub fn install(
         report.plist = Some(text.clone());
     }
     let changed = existing.as_deref() != Some(text.as_str());
+    let socket = socket_in(&temp_dir);
     if loaded {
         if !changed && !install.restart {
             report.steps.push(Step::UpToDate { path });
             return Ok(Prose::new(report));
         }
-        if !install.restart {
-            // The daemon that launchd runs listens under the directory that
-            // getconf prints, whatever the caller's TMPDIR says.
-            let socket = crate::socket::path(|name| {
-                (name == "TMPDIR").then(|| temp_dir.clone().into_os_string())
-            });
-            // The old plist stays when the reload waits, so a later install
-            // still sees the change. A loaded agent whose daemon does not
-            // answer may hold jobs, so it counts as busy.
-            match jobs(&socket) {
-                Some(0) => {}
-                Some(jobs) => {
-                    report.steps.push(Step::Kept { jobs });
-                    return Ok(Prose::new(report));
-                }
-                None => {
-                    report.steps.push(Step::Unanswered);
-                    return Ok(Prose::new(report));
-                }
+        // The old plist stays when the reload waits, so a later install
+        // still sees the change. A loaded agent whose daemon does not
+        // answer may hold jobs, so it counts as busy. With --restart the
+        // reload goes ahead, and the report says what the daemon held.
+        match (jobs(&socket), install.restart) {
+            (Some(counts), true) => report.steps.push(Step::Counted {
+                running: counts.running,
+                waiting: counts.waiting,
+            }),
+            (None, true) => report.steps.push(Step::NoCount),
+            (Some(counts), false) if counts.total() == 0 => {}
+            (Some(counts), false) => {
+                report.steps.push(Step::Kept {
+                    jobs: counts.total(),
+                });
+                return Ok(Prose::new(report));
+            }
+            (None, false) => {
+                report.steps.push(Step::Unanswered);
+                return Ok(Prose::new(report));
             }
         }
         if !install.dry_run {
@@ -220,13 +236,15 @@ pub fn install(
     } else {
         report.steps.push(Step::Unchanged { path: path.clone() });
     }
+    let mut answers = None;
     if !install.dry_run {
         agent
             .launchd
             .bootstrap(&agent.domain(), &path)
             .map_err(ServiceFailed::Launchctl)?;
+        answers = Some(wait_for_answer(agent, || jobs(&socket).is_some()));
     }
-    report.steps.push(Step::Loaded);
+    report.steps.push(Step::Loaded { answers });
     Ok(Prose::new(report))
 }
 
@@ -240,6 +258,8 @@ pub fn install(
 pub fn uninstall(
     agent: Option<&LaunchAgent>,
     dry_run: bool,
+    daemon: Option<Counts>,
+    stays: &[PathBuf],
 ) -> Result<Prose<Report>, ServiceFailed> {
     let agent = agent.ok_or(ServiceFailed::Unsupported)?;
     let home = located(agent.home.as_deref(), "the home directory")?;
@@ -250,6 +270,12 @@ pub fn uninstall(
         .is_loaded(&agent.target())
         .map_err(ServiceFailed::Launchctl)?
     {
+        report
+            .steps
+            .push(daemon.map_or(Step::NoCount, |counts| Step::Counted {
+                running: counts.running,
+                waiting: counts.waiting,
+            }));
         if !dry_run {
             agent
                 .launchd
@@ -260,35 +286,27 @@ pub fn uninstall(
     } else {
         report.steps.push(Step::NotLoaded);
     }
-    if !path.exists() {
-        report.steps.push(Step::Absent { path });
-        return Ok(Prose::new(report));
-    }
-    if !dry_run {
-        std::fs::remove_file(&path).map_err(|error| ServiceFailed::Delete {
-            path: path.clone(),
-            error,
-        })?;
-    }
-    report.steps.push(Step::Deleted { path });
-    Ok(Prose::new(report))
-}
-
-/// The most `launchctl print` polls that install makes after a bootout,
-/// [`PAUSE`](crate::job::launchd::PAUSE) apart, about five seconds in all.
-const UNLOAD_POLLS: u32 = 50;
-
-/// Waits until launchd no longer lists the agent, which happens once the
-/// booted-out daemon has exited, so the bootstrap that follows is not
-/// refused. After [`UNLOAD_POLLS`] polls, or when a poll fails, it stops
-/// waiting and the bootstrap reports what launchd says.
-fn wait_until_unloaded(agent: &LaunchAgent) {
-    for _ in 0..UNLOAD_POLLS {
-        match agent.launchd.is_loaded(&agent.target()) {
-            Ok(true) => agent.launchd.pause(),
-            Ok(false) | Err(_) => return,
+    if path.exists() {
+        if !dry_run {
+            std::fs::remove_file(&path).map_err(|error| ServiceFailed::Delete {
+                path: path.clone(),
+                error,
+            })?;
         }
+        report.steps.push(Step::Deleted { path });
+    } else {
+        report.steps.push(Step::Absent { path });
     }
+    let paths: Vec<PathBuf> = stays
+        .iter()
+        .cloned()
+        .chain([home.join(LOG)])
+        .filter(|stay| stay.exists())
+        .collect();
+    if !paths.is_empty() {
+        report.steps.push(Step::Stays { paths });
+    }
+    Ok(Prose::new(report))
 }
 
 /// Returns `found`, or the refusal that names `what` when it is `None`.

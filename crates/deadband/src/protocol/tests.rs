@@ -144,6 +144,7 @@ fn each_reply_is_one_json_line() {
         waiting: Vec::new(),
         held: None,
         reclaim: None,
+        reclaiming: None,
         stuck: Vec::new(),
         busiest: None,
         unreadable: false,

@@ -368,7 +368,8 @@ a new daemon, and `deadband run` starts its jobs at once while none listens.
 
 `deadband status` prints the load, memory pressure and swap, followed by the
 running and waiting jobs and the last reclaim, or `daemon: not running`
-when no daemon answers. When jobs wait, it also prints a line that names the
+when no daemon answers. While a reclaim runs, it also prints
+`reclaiming: <need>, started <age> ago`. When jobs wait, it also prints a line that names the
 first waiting job and says why it does not start yet.
 
 ## Reclaiming memory and disk
@@ -378,6 +379,12 @@ daemon can ask a reclaimer, an external command that you name, to free
 memory or disk when the machine runs short. A reclaimer might stop the
 servers of idle workspaces, or delete build output that can be rebuilt.
 deadband never stops anything itself; the reclaimer decides what to stop.
+
+A daemon started with `DEADBAND_SOCKET` set ignores the config file, logs one
+line saying so, and runs no reclaimer and no `on_stuck` command. A reclaim
+holds a lock on `reclaim.lock` in the state directory while it runs, so
+daemons of one user never reclaim together; a daemon that finds the lock held
+logs one line and tries again after `reclaim_after`.
 
 The daemon reads its config file once, when it starts. The file is
 `deadband/config.toml` in `$XDG_CONFIG_HOME`, or
@@ -473,7 +480,10 @@ stops a reclaimer. When one runs past its timeout, the daemon stops
 waiting for it and starts no other reclaim until it exits.
 
 The reclaimer reads nothing on standard input, and the daemon discards its
-standard error. It prints one JSON object on standard output. deadband
+standard error. The daemon stops reading the report 250 ms after the
+reclaimer exits, so output that a background process writes after that is
+dropped, and a report that a loaded machine delivers later than that counts
+as failed. It prints one JSON object on standard output. deadband
 reads only `data`, an array of objects, and two fields of each object:
 
 | Field | Meaning |
@@ -495,6 +505,11 @@ failed, if it did, such as
 `deadband status --json` gives the same in the daemon's `reclaim` field,
 where `at` is the time the reclaim ended in RFC 3339 in UTC with
 milliseconds.
+
+While a reclaimer runs, `deadband status` also shows `reclaiming: <need>, started
+<time> ago`, and `deadband status --json` gives it in
+the `reclaiming` field: `need`, and `since` as the start time in RFC 3339 in
+UTC, or `null` when no reclaim runs.
 
 ## Embedding deadband in a program
 
@@ -653,8 +668,24 @@ at that path that is not an XML property list, and changes nothing.
 When no daemon answers, `deadband status` says
 `daemon: not installed; run deadband service install` when the plist is
 missing, and `daemon: installed but not loaded; run deadband service
-install` when launchd has not loaded it. `deadband status --json` gives the
-same state in `daemon_state`: `running`, `not_loaded` or `not_installed`.
+install` when launchd has not loaded it. When launchd has loaded the agent
+and no daemon answers, it says `daemon: loaded but not answering; see
+~/Library/Logs/deadband.log`, because the daemon may have exited at start.
+When launchd could not be asked, it says `daemon: not running, and launchd
+could not be asked whether it loaded the agent`. `deadband status --json`
+gives the same state in `daemon_state`: `running`, `not_loaded`,
+`not_installed`, `loaded_silent` or `launchd_unasked`.
+
+`deadband service install` asks the daemon for its jobs up to 20 times, 100
+milliseconds apart, after it loads the agent, and reports `daemon answers` or
+`daemon does not answer; see ~/Library/Logs/deadband.log`. When nothing
+listens, the asks fail at once and the wait is about two seconds. A process
+that accepts the connection and never replies holds each ask for two
+seconds, so the wait can reach 42 seconds. `deadband service uninstall` and
+`install --restart` ask the daemon that launchd runs, on the socket under
+the per-user temporary directory, and print its running and waiting jobs
+first. Uninstall asks only when launchd has loaded the agent. It lists the
+socket, lock, log, history and configuration that stay.
 
 Stop the daemon and remove the agent with:
 

@@ -172,6 +172,54 @@ fn no_reclaim_starts_while_one_runs_or_within_reclaim_after_of_its_end() {
 }
 
 #[test]
+fn a_skipped_reclaim_rests_exactly_reclaim_after_even_after_a_fruitless_one() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let start = Instant::now();
+    assert_eq!(
+        watch.observe(&config, false, true, start),
+        Some(Resource::Disk)
+    );
+    watch.ended(0, start);
+    let second = start + AFTER * 2;
+    assert_eq!(
+        watch.observe(&config, false, true, second),
+        Some(Resource::Disk)
+    );
+    watch.skipped(second);
+    assert_eq!(
+        watch.observe(&config, false, true, second + AFTER / 2),
+        None
+    );
+    assert_eq!(
+        watch.observe(&config, false, true, second + AFTER),
+        Some(Resource::Disk)
+    );
+}
+
+#[test]
+fn a_reclaim_skipped_for_a_held_lock_rests_reclaim_after_and_is_not_counted_as_fruitless() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let start = Instant::now();
+    assert_eq!(
+        watch.observe(&config, false, true, start),
+        Some(Resource::Disk)
+    );
+    let skipped = start + AFTER;
+    watch.skipped(skipped);
+    assert!(!watch.quiet(Resource::Disk));
+    assert_eq!(
+        watch.observe(&config, false, true, skipped + AFTER / 2),
+        None
+    );
+    assert_eq!(
+        watch.observe(&config, false, true, skipped + AFTER),
+        Some(Resource::Disk)
+    );
+}
+
+#[test]
 fn with_no_reclaimer_configured_nothing_is_asked() {
     let config = Config::default();
     let mut watch = Watch::default();
@@ -467,6 +515,27 @@ fn the_last_reclaim_holds_the_time_it_ended_in_json_and_reads_it_back() {
     assert_eq!(json["at"], "2026-10-07T12:01:07.000Z");
     let read: Reclaimed = serde_json::from_value(json).expect("the reclaim reads back");
     assert_eq!(read.at.at(), at);
+}
+
+#[test]
+fn a_running_reclaim_names_its_need_and_when_it_started_until_it_ends() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let start = Instant::now();
+    let wall = std::time::SystemTime::now();
+    assert_eq!(watch.reclaiming(&config, wall), None);
+    watch.observe(&config, true, false, start);
+    assert_eq!(
+        watch.observe(&config, true, false, start + AFTER),
+        Some(Resource::Memory)
+    );
+    let shown = watch
+        .reclaiming(&config, wall + Duration::from_secs(125))
+        .expect("a reclaim runs");
+    assert_eq!(shown.need, "memory=4G");
+    assert_eq!(shown.to_string(), "reclaiming: memory=4G, started 2m ago");
+    watch.ended(0, start + AFTER);
+    assert_eq!(watch.reclaiming(&config, wall), None);
 }
 
 #[test]
