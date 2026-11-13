@@ -80,16 +80,16 @@ correction = "a later deadband pull request turns it on"
 
 [[exception]]
 rule = "PROC-1"
-paths = ["crates/deadband/src/job.rs", "crates/deadband/src/job/reclaimer.rs", "crates/deadband/src/job/busiest.rs", "crates/deadband/src/job/on_stuck.rs"]
+paths = ["crates/deadband/src/job.rs", "crates/deadband/src/job/forward.rs", "crates/deadband/src/job/reclaimer.rs", "crates/deadband/src/job/busiest.rs", "crates/deadband/src/job/on_stuck.rs"]
 owner = "Luke"
 reason = "`deadband run` exists to run the command its caller names, so job.rs's one operation takes an arbitrary program and arguments. The caller could run the same command without deadband, so deadband adds no privilege. job.rs states PROC-2's five items for the operation. job/reclaimer.rs runs the reclaimer command and job/on_stuck.rs the `on_stuck` command that the daemon's config file names, which the person who runs the daemon writes and could run as themselves. job/busiest.rs runs the fixed command `/bin/ps`, whose words the daemon passes. Each of the three states PROC-2's five items for its operation."
 correction = "a change to the child-process profile that covers a wrapper which runs its caller's command, or a decision that records this one"
 
 [[exception]]
 rule = "CLI-2"
-paths = ["crates/deadband/src/cli.rs", "crates/deadband/src/cli/commands.rs", "crates/deadband/src/job.rs"]
+paths = ["crates/deadband/src/cli.rs", "crates/deadband/src/cli/commands.rs", "crates/deadband/src/job.rs", "crates/deadband/src/job/forward.rs"]
 owner = "Luke"
-reason = "`deadband run` and `deadband daemon` print no crumbkit Document; both declare `prints_no_result`. `run` starts its job with std's Command in place of `crumbkit_child::hand_over`. crumbkit-child is a crate new to deadband's graph, which needs an eval first. Without it, Ctrl-C reaches both deadband and the job, and deadband can end before the job does."
+reason = "`deadband run` and `deadband daemon` print no crumbkit Document; both declare `prints_no_result`. `run` starts its job with std's Command in place of `crumbkit_child::hand_over`. crumbkit-child is a crate new to deadband's graph, which needs an eval first. Without it, a Ctrl-C at the terminal reaches both deadband and the job, and deadband passes the SIGINT on as well, so the job receives it twice."
 correction = "a later deadband pull request evaluates crumbkit-child and hands the terminal to the job through it"
 
 [[exception]]

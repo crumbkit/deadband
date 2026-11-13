@@ -17,17 +17,28 @@
 //! - Streams and deadline: the job inherits deadband's standard input,
 //!   output and error, deadband captures nothing, and there is no deadline.
 //! - End: deadband waits for the job and reaps it, and reads its exit
-//!   status from the wait. deadband never stops or signals the job. A
-//!   Ctrl-C at the terminal reaches both deadband and the job, because they
-//!   share a process group, so deadband can end before the job; the daemon
-//!   then sees the connection close and frees the job's place.
+//!   status from the wait. deadband never stops or signals the job of its
+//!   own choosing. The one signal it sends is a SIGTERM or SIGINT that its
+//!   own caller sent to `deadband run`, which the `forward` module passes on
+//!   to the job unchanged while it keeps waiting, so a `kill` of the wrapper
+//!   ends the job and the daemon sees the job end, not the connection close.
+//!   A Ctrl-C at the terminal reaches both deadband and the job, because
+//!   they share a process group, so the job receives that SIGINT twice, once
+//!   from the terminal and once from deadband. Registering SIGINT and
+//!   SIGTERM replaces an ignored disposition that the caller passed down, so
+//!   a job that would have inherited an ignored SIGINT, as a background job
+//!   of a non-interactive shell does, now ends on the signal. A refused
+//!   thread or a failed registration runs the job without forwarding.
 
 use std::ffi::OsString;
 use std::io;
 use std::os::unix::process::ExitStatusExt;
-use std::process::{Command, ExitStatus};
+use std::process::ExitStatus;
+
+use signal_hook::consts::{SIGINT, SIGTERM};
 
 pub mod busiest;
+mod forward;
 pub mod launchd;
 pub mod on_stuck;
 pub mod reclaimer;
@@ -39,7 +50,8 @@ mod tests;
 const SIGNAL_BASE: i32 = 128;
 
 /// Runs `command`, whose first word is the program, with `variables` added
-/// to its environment, waits for it, and returns its exit status.
+/// to its environment, waits for it while passing on to it a SIGTERM or
+/// SIGINT that this process receives, and returns its exit status.
 ///
 /// # Errors
 ///
@@ -47,18 +59,7 @@ const SIGNAL_BASE: i32 = 128;
 /// error of a program that could not start, such as
 /// [`io::ErrorKind::NotFound`].
 pub fn run(command: &[OsString], variables: &[(&str, String)]) -> io::Result<ExitStatus> {
-    let Some((program, args)) = command.split_first() else {
-        return Err(io::ErrorKind::InvalidInput.into());
-    };
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "crates/deadband/src/job.rs is the module that starts processes, and the job is the command its caller names"
-    )]
-    let status = Command::new(program)
-        .args(args)
-        .envs(variables.iter().map(|(name, value)| (name, value)))
-        .status();
-    status
+    forward::run_forwarding(command, variables, &[SIGTERM, SIGINT])
 }
 
 /// Returns the exit code that `deadband run` ends with for a job that

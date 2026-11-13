@@ -8,6 +8,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `deadband run` passes a SIGTERM or SIGINT that it receives on to its job,
+  unchanged, keeps waiting, and exits with the job's status (143 or 130 when
+  the signal ended it), so a `kill` of `deadband run` ends the job and the
+  daemon records it as ended, not lost. A Ctrl-C at the terminal now reaches
+  the job twice, and `deadband run` replaces an ignored SIGINT or SIGTERM
+  that its caller passed down.
 - A waiting `deadband run` whose daemon closes the connection now tries to
   reach a daemon every 100 ms for 5 seconds and asks again, so a restarted
   daemon queues the job instead of every waiting job starting at once. The
