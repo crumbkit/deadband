@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `deadband daemon` now exits 0, where it exited 4, when another daemon
+  already serves the socket. It still prints the `deadband::daemon::running`
+  refusal. The launchd plist now keeps the daemon alive only when it exits
+  with a nonzero status or a signal ends it, so launchd no longer starts its
+  own daemon within a minute after a hand-started daemon ends. After a
+  hand-started daemon ends, `deadband service install --restart` or the next
+  login starts launchd's daemon. An installed agent gets the new plist at
+  the next `deadband service install`.
+
 ### Fixed
 
 - A reclaim that makes the state directory now makes it with mode 0700, and

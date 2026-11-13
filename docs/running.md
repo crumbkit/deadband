@@ -688,17 +688,21 @@ whose plist the uninstall then deletes. The uninstall question names the
 jobs it read before it took the lock, and uninstall asks launchd again once
 it holds it.
 
-The plist sets `KeepAlive`, so launchd starts the daemon again whenever it
-stops, and `ThrottleInterval` to 60 seconds. launchd starts a daemon that
-ran for 60 seconds or longer again at once, and waits out the rest of the
-60 seconds for one that exited sooner. A daemon exits at start when another
-daemon holds its socket, such as one started by hand with `deadband daemon`,
-so while that daemon runs launchd's daemon starts once a minute instead of
-every ten seconds, launchd's own default. When launchd has not loaded the
-agent and a daemon already answers on the socket, install says `a daemon
-that launchd did not start answers on <socket>`, loads the agent and does
-not wait for an answer. Stop that daemon yourself, and launchd's daemon
-takes the socket at its next start.
+The plist sets `KeepAlive` with `SuccessfulExit` false, so launchd starts
+the daemon again whenever it exits with a nonzero status or is ended by a
+signal, and leaves it stopped when it exits with status 0. The plist sets
+`ThrottleInterval` to 60 seconds: launchd starts a daemon that ran for 60
+seconds or longer again at once, and waits out the rest of the 60 seconds
+for one that exited sooner, instead of launchd's own default of ten
+seconds. `deadband daemon` exits with status 0 when another daemon already
+holds its socket, such as one started by hand with `deadband daemon`, after
+it prints `deadband::daemon::running`. So launchd starts its own daemon
+once, sees it exit cleanly and does not start it again. When launchd has
+not loaded the agent and a daemon already answers on the socket, install
+says `a daemon that launchd did not start answers on <socket>`, loads the
+agent and does not wait for an answer. After you stop that daemon, run
+`deadband service install --restart` and launchd starts its own daemon;
+otherwise launchd starts it at the next login.
 
 When no daemon answers, `deadband status` says
 `daemon: not installed; run deadband service install` when the plist is

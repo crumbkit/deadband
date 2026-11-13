@@ -27,17 +27,31 @@ crash:
   - {test: crates/deadband/src/cli/service/tests.rs#a_failed_bootstrap_leaves_the_plist_installed_but_not_loaded,
     kind: plant}
 - after: bind
-  leaves: launchd loaded the agent and its daemon exits at start, for example because a daemon that launchd
+  leaves: launchd loaded the agent and its daemon exits at start with status 0, because a daemon that launchd
     did not start holds the socket's lock
   leaves_state:
   - launch-service#loaded
-  recovery: install reports that the daemon does not answer or that another daemon holds the socket, and
-    names the log; launchd starts the daemon again at most once a minute until the other daemon ends
+  recovery: install says that another daemon holds the socket; launchd does not start its daemon again, so
+    after the other daemon ends, deadband service install --restart or the next login starts it
   tests:
   - test: crates/deadband/src/cli/service/tests.rs#an_install_says_when_a_daemon_that_launchd_did_not_start_holds_the_socket
     kind: seam
+  - {test: crates/deadband/src/cli/tests.rs#daemon_exits_0_with_daemon_running_while_another_daemon_answers_on_its_socket,
+    kind: plant}
+  - test: crates/deadband/src/cli/service/tests.rs#the_plist_makes_launchd_restart_only_a_daemon_that_exits_nonzero_or_by_a_signal
+    kind: seam
+- after: bind
+  leaves: launchd loaded the agent and its daemon fails at start with a nonzero status, for example because
+    something other than a socket is at the socket's path
+  leaves_state:
+  - launch-service#loaded
+  recovery: install reports that the daemon does not answer and names the log; launchd starts the daemon
+    again at most once a minute until the cause is fixed
+  tests:
   - {test: crates/deadband/src/cli/service/tests.rs#an_install_whose_daemon_never_answers_says_so_and_names_the_log,
     kind: seam}
+  - test: crates/deadband/src/cli/tests.rs#daemon_exits_4_with_socket_unusable_when_a_file_that_is_not_a_socket_holds_its_path
+    kind: plant
 ---
 This covers a fresh install, with no plist (`write-plist`), and an installed
 agent that launchd has not loaded (`rewrite-plist` when the plist changed; with

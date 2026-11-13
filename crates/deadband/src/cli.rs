@@ -68,6 +68,9 @@ pub enum Command {
     /// as `env` and `timeout` do.
     Run(RunArgs),
     /// Run the daemon that admits jobs, in the foreground.
+    ///
+    /// `daemon` exits with 0 when another daemon already serves the socket,
+    /// so launchd does not start it again.
     Daemon(DaemonArgs),
     /// Install or uninstall the launchd agent that runs the daemon at login.
     Service {

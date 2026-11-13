@@ -1138,7 +1138,7 @@ fn an_install_says_when_a_daemon_that_launchd_did_not_start_holds_the_socket() {
         text(&report),
         format!(
             "wrote ~/Library/LaunchAgents/io.github.crumbkit.deadband.plist\n\
-             a daemon that launchd did not start answers on {}, so launchd's daemon exits at start and launchd starts it again every {THROTTLE_SECONDS} seconds until that daemon ends\n\
+             a daemon that launchd did not start answers on {}, so launchd's daemon exits at start and launchd does not start it again; once that daemon ends, deadband service install --restart starts launchd's daemon\n\
              loaded io.github.crumbkit.deadband",
             socket.display()
         )
@@ -1154,5 +1154,57 @@ fn the_plist_makes_launchd_wait_between_restarts_of_a_daemon_that_exits_at_start
             "\t<key>ThrottleInterval</key>\n\t<integer>{THROTTLE_SECONDS}</integer>\n"
         )),
         "{text}"
+    );
+}
+
+#[test]
+fn the_plist_makes_launchd_restart_only_a_daemon_that_exits_nonzero_or_by_a_signal() {
+    let text = rendered(Path::new("/Users/me"));
+
+    assert!(
+        text.contains(
+            "\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        !text.contains("\t<key>KeepAlive</key>\n\t<true/>\n"),
+        "{text}"
+    );
+}
+
+#[test]
+fn an_install_over_a_plist_that_keeps_every_daemon_alive_rewrites_it() {
+    let home = TestHome::new();
+    let old = rendered(&home).replace(
+        "\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n",
+        "\t<key>KeepAlive</key>\n\t<true/>\n",
+    );
+    assert_ne!(old, rendered(&home));
+    write_plist(&home, &old);
+    let launchd = Arc::new(FakeLaunchd::new(true));
+
+    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| {
+        Some(Counts::default())
+    })
+    .expect("installs");
+
+    assert_eq!(
+        std::fs::read_to_string(plist_path(&home)).expect("written"),
+        rendered(&home)
+    );
+    assert_eq!(
+        launchd.changes(),
+        [
+            "bootout gui/501/io.github.crumbkit.deadband".to_owned(),
+            format!("bootstrap gui/501 {}", plist_path(&home).display())
+        ]
+    );
+    assert!(
+        report.value().steps.contains(&Step::Wrote {
+            path: plist_path(&home)
+        }),
+        "{:?}",
+        report.value().steps
     );
 }

@@ -590,7 +590,7 @@
           ]
         },
         {
-          "description": "A daemon answered on the socket before launchd loaded the agent, so\nlaunchd did not start it. launchd's daemon exits at start while it\nruns, and launchd starts it again once a minute, the plist's\n`ThrottleInterval`, until that daemon ends.",
+          "description": "A daemon answered on the socket before launchd loaded the agent, so\nlaunchd did not start it. launchd's daemon exits at start with status\n0 while it runs, so launchd does not start it again until\n`deadband service install --restart` or the next login.",
           "type": "object",
           "properties": {
             "socket": {

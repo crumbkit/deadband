@@ -54,7 +54,7 @@ status.
 | environment | Reads the variables that `deadband run` uses, and gives a granted job its parallelism variables. |
 | priority | Chooses a job's lane from the priority file. |
 | throttle | The only module that changes the priority of a job. `deadband run` lowers its own priority to nice 5 before it starts a normal-lane job, and the job inherits it. |
-| cli | The commands `deadband run`, `status`, `daemon`, `service` and `top`, built on crumbkit. Its service module renders the launch agent's plist as a pure function and moves the agent between not installed, installed but not loaded, and loaded. Install and uninstall hold a lock on `service.lock` in the state directory while they read and change the plist and launchd, and the plist's `ThrottleInterval` keeps launchd from restarting a daemon that exits at start more than once a minute. [running.md](running.md) says how to install and run them. |
+| cli | The commands `deadband run`, `status`, `daemon`, `service` and `top`, built on crumbkit. Its service module renders the launch agent's plist as a pure function and moves the agent between not installed, installed but not loaded, and loaded. Install and uninstall hold a lock on `service.lock` in the state directory while they read and change the plist and launchd. The plist's `KeepAlive` restarts only a daemon that exits nonzero or by a signal, and its `ThrottleInterval` keeps launchd from restarting a daemon that fails at start more than once a minute. [running.md](running.md) says how to install and run them. |
 | tui | `deadband top`, behind the default-on Cargo feature `tui`: the terminal guard, the poll loop, a pure model and a ratatui view. It reads the daemon once a second through a request of its own, and draws its load graph from the local probe. |
 
 ## Rules that shape the code
@@ -317,10 +317,10 @@ and `a_client_that_reads_gets_its_queued_reply_and_then_its_grant` in
 
 | State | Meaning | Enters when | Leaves when |
 | --- | --- | --- | --- |
-| Binding | `deadband daemon` takes the kernel lock on `<socket>.lock`, removes an old socket at the path, and binds a new one | The process starts | A bound socket goes to Serving. A held lock refuses with `deadband::daemon::running`. Something other than a socket at the path, or a socket or lock that cannot be made, refuses with `deadband::socket::unusable` |
+| Binding | `deadband daemon` takes the kernel lock on `<socket>.lock`, removes an old socket at the path, and binds a new one | The process starts | A bound socket goes to Serving. A held lock refuses with `deadband::daemon::running` and exits with status 0. Something other than a socket at the path, or a socket or lock that cannot be made, refuses with `deadband::socket::unusable` |
 | Serving | The sampler reads the machine every second and grants jobs, a watchdog thread watches the reading's age, and the accept loop starts one thread per connection | The socket is bound and the sampler and watchdog threads started | A reason to stop goes to Stopped |
 | Serving on a stale reading | The sampler has stored no reading for five sampling intervals, and at least 250 ms. Admission treats the probe as failed, so each job starts once a place is free | The watchdog finds the reading stale | The sampler stores a new reading |
-| Stopped | `serve` returns its reason and the process ends | The socket file or the lock file is gone or replaced, checked every 60 samples and by the watchdog while the reading is stale; the sampler panics; the operating system refuses the sampler, the watchdog or a connection's thread; or accepting fails in a way that another try cannot fix | — Under launchd, `KeepAlive` starts a new daemon |
+| Stopped | `serve` returns its reason and the process ends | The socket file or the lock file is gone or replaced, checked every 60 samples and by the watchdog while the reading is stale; the sampler panics; the operating system refuses the sampler, the watchdog or a connection's thread; or accepting fails in a way that another try cannot fix | — The process exits nonzero, so under launchd `KeepAlive` starts a new daemon |
 
 ### The lifecycle of the launch agent
 
@@ -344,8 +344,13 @@ or waiting jobs, or that does not answer, unless `--restart` is given. With
 the daemon held, or says that it did not answer. After `bootstrap`, install
 asks the socket up to 20 times and reports whether the new daemon answers.
 It says so when a daemon that launchd did not start already holds the
-socket. The plist sets `ThrottleInterval` to 60 seconds, so launchd starts a
-daemon that exits at start at most once a minute.
+socket. The plist's `KeepAlive` sets `SuccessfulExit` to false, so launchd
+restarts a daemon that exits nonzero or by a signal and leaves one that
+exits with status 0 stopped. A daemon refused because another daemon holds
+the socket exits with 0, so launchd starts it once and then waits for
+`deadband service install --restart` or the next login. The plist sets
+`ThrottleInterval` to 60 seconds, so launchd starts a daemon that fails at
+start at most once a minute.
 
 The tests are in `src/cli/service/tests.rs`:
 `state_names_a_missing_plist_and_a_plist_that_launchd_has_not_loaded`,
@@ -396,7 +401,7 @@ in `src/cli/tests/reclaim.rs`.
 | A reclaimer names a program that is missing | The daemon logs the program at start, the reclaim records the failure, and `deadband status` names the program | `the_daemon_says_at_start_that_a_reclaimer_names_a_program_that_does_not_exist` and `a_reclaimer_whose_program_is_missing_fails_and_status_names_the_program` in `src/cli/tests/reclaim.rs` |
 | The socket file is deleted or replaced | The daemon stops serving within 60 samples, and under launchd a new daemon binds a new socket | `a_daemon_stops_serving_when_its_socket_file_is_removed` and `a_daemon_stops_serving_when_another_socket_replaces_its_file` in `src/daemon/tests/alive.rs` |
 | The lock file is deleted or replaced | The daemon stops serving within 60 samples, because a second daemon could take a new lock, remove its socket and bind its own | `a_daemon_stops_serving_when_its_lock_file_is_removed` and `a_daemon_stops_serving_when_another_file_replaces_its_lock_file` in `src/daemon/tests/alive.rs` |
-| A second daemon starts on the same socket | It finds the lock held and refuses with `deadband::daemon::running` | `bind_refuses_while_another_daemon_holds_the_lock_even_without_its_socket` in `src/daemon/tests.rs` |
+| A second daemon starts on the same socket | It finds the lock held, refuses with `deadband::daemon::running` and exits with status 0, so launchd does not start it again | `bind_refuses_while_another_daemon_holds_the_lock_even_without_its_socket` in `src/daemon/tests.rs`; `daemon_exits_0_with_daemon_running_while_another_daemon_answers_on_its_socket` in `src/cli/tests.rs` |
 | `jobs.jsonl` is deleted or replaced | The writer opens the file at the path again before the next line, so later lines are recorded there | `a_writer_whose_file_is_unlinked_opens_a_new_file_at_the_path_and_records_later_lines` and `a_writer_whose_file_is_replaced_appends_to_the_file_now_at_the_path` in `src/history/tests.rs` |
 | `jobs.lock` is deleted or replaced | The writer releases its lock and takes it again before the next line. When another daemon took the new lock first, the writer logs one line and records nothing while that daemon holds the lock | `a_writer_whose_lock_is_removed_while_another_writer_takes_a_new_one_records_nothing_and_logs_once` and `a_writer_whose_lock_is_removed_with_no_other_writer_takes_a_new_lock_and_keeps_recording` in `src/history/tests.rs` |
 | Two daemons on different sockets want to reclaim | A daemon on its own `DEADBAND_SOCKET` runs no reclaimer. Two daemons that both read the config share `reclaim.lock`, so the second starts no reclaim while the first runs | `a_daemon_started_with_its_own_socket_runs_no_reclaimer_from_the_config_file` in `tests/run.rs`; `a_second_reclaim_finds_the_lock_held_until_the_first_ends` in `src/reclaim/lock.rs` |

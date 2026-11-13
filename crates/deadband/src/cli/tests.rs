@@ -480,13 +480,24 @@ fn run_exits_126_with_job_not_started_when_the_program_cannot_start() {
 }
 
 #[test]
-fn daemon_refuses_to_start_while_another_daemon_answers_on_its_socket() {
+fn daemon_exits_0_with_daemon_running_while_another_daemon_answers_on_its_socket() {
     let test = Test::new(Fixed);
     test.start_daemon(1);
     let (code, out, err) = test.run(&["daemon"]);
-    assert_eq!(code, EXIT_DAEMON);
+    assert_eq!(code, 0, "{err}");
     assert_eq!(out, "");
     assert!(err.contains("code:  deadband::daemon::running"), "{err}");
+}
+
+#[test]
+fn daemon_exits_4_with_socket_unusable_when_a_file_that_is_not_a_socket_holds_its_path() {
+    let test = Test::new(Fixed);
+    #[expect(clippy::disallowed_methods, reason = "the test writes a fixture")]
+    std::fs::write(&test.machine.socket, "").expect("writable");
+    let (code, out, err) = test.run(&["daemon"]);
+    assert_eq!(code, EXIT_DAEMON, "{err}");
+    assert_eq!(out, "");
+    assert!(err.contains("code:  deadband::socket::unusable"), "{err}");
 }
 
 #[cfg(feature = "tui")]

@@ -34,20 +34,24 @@ transitions:
   - service
   unchecked_reads:
   - the daemon's running and waiting jobs, which uninstall asks for before it takes service.lock and reports
-    after the bootout (cli/commands.rs:273-297)
+    after the bootout (cli/commands.rs:281-305)
 ---
 launchd holds this store. deadband changes it only through `launchctl
 bootstrap` and `launchctl bootout`, and reads it with `launchctl print`, whose
 exit code 113 means not loaded. Install and uninstall ask under
 `service.lock`; see launch-plist.
 
-The plist sets `RunAtLoad`, `KeepAlive` and a `ThrottleInterval` of 60
-seconds, so while the service is loaded, launchd starts the daemon and starts
-it again each time it exits, at most once a minute. `KeepAlive` also restarts
-a daemon that exits because another daemon holds the socket's lock
-(`deadband::daemon::running`), so a daemon started by hand on the same socket
-makes launchd restart its own daemon once a minute until the other daemon
-ends. Install says when such a daemon holds the socket, and `deadband status`
+The plist sets `RunAtLoad`, a `KeepAlive` dictionary with `SuccessfulExit`
+false, and a `ThrottleInterval` of 60 seconds. While the service is loaded,
+launchd starts the daemon and starts it again each time it exits with a
+nonzero status or by a signal, at most once a minute, and leaves it stopped
+when it exits with status 0. Only one exit has status 0: a daemon that
+another daemon's lock on the socket refuses (`deadband::daemon::running`,
+cli/commands.rs#daemon). So when a daemon started by hand holds the socket,
+launchd starts its own daemon once, sees the clean exit and stops. When the
+hand-started daemon ends, launchd does not take over; its daemon starts again
+at `deadband service install --restart` or at the next login (`RunAtLoad`).
+Install says when such a daemon holds the socket, and `deadband status`
 names `~/Library/Logs/deadband.log` when launchd has the agent loaded and no
 daemon answers.
 

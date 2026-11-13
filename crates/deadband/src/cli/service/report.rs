@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use super::plist::THROTTLE_SECONDS;
 use super::{LABEL, LOG};
 
 /// The jobs that a daemon answered with: those it runs and those that wait
@@ -73,9 +72,9 @@ pub enum Step {
         paths: Vec<PathBuf>,
     },
     /// A daemon answered on the socket before launchd loaded the agent, so
-    /// launchd did not start it. launchd's daemon exits at start while it
-    /// runs, and launchd starts it again once a minute, the plist's
-    /// `ThrottleInterval`, until that daemon ends.
+    /// launchd did not start it. launchd's daemon exits at start with status
+    /// 0 while it runs, so launchd does not start it again until
+    /// `deadband service install --restart` or the next login.
     HandStarted {
         /// The socket the daemon answered on.
         socket: PathBuf,
@@ -203,7 +202,7 @@ impl Report {
                 self.shown(path)
             ),
             Step::HandStarted { socket } => format!(
-                "a daemon that launchd did not start answers on {}, so launchd's daemon exits at start and launchd starts it again every {THROTTLE_SECONDS} seconds until that daemon ends",
+                "a daemon that launchd did not start answers on {}, so launchd's daemon exits at start and launchd does not start it again; once that daemon ends, deadband service install --restart starts launchd's daemon",
                 self.shown(socket)
             ),
             Step::Unloaded => format!("{} {LABEL}", self.verb("unload", "unloaded")),

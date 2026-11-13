@@ -85,6 +85,12 @@ file that an ended daemon left (launchd's KeepAlive takes this path after every
 daemon end, because no daemon removes its socket file), and `usurp` when the
 lock file was removed under a live daemon.
 
+A start that another daemon's lock refuses takes no step: the process prints
+`deadband::daemon::running` and exits with status 0, so launchd does not
+start it again. Every other end, including `daemon#stop` and the
+`deadband::socket::unusable` refusals of bind, exits nonzero, and a signal
+ends `daemon#killed`, so launchd's `KeepAlive` restarts both.
+
 The first crash after bind is any end of the daemon process. With `deadband
 daemon` run by hand and no launch agent, nothing restarts it, and every later
 job runs at once. The `after: bind` point with no test about a new daemon is
