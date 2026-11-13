@@ -6,6 +6,14 @@ use std::path::{Path, PathBuf};
 
 use super::{LABEL, LOG};
 
+/// The `ThrottleInterval` of the plist: the least number of seconds between
+/// two starts of the daemon. launchd starts a daemon that ran this long or
+/// longer again at once, and waits out the rest of the interval for one that
+/// exited sooner, such as a daemon that exits at start because a daemon that
+/// launchd did not start holds the socket. Until that daemon ends, launchd's
+/// daemon starts once a minute; launchd's own default is ten seconds.
+pub const THROTTLE_SECONDS: u32 = 60;
+
 /// The directories after the binary's own on the daemon's `PATH`, with
 /// `~` for the home directory.
 const PATH_AFTER_BINARY: [&str; 8] = [
@@ -31,7 +39,8 @@ pub fn binary_path(exe: &Path, cwd: Option<&Path>) -> PathBuf {
 }
 
 /// Returns the plist that runs `binary daemon`, with `--max-jobs` when
-/// `max_jobs` is given, at login and again whenever it stops.
+/// `max_jobs` is given, at login and again whenever it stops, at most once
+/// per [`THROTTLE_SECONDS`].
 #[must_use]
 pub fn render(
     binary: &Path,
@@ -71,6 +80,8 @@ pub fn render(
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
+	<key>ThrottleInterval</key>
+	<integer>{THROTTLE_SECONDS}</integer>
 	<key>StandardErrorPath</key>
 	<string>{log}</string>
 </dict>

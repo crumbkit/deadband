@@ -509,7 +509,7 @@
           ]
         },
         {
-          "description": "launchd loaded the agent. `answers` says whether a daemon answered on\nthe socket within a few seconds, and is absent in a dry run.",
+          "description": "launchd loaded the agent. `answers` says whether a daemon answered on\nthe socket within a few seconds, and is absent in a dry run and after\na `hand_started` step, when the daemon that answers is not launchd's.",
           "type": "object",
           "properties": {
             "answers": {
@@ -587,6 +587,24 @@
           "required": [
             "step",
             "paths"
+          ]
+        },
+        {
+          "description": "A daemon answered on the socket before launchd loaded the agent, so\nlaunchd did not start it. launchd's daemon exits at start while it\nruns, and launchd starts it again once a minute, the plist's\n`ThrottleInterval`, until that daemon ends.",
+          "type": "object",
+          "properties": {
+            "socket": {
+              "description": "The socket the daemon answered on.",
+              "type": "string"
+            },
+            "step": {
+              "type": "string",
+              "const": "hand_started"
+            }
+          },
+          "required": [
+            "step",
+            "socket"
           ]
         },
         {

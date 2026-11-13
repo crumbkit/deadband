@@ -8,7 +8,9 @@
 //! not loaded it; and loaded. Install replaces the plist only by an atomic
 //! rename, and never restarts a daemon that has jobs unless `--restart` is
 //! given. Uninstall deletes the plist only after `launchctl bootout`
-//! succeeded or launchd had not loaded the agent.
+//! succeeded or launchd had not loaded the agent. Both hold a lock in the
+//! state directory from before they read the plist or launchd until they
+//! finish, so one never acts on what the other is changing.
 
 use std::io;
 use std::num::NonZeroUsize;
@@ -24,6 +26,7 @@ use crate::job::launchd::Launchd;
 
 mod daemon;
 mod failed;
+mod lock;
 pub mod plist;
 mod report;
 #[cfg(test)]
@@ -32,8 +35,8 @@ mod tests;
 pub use self::daemon::held;
 use self::daemon::{socket_in, wait_for_answer, wait_until_unloaded};
 pub use self::failed::{
-    SERVICE_LAUNCHCTL_FAILED, SERVICE_PLIST_UNREADABLE, SERVICE_UNLOCATED, SERVICE_UNSUPPORTED,
-    SERVICE_WRITE_FAILED, ServiceFailed,
+    SERVICE_LAUNCHCTL_FAILED, SERVICE_LOCKED, SERVICE_PLIST_UNREADABLE, SERVICE_UNLOCATED,
+    SERVICE_UNSUPPORTED, SERVICE_WRITE_FAILED, ServiceFailed,
 };
 pub use self::report::{Counts, Report, Step};
 
@@ -102,6 +105,9 @@ pub struct Install {
 pub struct LaunchAgent {
     /// The home directory, or `None` when the environment names none.
     pub home: Option<PathBuf>,
+    /// deadband's state directory, which holds the lock that service
+    /// commands take, or `None` when the environment names none.
+    pub state: Option<PathBuf>,
     /// The running binary's path as invoked, or `None` when it is unknown.
     pub binary: Option<PathBuf>,
     /// The user's id, which names the launchd domain `gui/<uid>`.
@@ -178,6 +184,7 @@ pub fn install(
     let agent = agent.ok_or(ServiceFailed::Unsupported)?;
     let home = located(agent.home.as_deref(), "the home directory")?;
     let binary = located(agent.binary.as_deref(), "the path of the deadband binary")?;
+    let _lock = locked(agent)?;
     let path = plist_path(home);
     let temp_dir = agent.launchd.temp_dir().map_err(ServiceFailed::Launchctl)?;
     let text = plist::render(binary, install.max_jobs, home, &temp_dir);
@@ -236,13 +243,23 @@ pub fn install(
     } else {
         report.steps.push(Step::Unchanged { path: path.clone() });
     }
+    // launchd had not loaded the agent, so a daemon that answers now is one
+    // that launchd did not start, and launchd's daemon will exit at start.
+    let hand_started = !loaded && jobs(&socket).is_some();
+    if hand_started {
+        report.steps.push(Step::HandStarted {
+            socket: socket.clone(),
+        });
+    }
     let mut answers = None;
     if !install.dry_run {
         agent
             .launchd
             .bootstrap(&agent.domain(), &path)
             .map_err(ServiceFailed::Launchctl)?;
-        answers = Some(wait_for_answer(agent, || jobs(&socket).is_some()));
+        if !hand_started {
+            answers = Some(wait_for_answer(agent, || jobs(&socket).is_some()));
+        }
     }
     report.steps.push(Step::Loaded { answers });
     Ok(Prose::new(report))
@@ -263,6 +280,7 @@ pub fn uninstall(
 ) -> Result<Prose<Report>, ServiceFailed> {
     let agent = agent.ok_or(ServiceFailed::Unsupported)?;
     let home = located(agent.home.as_deref(), "the home directory")?;
+    let _lock = locked(agent)?;
     let path = plist_path(home);
     let mut report = Report::new(home, dry_run);
     if agent
@@ -307,6 +325,13 @@ pub fn uninstall(
         report.steps.push(Step::Stays { paths });
     }
     Ok(Prose::new(report))
+}
+
+/// Takes the lock of the service commands in the agent's state directory,
+/// waiting while another command holds it.
+fn locked(agent: &LaunchAgent) -> Result<lock::ServiceLock, ServiceFailed> {
+    let state = located(agent.state.as_deref(), "the state directory")?;
+    lock::hold(state, || agent.launchd.pause())
 }
 
 /// Returns `found`, or the refusal that names `what` when it is `None`.

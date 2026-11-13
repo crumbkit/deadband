@@ -20,6 +20,8 @@
 	<true/>
 	<key>KeepAlive</key>
 	<true/>
+	<key>ThrottleInterval</key>
+	<integer>60</integer>
 	<key>StandardErrorPath</key>
 	<string>/Users/me/Library/Logs/deadband.log</string>
 </dict>
