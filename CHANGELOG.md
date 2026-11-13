@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A job that ends while its lease is seating itself on a restarted daemon
+  is now told to that daemon. Before, the end could close the new
+  connection without sending how the job ended, and the new daemon
+  recorded the job a second time as lost.
+- When deadband cannot start the thread that watches a job's connection to
+  the daemon, or cannot copy that connection for it, `deadband run` now
+  prints `deadband cannot watch the daemon connection, so a restarted
+  daemon will not count this job`. The job still runs as before.
+
 ## [0.3.0] - 2026-11-13
 
 ### Changed

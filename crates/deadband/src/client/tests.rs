@@ -689,7 +689,7 @@ fn a_connection_that_opens_after_the_job_ended_is_closed() {
         .set_read_timeout(Some(ANSWER_WITHIN))
         .expect("the timeout sets");
     let seat = Seat::new(held);
-    seat.end();
+    seat.end(None);
     assert!(!seat.install(late));
     assert_eq!(
         read_line::<Request>(&mut BufReader::new(theirs)).expect("the end reads in time"),
