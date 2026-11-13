@@ -261,6 +261,10 @@ newline, and a reader skips a line it cannot parse.
 
 ## Lifecycles and crash points
 
+LIFECYCLE.md at the repository root and the files under lifecycles/ list every
+store, lock, timeout, transition and crash point in the lifecycle registry
+format; the tables below summarise the four main lifecycles.
+
 The tables below give the states of a job, the daemon, the launch agent and
 a reclaim, as the source implements them, and what each crash or fault
 leaves behind. deadband stores none of these states on disk. Job states
