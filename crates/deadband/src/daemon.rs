@@ -19,9 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rustix::io::Errno;
-
-use self::alive::{Ending, stale_after, wait_for_connection};
+use self::alive::{Ending, age, passing, wait_for_connection};
 use self::reading::{priority_active, read_machine};
 use self::timeline::Ended;
 use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
@@ -147,18 +145,6 @@ impl State {
         }
     }
 
-    /// Reports whether the sampler stored its reading longer ago than
-    /// [`stale_after`] allows at `now`.
-    fn stale(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.read_at) > stale_after(self.settings.sample_every)
-    }
-
-    /// Returns the reading that admission may use at `now`. A stale reading
-    /// counts as a failed probe, which admits a job once a place is free.
-    fn fresh_reading(&self, now: Instant) -> Option<&Reading> {
-        self.reading.as_ref().filter(|_| !self.stale(now))
-    }
-
     /// Starts every waiting job that the admission rule lets start, and
     /// writes the grant to each one's client. A client that cannot take
     /// the grant is gone, so its job leaves the queue and frees its place.
@@ -253,13 +239,17 @@ pub fn serve<P: Probe + Clone + Send + 'static>(
     let (_watching, watch_stopped) = mpsc::channel::<()>();
     watch::start(&shared, probe.clone(), watch_stopped, log);
     let (reason, ends) = mpsc::channel::<String>();
+    let watchdog_ending = Ending::new(listener, reason.clone());
     let ending = Ending::new(listener, reason);
     thread::spawn(move || sample(&sampler, &probe, &stopped, &sampler_log, ending));
     let (_aging, aged) = mpsc::channel::<()>();
     let watchdog = Arc::clone(&shared);
     let watchdog_log = Arc::clone(log);
-    thread::spawn(move || age(&watchdog, &aged, &watchdog_log));
+    thread::spawn(move || age(&watchdog, &aged, &watchdog_log, watchdog_ending));
     let every = lock(&shared).settings.sample_every;
+    if let Err(error) = listener.set_nonblocking(true) {
+        return error;
+    }
     loop {
         if let Ok(reason) = ends.try_recv() {
             return io::Error::other(reason);
@@ -269,9 +259,13 @@ pub fn serve<P: Probe + Clone + Send + 'static>(
         }
         match listener.accept() {
             Ok((stream, _)) => {
+                if stream.set_nonblocking(false).is_err() {
+                    continue;
+                }
                 let shared = Arc::clone(&shared);
                 thread::spawn(move || connection(&shared, stream));
             }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
             Err(error) if passing(&error) => {
                 note(
                     log,
@@ -286,21 +280,6 @@ pub fn serve<P: Probe + Clone + Send + 'static>(
             Err(error) => return error,
         }
     }
-}
-
-/// Reports whether a failed accept can pass, so another try may succeed.
-fn passing(error: &io::Error) -> bool {
-    [
-        Errno::MFILE,
-        Errno::NFILE,
-        Errno::NOBUFS,
-        Errno::NOMEM,
-        Errno::CONNABORTED,
-        Errno::INTR,
-        Errno::AGAIN,
-        Errno::PROTO,
-    ]
-    .contains(&Errno::from_io_error(error).unwrap_or(Errno::INVAL))
 }
 
 /// Samples `probe` every `sample_every` and starts the jobs that the new
@@ -342,31 +321,6 @@ fn sample(
             drop(state);
             start_reclaim(shared, config, resource, quiet, log);
         }
-    }
-}
-
-/// Starts the waiting jobs that a stale reading lets start, until `stopped`
-/// receives or disconnects. The sampler does this on every sample while it
-/// runs; this thread does it when the sampler stalls, and writes one log
-/// line when the reading first goes stale.
-fn age(shared: &Shared, stopped: &mpsc::Receiver<()>, log: &Log) {
-    let every = stale_after(lock(shared).settings.sample_every);
-    while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(every) {
-        let mut state = lock(shared);
-        if !state.stale(Instant::now()) {
-            continue;
-        }
-        if !state.stale_noted {
-            state.stale_noted = true;
-            note(
-                log,
-                format_args!(
-                    "the probe has not read the machine for over {}, so each job starts once a place is free until it reads again",
-                    humantime::format_duration(every)
-                ),
-            );
-        }
-        state.grant();
     }
 }
 

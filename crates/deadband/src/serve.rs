@@ -105,7 +105,7 @@ pub fn run_daemon<P: Probe + Clone + Send + 'static>(
                 settings,
                 &machine.log,
             );
-            Unbound::Socket {
+            Unbound::Stopped {
                 path: machine.socket.clone(),
                 error,
             }

@@ -9,11 +9,57 @@
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::io::Errno;
+
+use super::{Log, Shared, State, lock, note};
+use crate::admit::Reading;
+
+impl State {
+    /// Reports whether the sampler stored its reading longer ago than
+    /// [`stale_after`] allows at `now`.
+    pub(super) fn stale(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.read_at) > stale_after(self.settings.sample_every)
+    }
+
+    /// Returns the reading that admission may use at `now`. A stale reading
+    /// counts as a failed probe, which admits a job once a place is free.
+    pub(super) fn fresh_reading(&self, now: Instant) -> Option<&Reading> {
+        self.reading.as_ref().filter(|_| !self.stale(now))
+    }
+}
+
+/// Runs while the sampler may be stalled, until `stopped` receives or
+/// disconnects. Each time the reading is stale it checks the socket file
+/// with `ending`, starts the waiting jobs that a stale reading lets start,
+/// and writes one log line when the reading first goes stale.
+pub(super) fn age(shared: &Shared, stopped: &Receiver<()>, log: &Log, ending: Ending) {
+    let every = stale_after(lock(shared).settings.sample_every);
+    while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(every) {
+        let mut state = lock(shared);
+        if !state.stale(Instant::now()) {
+            continue;
+        }
+        if ending.check() {
+            return;
+        }
+        if !state.stale_noted {
+            state.stale_noted = true;
+            note(
+                log,
+                format_args!(
+                    "the probe has not read the machine for over {}, so each job starts once a place is free until it reads again",
+                    humantime::format_duration(every)
+                ),
+            );
+        }
+        state.grant();
+    }
+}
 
 /// How many samples pass between two checks of the socket file, which is
 /// once a minute at the default sampling interval.
@@ -32,6 +78,21 @@ const STALE_FLOOR: Duration = Duration::from_millis(250);
 /// probe as failed, for a sampler that samples every `every`.
 pub(super) fn stale_after(every: Duration) -> Duration {
     every.saturating_mul(STALE_AFTER_SAMPLES).max(STALE_FLOOR)
+}
+
+/// Reports whether a failed accept can pass, so another try may succeed.
+pub(super) fn passing(error: &std::io::Error) -> bool {
+    [
+        Errno::MFILE,
+        Errno::NFILE,
+        Errno::NOBUFS,
+        Errno::NOMEM,
+        Errno::CONNABORTED,
+        Errno::INTR,
+        Errno::AGAIN,
+        Errno::PROTO,
+    ]
+    .contains(&Errno::from_io_error(error).unwrap_or(Errno::INVAL))
 }
 
 /// Waits until `listener` has a connection to accept or `within` passes,
@@ -110,13 +171,18 @@ impl Ending {
             return false;
         }
         self.since_check = 0;
-        let Some(socket) = self.socket.as_ref().filter(|socket| socket.gone()) else {
+        self.check()
+    }
+
+    /// Checks the socket file now. It sends the reason and returns `true`
+    /// when the file is gone or replaced.
+    pub(super) fn check(&self) -> bool {
+        if !self.socket.as_ref().is_some_and(SocketFile::gone) {
             return false;
-        };
-        let _ = self.reason.send(format!(
-            "the socket file {} is gone or replaced, so the daemon stops serving",
-            socket.path.display()
-        ));
+        }
+        let _ = self
+            .reason
+            .send("the socket file is gone or replaced, so the daemon stops serving".to_owned());
         true
     }
 }
