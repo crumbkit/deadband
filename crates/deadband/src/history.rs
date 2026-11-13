@@ -24,6 +24,7 @@ use crate::admit::{Hold, Lane};
 use crate::probe::{ChildUsage, Pressure};
 use crate::protocol::{Exit, Label};
 
+mod identity;
 mod kind;
 #[cfg(test)]
 pub(crate) mod tests;

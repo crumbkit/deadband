@@ -213,7 +213,10 @@ The daemon is the only writer. Its writer thread takes an exclusive lock on
 `jobs.lock` in the state directory before it opens the file and holds it while
 the daemon runs, so one daemon writes each state directory even when two
 daemons listen on different sockets. A daemon that finds the lock held records
-nothing and logs one line. A daemon started with `DEADBAND_SOCKET` set records
+nothing and logs one line. Before each line the writer checks, by device and
+inode, that its lock and its open file are still the files at their paths. It
+takes a removed or replaced lock again and reopens a removed or replaced
+history file. A daemon started with `DEADBAND_SOCKET` set records
 nothing, so test daemons do not write to the file. A daemon started with
 `DEADBAND_SOCKET_DIR` set records history like the default daemon, because
 only `DEADBAND_SOCKET` turns recording off. The client adds the two things that only it
@@ -389,6 +392,8 @@ in `src/cli/tests/reclaim.rs`.
 | The socket file is deleted or replaced | The daemon stops serving within 60 samples, and under launchd a new daemon binds a new socket | `a_daemon_stops_serving_when_its_socket_file_is_removed` and `a_daemon_stops_serving_when_another_socket_replaces_its_file` in `src/daemon/tests/alive.rs` |
 | The lock file is deleted or replaced | The daemon stops serving within 60 samples, because a second daemon could take a new lock, remove its socket and bind its own | `a_daemon_stops_serving_when_its_lock_file_is_removed` and `a_daemon_stops_serving_when_another_file_replaces_its_lock_file` in `src/daemon/tests/alive.rs` |
 | A second daemon starts on the same socket | It finds the lock held and refuses with `deadband::daemon::running` | `bind_refuses_while_another_daemon_holds_the_lock_even_without_its_socket` in `src/daemon/tests.rs` |
+| `jobs.jsonl` is deleted or replaced | The writer opens the file at the path again before the next line, so later lines are recorded there | `a_writer_whose_file_is_unlinked_opens_a_new_file_at_the_path_and_records_later_lines` and `a_writer_whose_file_is_replaced_appends_to_the_file_now_at_the_path` in `src/history/tests.rs` |
+| `jobs.lock` is deleted or replaced | The writer releases its lock and takes it again before the next line. When another daemon took the new lock first, the writer logs one line and records nothing while that daemon holds the lock | `a_writer_whose_lock_is_removed_while_another_writer_takes_a_new_one_records_nothing_and_logs_once` and `a_writer_whose_lock_is_removed_with_no_other_writer_takes_a_new_lock_and_keeps_recording` in `src/history/tests.rs` |
 | Two daemons on different sockets want to reclaim | A daemon on its own `DEADBAND_SOCKET` runs no reclaimer. Two daemons that both read the config share `reclaim.lock`, so the second starts no reclaim while the first runs | `a_daemon_started_with_its_own_socket_runs_no_reclaimer_from_the_config_file` in `tests/run.rs`; `a_second_reclaim_finds_the_lock_held_until_the_first_ends` in `src/reclaim/lock.rs` |
 | `deadband run` receives SIGTERM or SIGINT alone | It passes the signal on to its job unchanged and keeps waiting, so the job decides how to end and the daemon receives `Done` with the signal | `a_signal_the_caller_sent_ends_a_sleeping_job_and_the_exit_code_follows_it` and `the_job_receives_the_signal_unchanged_and_decides_its_own_exit_code` in `src/job/tests.rs` |
 | `deadband run` is killed alone with SIGKILL | The connection closes, the daemon records the job as lost and frees its place, and the job keeps running uncounted. A signal to the process group reaches the job too | `a_running_job_whose_client_is_killed_is_lost` in `src/daemon/tests/timeline.rs` covers the daemon's side; no test covers the job that keeps running |
