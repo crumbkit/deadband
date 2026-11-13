@@ -11,7 +11,7 @@ use crumbkit::{Document, Prose};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use super::service::DaemonState;
+use super::service::{DaemonState, LOG};
 use crate::admit::Lane;
 use crate::name::name;
 use crate::probe::Sample;
@@ -115,7 +115,7 @@ impl fmt::Display for Status {
                     "daemon: installed but not loaded; run deadband service install"
                 }
                 Some(DaemonState::LoadedSilent) => {
-                    "daemon: loaded but not answering; see ~/Library/Logs/deadband.log"
+                    return write!(f, "daemon: loaded but not answering; see ~/{LOG}");
                 }
                 Some(DaemonState::LaunchdUnasked) => {
                     "daemon: not running, and launchd could not be asked whether it loaded the agent"

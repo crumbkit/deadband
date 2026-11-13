@@ -147,14 +147,20 @@ fn service_install_writes_the_plist_and_prints_one_line_per_step() {
 }
 
 #[test]
-fn service_uninstall_asks_with_the_jobs_the_daemon_holds_and_prints_them_afterwards() {
+fn service_uninstall_asks_with_the_jobs_of_the_daemon_under_the_getconf_directory() {
+    let dir = short_dir("ask");
     let home = TestHome::new();
     write_plist(&home);
-    let launchd = Arc::new(FakeLaunchd::new(true));
+    let launchd = Arc::new(FakeLaunchd {
+        temp: Some(dir.0.clone()),
+        ..FakeLaunchd::new(true)
+    });
     let test = with_agent(&home, &launchd);
-    test.start_daemon(1);
-    let (_job, _) = ask(&test.machine.socket, "build");
-    let (_waiting, queued) = ask(&test.machine.socket, "lint");
+    // The caller's socket has no daemon; the one that launchd runs listens
+    // under the getconf directory.
+    let real = daemon_in(&test, &dir, 1);
+    let (_job, _) = ask(&real, "build");
+    let (_waiting, queued) = ask(&real, "lint");
     assert!(!matches!(queued, Reply::Granted { .. }), "{queued:?}");
 
     let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -255,11 +261,60 @@ impl Drop for ShortDir {
     }
 }
 
+/// Returns a directory named for `name` under `/tmp`.
+fn short_dir(name: &str) -> ShortDir {
+    let dir = ShortDir(PathBuf::from(format!(
+        "/tmp/dbs-{}-{name}",
+        std::process::id()
+    )));
+    std::fs::create_dir_all(&dir.0).expect("writable");
+    dir
+}
+
+/// Starts a daemon that runs `max_jobs` jobs at once on the socket under
+/// `dir`, where a launch agent's daemon listens, and returns that socket.
+fn daemon_in(test: &Test<Fixed>, dir: &ShortDir, max_jobs: usize) -> PathBuf {
+    let real = dir.0.join("deadband.sock");
+    let bound = bind(&real).expect("the socket binds");
+    let log = Arc::clone(&test.machine.log);
+    thread::spawn(move || {
+        let bound = bound;
+        let max_jobs = NonZeroUsize::new(max_jobs).expect("positive");
+        let settings = Settings::new(max_jobs, NonZeroUsize::new(4), None, None);
+        serve(&bound.listener, Fixed, settings, &log)
+    });
+    real
+}
+
+#[test]
+fn service_uninstall_of_an_unloaded_agent_does_not_ask_a_daemon_about_its_jobs() {
+    let home = TestHome::new();
+    write_plist(&home);
+    let launchd = Arc::new(FakeLaunchd::new(false));
+    let test = with_agent(&home, &launchd);
+    test.start_daemon(1);
+    let (_job, _) = ask(&test.machine.socket, "build");
+
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let mut sink = Sink::with_input(&mut out, &mut err, std::io::empty(), true);
+    run_to(
+        &mut sink,
+        &test.machine,
+        ["deadband", "service", "uninstall"],
+    );
+
+    let err = String::from_utf8(err).expect("UTF-8");
+    assert!(
+        err.contains("Unload deadband's launchd agent and delete its plist? [y/N] "),
+        "{err}"
+    );
+    assert!(!err.contains("The daemon has"), "{err}");
+}
+
 #[test]
 fn service_install_counts_the_jobs_of_the_daemon_under_the_getconf_directory_whatever_the_callers_tmpdir()
  {
-    let dir = ShortDir(PathBuf::from(format!("/tmp/dbs-{}", std::process::id())));
-    std::fs::create_dir_all(&dir.0).expect("writable");
+    let dir = short_dir("install");
     let home = TestHome::new();
     std::fs::create_dir_all(home.join("Library/LaunchAgents")).expect("writable");
     #[expect(clippy::disallowed_methods, reason = "the test writes a fixture")]
@@ -275,15 +330,7 @@ fn service_install_counts_the_jobs_of_the_daemon_under_the_getconf_directory_wha
     // The caller's socket, from its own TMPDIR, has no daemon; the daemon
     // that launchd runs listens under the getconf directory and runs a job.
     let test = with_agent(&home, &launchd);
-    let real = dir.0.join("deadband.sock");
-    let bound = bind(&real).expect("the socket binds");
-    let log = Arc::clone(&test.machine.log);
-    thread::spawn(move || {
-        let bound = bound;
-        let max_jobs = NonZeroUsize::new(2).expect("positive");
-        let settings = Settings::new(max_jobs, NonZeroUsize::new(4), None, None);
-        serve(&bound.listener, Fixed, settings, &log)
-    });
+    let real = daemon_in(&test, &dir, 2);
     let (_job, reply) = ask(&real, "build");
     assert!(matches!(reply, Reply::Granted { .. }), "{reply:?}");
 

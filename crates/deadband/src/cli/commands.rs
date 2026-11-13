@@ -270,9 +270,10 @@ pub(super) fn service<O: Write, W: Write, P>(
             crumbkit::finish_to(sink, output, SERVICE_INSTALL, result)
         }
         ServiceCommand::Uninstall(args) => {
-            // The daemon that uninstall stops listens on the machine's
-            // socket, so the question and the report name its jobs.
-            let held = counts(&machine.socket);
+            // The daemon that uninstall stops is the one launchd runs, which
+            // install asks on the same socket, so the question and the report
+            // name its jobs. An agent that is not loaded has none to name.
+            let held = service::held(agent, counts);
             let question = uninstall_question(held);
             let confirmed = if terminal {
                 output.confirm(args.yes, &question)

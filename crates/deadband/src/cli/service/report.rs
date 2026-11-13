@@ -7,11 +7,7 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use super::LABEL;
-
-/// The daemon's log, under the home directory. The launch agent's plist sends
-/// the daemon's standard error to it.
-pub(super) const LOG: &str = "Library/Logs/deadband.log";
+use super::{LABEL, LOG};
 
 /// The jobs that a daemon answered with: those it runs and those that wait
 /// for a place.
@@ -162,10 +158,29 @@ impl Report {
                     ),
                 }
             }
-            Step::Counted { running, waiting } => format!(
-                "the daemon has {running} running and {waiting} waiting {}; the running jobs keep running and the waiting jobs start at once",
-                if *waiting == 1 { "job" } else { "jobs" }
-            ),
+            Step::Counted { running, waiting } => {
+                let (keep, start) = if self.dry_run {
+                    ("would keep running", "would start at once")
+                } else {
+                    ("keep running", "start at once")
+                };
+                let mut effects = Vec::new();
+                if *running > 0 {
+                    effects.push(format!("the running jobs {keep}"));
+                }
+                if *waiting > 0 {
+                    effects.push(format!("the waiting jobs {start}"));
+                }
+                let counted = format!(
+                    "the daemon has {running} running and {waiting} waiting {}",
+                    if *waiting == 1 { "job" } else { "jobs" }
+                );
+                if effects.is_empty() {
+                    counted
+                } else {
+                    format!("{counted}; {}", effects.join(" and "))
+                }
+            }
             Step::NoCount => {
                 "the daemon did not answer, so deadband cannot say how many jobs it holds".to_owned()
             }

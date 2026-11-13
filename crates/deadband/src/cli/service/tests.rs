@@ -862,3 +862,40 @@ fn a_delete_that_fails_after_uninstalls_bootout_keeps_the_plist_and_a_rerun_dele
     uninstall(Some(&agent), false, None, &[]).expect("uninstalls");
     assert!(!plist_path(&home).exists());
 }
+
+/// Returns the first line that uninstall prints for a daemon that held
+/// `held`, in a dry run when `dry_run` is true.
+fn counts_line(held: Counts, dry_run: bool) -> String {
+    let home = TestHome::new();
+    write_plist(&home, &rendered(&home));
+    let launchd = Arc::new(FakeLaunchd::new(true));
+    let report =
+        uninstall(Some(&agent(&home, &launchd)), dry_run, Some(held), &[]).expect("uninstalls");
+    text(&report).lines().next().expect("a line").to_owned()
+}
+
+#[test]
+fn the_counts_line_promises_nothing_when_no_job_waits_or_runs() {
+    let none = Counts::default();
+    let idle = Counts {
+        running: 1,
+        waiting: 0,
+    };
+
+    assert_eq!(
+        counts_line(none, false),
+        "the daemon has 0 running and 0 waiting jobs"
+    );
+    assert_eq!(
+        counts_line(idle, false),
+        "the daemon has 1 running and 0 waiting jobs; the running jobs keep running"
+    );
+}
+
+#[test]
+fn the_counts_line_of_a_dry_run_says_what_would_happen() {
+    assert_eq!(
+        counts_line(TWO, true),
+        "the daemon has 1 running and 1 waiting job; the running jobs would keep running and the waiting jobs would start at once"
+    );
+}

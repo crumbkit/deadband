@@ -22,12 +22,15 @@ use serde::Serialize;
 
 use crate::job::launchd::Launchd;
 
+mod daemon;
 mod failed;
 pub mod plist;
 mod report;
 #[cfg(test)]
 mod tests;
 
+pub use self::daemon::held;
+use self::daemon::{socket_in, wait_for_answer, wait_until_unloaded};
 pub use self::failed::{
     SERVICE_LAUNCHCTL_FAILED, SERVICE_PLIST_UNREADABLE, SERVICE_UNLOCATED, SERVICE_UNSUPPORTED,
     SERVICE_WRITE_FAILED, ServiceFailed,
@@ -36,6 +39,10 @@ pub use self::report::{Counts, Report, Step};
 
 /// The label of deadband's launch agent.
 pub const LABEL: &str = "io.github.crumbkit.deadband";
+
+/// The daemon's log, under the home directory. The launch agent's plist sends
+/// the daemon's standard error to it.
+pub const LOG: &str = "Library/Logs/deadband.log";
 
 /// The commands for deadband's launchd service.
 #[derive(Debug, Subcommand)]
@@ -184,10 +191,7 @@ pub fn install(
         report.plist = Some(text.clone());
     }
     let changed = existing.as_deref() != Some(text.as_str());
-    // The daemon that launchd runs listens under the directory that getconf
-    // prints, whatever the caller's TMPDIR says.
-    let socket =
-        crate::socket::path(|name| (name == "TMPDIR").then(|| temp_dir.clone().into_os_string()));
+    let socket = socket_in(&temp_dir);
     if loaded {
         if !changed && !install.restart {
             report.steps.push(Step::UpToDate { path });
@@ -244,22 +248,6 @@ pub fn install(
     Ok(Prose::new(report))
 }
 
-/// The most times that install asks a freshly loaded daemon for its jobs,
-/// [`PAUSE`](crate::job::launchd::PAUSE) apart, about two seconds in all.
-const ANSWER_POLLS: u32 = 20;
-
-/// Returns whether `answers` becomes true within [`ANSWER_POLLS`] asks, which
-/// is whether the daemon that launchd started listens on its socket.
-fn wait_for_answer(agent: &LaunchAgent, mut answers: impl FnMut() -> bool) -> bool {
-    for _ in 0..ANSWER_POLLS {
-        if answers() {
-            return true;
-        }
-        agent.launchd.pause();
-    }
-    false
-}
-
 /// Unloads the agent and deletes its plist, or with `dry_run` reports the
 /// steps and changes nothing.
 ///
@@ -312,30 +300,13 @@ pub fn uninstall(
     let paths: Vec<PathBuf> = stays
         .iter()
         .cloned()
-        .chain([home.join(report::LOG)])
+        .chain([home.join(LOG)])
         .filter(|stay| stay.exists())
         .collect();
     if !paths.is_empty() {
         report.steps.push(Step::Stays { paths });
     }
     Ok(Prose::new(report))
-}
-
-/// The most `launchctl print` polls that install makes after a bootout,
-/// [`PAUSE`](crate::job::launchd::PAUSE) apart, about five seconds in all.
-const UNLOAD_POLLS: u32 = 50;
-
-/// Waits until launchd no longer lists the agent, which happens once the
-/// booted-out daemon has exited, so the bootstrap that follows is not
-/// refused. After [`UNLOAD_POLLS`] polls, or when a poll fails, it stops
-/// waiting and the bootstrap reports what launchd says.
-fn wait_until_unloaded(agent: &LaunchAgent) {
-    for _ in 0..UNLOAD_POLLS {
-        match agent.launchd.is_loaded(&agent.target()) {
-            Ok(true) => agent.launchd.pause(),
-            Ok(false) | Err(_) => return,
-        }
-    }
 }
 
 /// Returns `found`, or the refusal that names `what` when it is `None`.
