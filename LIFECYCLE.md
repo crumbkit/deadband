@@ -188,8 +188,8 @@ timeouts:
 - id: throttle-interval
   value: 60s
   where: cli/service/plist.rs THROTTLE_SECONDS, read by launchd
-  note: launchd starts the daemon at most once in this time, so a daemon that exits at start is restarted
-    once a minute
+  note: launchd starts the daemon at most once in this time, so a daemon that fails at start is restarted
+    once a minute; a daemon refused because another daemon holds the socket exits 0 and is not restarted
 bends:
 - daemon-state and lease are memory inside a process. Store kinds are file, dir, process, socket, terminal
   and external, so both are kind process, because the memory lives and dies with its process.

@@ -61,7 +61,10 @@ rewrite and the delete an H1 pair in the format. The lock covers it except
 for two commands whose `XDG_STATE_HOME` differs, because the lock's path
 follows `XDG_STATE_HOME` and the plist's path follows `HOME`. deadband keeps
 that as a soft limit. Install refuses to replace a file that is not an XML
-plist.
+plist. A plist written by an older deadband, whose `KeepAlive` is `true`,
+differs from the rendered text, so install rewrites it (`rewrite-plist`) and
+reloads the agent; that is how an installed agent takes the `KeepAlive`
+dictionary that restarts only an unclean exit.
 
 `create_dir_all` makes the directory when it is missing and does nothing when
 it exists. deadband never removes the directory. `reads: none` on that effect

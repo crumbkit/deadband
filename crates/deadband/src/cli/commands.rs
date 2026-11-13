@@ -13,7 +13,7 @@ use super::service::{self, Install, Report, SERVICE_INSTALL, SERVICE_UNINSTALL, 
 use super::{DaemonArgs, Machine, RunArgs};
 use crate::admission::{self, Asked, Notices};
 use crate::client::{self, ANSWER_WITHIN};
-use crate::daemon::{lock_path, note};
+use crate::daemon::{Unbound, lock_path, note};
 use crate::job;
 use crate::probe::{Probe, child_usage};
 use crate::protocol::Jobs;
@@ -193,6 +193,11 @@ fn finish<O: Write, W: Write>(
 
 /// Runs `deadband daemon`: listens on the machine's socket and admits jobs
 /// until accepting a connection fails, which it prints as a failure.
+///
+/// A daemon that another daemon already serves the socket for prints the
+/// refusal and exits with 0, so launchd's `KeepAlive`, which restarts only
+/// a daemon that exits nonzero, leaves it stopped. Every other reason to
+/// stop exits nonzero.
 pub(super) fn daemon<O: Write, W: Write, P: Probe + Clone + Send + 'static>(
     sink: &mut Sink<O, W>,
     output: &mut Run,
@@ -201,6 +206,9 @@ pub(super) fn daemon<O: Write, W: Write, P: Probe + Clone + Send + 'static>(
 ) -> u8 {
     let failure = serve::run_daemon(machine, args.max_jobs);
     output.print_failure(sink, &failure);
+    if matches!(failure, Unbound::Running { .. }) {
+        return 0;
+    }
     output.failure_exit(failure.code())
 }
 

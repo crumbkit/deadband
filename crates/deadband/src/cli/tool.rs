@@ -14,7 +14,7 @@ use super::service::{
     SERVICE_UNINSTALL, SERVICE_UNLOCATED, SERVICE_UNSUPPORTED, SERVICE_WRITE_FAILED,
 };
 use super::status::STATUS;
-use crate::daemon::{DAEMON_RUNNING, SOCKET_UNUSABLE};
+use crate::daemon::SOCKET_UNUSABLE;
 use crate::probe::{MACHINE_UNREADABLE, MACHINE_UNSUPPORTED};
 use crate::reclaim::CONFIG;
 #[cfg(feature = "tui")]
@@ -185,7 +185,7 @@ pub const TOOL: Tool = Tool::new()
             Exit::new(EXIT_MACHINE, "deadband could not read the machine.")
                 .failures(&[&MACHINE_UNREADABLE, &MACHINE_UNSUPPORTED]),
             Exit::new(EXIT_DAEMON, "the daemon could not listen on its socket.")
-                .failures(&[&DAEMON_RUNNING, &SOCKET_UNUSABLE]),
+                .failures(&[&SOCKET_UNUSABLE]),
             Exit::new(
                 EXIT_SERVICE,
                 "deadband could not install or uninstall its launchd agent.",

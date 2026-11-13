@@ -89,7 +89,9 @@ Writes: applies all items or none.
 
 ## `deadband daemon`
 
-Run the daemon that admits jobs, in the foreground
+Run the daemon that admits jobs, in the foreground.
+
+`daemon` exits with 0 when another daemon already serves the socket, so launchd does not start it again.
 
 ### Arguments
 

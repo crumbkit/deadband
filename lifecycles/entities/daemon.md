@@ -76,7 +76,9 @@ The daemon takes an exclusive `flock` on `<socket>.lock` without waiting, and
 only then looks at the socket path. A socket file there is removed and bound
 again (`rebind`). Anything else at the path is refused with
 `deadband::socket::unusable`, and a held lock is refused with
-`deadband::daemon::running`. The umask clears every group and other bit while
+`deadband::daemon::running`. `deadband daemon` exits with status 0 on that
+refusal and nonzero on every other end, so launchd's `KeepAlive`, which
+restarts only an unclean exit, leaves a refused daemon stopped. The umask clears every group and other bit while
 the socket and the lock file are made.
 
 `stop` is the daemon's own return. `serve` returns, `run_daemon` drops the
