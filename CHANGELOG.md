@@ -6,6 +6,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- Without `DEADBAND_SOCKET`, `DEADBAND_SOCKET_DIR` or `TMPDIR`, the socket
+  moves from `/tmp/deadband-<USER>.sock`, where another user could listen
+  first, to `deadband.sock` in `$XDG_RUNTIME_DIR/deadband` or else
+  `/tmp/deadband-<uid>`. The daemon makes that directory with mode 0700 and
+  refuses to start with `deadband::socket::directory` when it is a symlink,
+  belongs to another user or has any group or other permission bit. `USER` is
+  no longer read. macOS keeps its per-user temporary directory.
+- `run`, `status` and `top` check that the process listening on the socket
+  belongs to the same user (`getpeereid` on macOS, `SO_PEERCRED` on Linux)
+  before they send anything. When it does not, they print one line and run the
+  job at once without sending its command line. The check applies to every
+  socket path.
+- The daemon, the history writer and the service commands open their lock
+  files without following a symlink and refuse a lock file that another user
+  owns.
+
 ### Changed
 
 - `deadband daemon` now exits 0, where it exited 4, when another daemon

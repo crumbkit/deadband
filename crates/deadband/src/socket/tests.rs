@@ -4,7 +4,9 @@ use std::cell::RefCell;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use super::{VARIABLES, path, path_in_user_directory};
+use super::{
+    VARIABLES, fallback_directory, owned_directory_for, path, path_for, path_in_user_directory,
+};
 
 /// Returns a reader of an environment that holds only `vars`.
 fn environment(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
@@ -47,12 +49,76 @@ fn an_empty_variable_counts_as_absent() {
 }
 
 #[test]
-fn the_socket_is_in_tmp_with_the_user_name_when_no_directory_is_set() {
+fn the_socket_is_in_a_directory_named_by_the_uid_when_no_directory_is_set() {
     assert_eq!(
-        path(environment(&[("USER", "me")])),
-        Path::new("/tmp/deadband-me.sock")
+        path_for(environment(&[("USER", "me")]), 1000),
+        Path::new("/tmp/deadband-1000/deadband.sock")
     );
-    assert_eq!(path(environment(&[])), Path::new("/tmp/deadband.sock"));
+    assert_eq!(
+        path_for(environment(&[]), 0),
+        Path::new("/tmp/deadband-0/deadband.sock")
+    );
+}
+
+#[test]
+fn the_socket_is_in_a_deadband_directory_of_the_runtime_directory_when_one_is_set() {
+    assert_eq!(
+        path_for(environment(&[("XDG_RUNTIME_DIR", "/run/user/1000")]), 1000),
+        Path::new("/run/user/1000/deadband/deadband.sock")
+    );
+}
+
+#[test]
+fn an_empty_runtime_directory_counts_as_absent() {
+    assert_eq!(
+        path_for(environment(&[("XDG_RUNTIME_DIR", "")]), 1000),
+        Path::new("/tmp/deadband-1000/deadband.sock")
+    );
+}
+
+#[test]
+fn the_temporary_directory_beats_the_runtime_directory() {
+    assert_eq!(
+        path_for(
+            environment(&[("TMPDIR", "/tmp/me"), ("XDG_RUNTIME_DIR", "/run/user/1000")]),
+            1000
+        ),
+        Path::new("/tmp/me/deadband.sock")
+    );
+}
+
+#[test]
+fn deadband_owns_the_directory_of_a_fallback_socket_only() {
+    let fallback = environment(&[("XDG_RUNTIME_DIR", "/run/user/1000")]);
+    assert_eq!(
+        fallback_directory(&fallback, 1000),
+        Some(PathBuf::from("/run/user/1000/deadband"))
+    );
+    assert_eq!(
+        fallback_directory(environment(&[]), 7),
+        Some(PathBuf::from("/tmp/deadband-7"))
+    );
+    for set in [
+        ("DEADBAND_SOCKET", "/tmp/a.sock"),
+        ("DEADBAND_SOCKET_DIR", "/tmp"),
+        ("TMPDIR", "/tmp"),
+    ] {
+        assert_eq!(fallback_directory(environment(&[set]), 7), None, "{set:?}");
+    }
+}
+
+#[test]
+fn a_socket_that_the_per_user_directory_moved_has_no_owned_directory() {
+    let read = environment(&[]);
+    let fallback = path_for(&read, 7);
+    assert_eq!(
+        owned_directory_for(&read, 7, &fallback),
+        Some(PathBuf::from("/tmp/deadband-7"))
+    );
+    assert_eq!(
+        owned_directory_for(&read, 7, Path::new("/var/folders/ab/T/deadband.sock")),
+        None
+    );
 }
 
 #[test]

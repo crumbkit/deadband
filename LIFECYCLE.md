@@ -4,7 +4,8 @@ stores:
 - id: socket
   where: $DEADBAND_SOCKET, else $DEADBAND_SOCKET_DIR/deadband.sock, else on macOS deadband.sock in the
     per-user temporary directory that confstr _CS_DARWIN_USER_TEMP_DIR names, else $TMPDIR/deadband.sock,
-    else /tmp/deadband-<USER>.sock
+    else deadband.sock in $XDG_RUNTIME_DIR/deadband, else in /tmp/deadband-<uid>; the daemon makes that directory
+    with mode 0700 and refuses one that another user owns or that others can enter
   kind: socket
   write: in-place
   lock: socket

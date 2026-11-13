@@ -12,14 +12,23 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use rustix::process::getuid;
+
 use crate::admit::Hold;
 use crate::protocol::{Job, Jobs, Reply, Request, Timeline, read_line, write_line};
 
 mod lease;
+mod peer;
 #[cfg(test)]
 mod tests;
 
 pub use self::lease::{Lease, Notices};
+pub(crate) use self::peer::peer_uid;
+
+/// Reads the uid of the user who owns the process on the other end of a
+/// connection. The client replaces it in tests, which cannot start a daemon
+/// of another user.
+pub(crate) type PeerUid = fn(&UnixStream) -> io::Result<u32>;
 
 /// How long a client waits for the daemon's first answer before it counts
 /// the daemon as not answering.
@@ -57,6 +66,14 @@ pub enum Unasked {
         /// The error of the connection.
         error: io::Error,
     },
+    /// The process that listens on the socket belongs to another user, so
+    /// the client sent it nothing.
+    Foreign {
+        /// The socket's path.
+        path: PathBuf,
+        /// The uid of the user who owns the listening process.
+        uid: u32,
+    },
     /// The daemon did not answer in time.
     Silent {
         /// How long the client waited.
@@ -85,6 +102,11 @@ impl fmt::Display for Unasked {
                 "the daemon at {} could not be reached: {error}",
                 path.display()
             ),
+            Self::Foreign { path, uid } => write!(
+                f,
+                "the process that listens on {} belongs to uid {uid}, not to this user, so the command line was not sent",
+                path.display()
+            ),
             Self::Silent { waited } => write!(
                 f,
                 "the daemon did not answer within {} ms",
@@ -100,7 +122,15 @@ impl fmt::Display for Unasked {
 
 /// Connects to the daemon at `path`, or says why it cannot.
 fn connect(path: &Path) -> Result<UnixStream, Unasked> {
-    UnixStream::connect(path).map_err(|error| match error.kind() {
+    connect_checked(path, peer_uid)
+}
+
+/// Connects as [`connect`] does, and closes the connection unless `peer`
+/// says that this user owns the process that listens. The caller writes
+/// nothing before this returns, so a listener of another user never sees a
+/// command line.
+fn connect_checked(path: &Path, peer: PeerUid) -> Result<UnixStream, Unasked> {
+    let stream = UnixStream::connect(path).map_err(|error| match error.kind() {
         ErrorKind::NotFound | ErrorKind::ConnectionRefused => Unasked::NotRunning {
             path: path.to_owned(),
         },
@@ -108,7 +138,18 @@ fn connect(path: &Path) -> Result<UnixStream, Unasked> {
             path: path.to_owned(),
             error,
         },
-    })
+    })?;
+    match peer(&stream) {
+        Ok(uid) if uid == getuid().as_raw() => Ok(stream),
+        Ok(uid) => Err(Unasked::Foreign {
+            path: path.to_owned(),
+            uid,
+        }),
+        Err(error) => Err(Unasked::Unreachable {
+            path: path.to_owned(),
+            error,
+        }),
+    }
 }
 
 /// Reads one reply from `reader`, saying why when none arrives.
@@ -162,6 +203,41 @@ fn ask_reasking(
     queued: impl FnOnce(usize, Option<Hold>),
     notices: Option<&Notices>,
 ) -> Admission {
+    ask_reasking_checked(
+        path,
+        job,
+        answer_within,
+        reask_for,
+        queued,
+        notices,
+        peer_uid,
+    )
+}
+
+/// Asks as [`ask`] does, and reads the owner of the daemon with `peer`.
+#[cfg(test)]
+fn ask_checked(
+    path: &Path,
+    job: &Job,
+    answer_within: Duration,
+    queued: impl FnOnce(usize, Option<Hold>),
+    notices: Option<&Notices>,
+    peer: PeerUid,
+) -> Admission {
+    ask_reasking_checked(path, job, answer_within, REASK_FOR, queued, notices, peer)
+}
+
+/// Asks as [`ask_reasking`] does, and reads the owner of the daemon with
+/// `peer`.
+fn ask_reasking_checked(
+    path: &Path,
+    job: &Job,
+    answer_within: Duration,
+    reask_for: Duration,
+    queued: impl FnOnce(usize, Option<Hold>),
+    notices: Option<&Notices>,
+    peer: PeerUid,
+) -> Admission {
     let mut queued = Some(queued);
     // When the connection of a queued job first closed. The bound counts
     // from this moment, however often a daemon queues the job again.
@@ -175,6 +251,7 @@ fn ask_reasking(
             &mut queued,
             &mut was_queued,
             notices,
+            peer,
         ) {
             Ok(lease) => return Admission::Granted(lease),
             Err(Unasked::Closed) if was_queued => {
@@ -211,8 +288,9 @@ fn try_ask(
     queued: &mut Option<impl FnOnce(usize, Option<Hold>)>,
     was_queued: &mut bool,
     notices: Option<&Notices>,
+    peer: PeerUid,
 ) -> Result<Lease, Unasked> {
-    let mut stream = connect(path)?;
+    let mut stream = connect_checked(path, peer)?;
     let garbled = |error| Unasked::Garbled { error };
     stream
         .set_read_timeout(Some(answer_within))
@@ -264,8 +342,13 @@ impl Read for Deadline {
 
 /// Sends `request` to the daemon at `path` and reads one reply, which must
 /// arrive whole within `answer_within`.
-fn request(path: &Path, request: &Request, answer_within: Duration) -> Result<Reply, Unasked> {
-    let mut stream = connect(path)?;
+fn request(
+    path: &Path,
+    request: &Request,
+    answer_within: Duration,
+    peer: PeerUid,
+) -> Result<Reply, Unasked> {
+    let mut stream = connect_checked(path, peer)?;
     let at = Instant::now() + answer_within;
     stream
         .set_read_timeout(Some(answer_within))
@@ -287,7 +370,12 @@ fn wrong_reply() -> Unasked {
 ///
 /// Returns why the daemon could not be asked.
 pub fn jobs(path: &Path, answer_within: Duration) -> Result<Jobs, Unasked> {
-    match request(path, &Request::Status, answer_within)? {
+    jobs_checked(path, answer_within, peer_uid)
+}
+
+/// Asks as [`jobs`] does, and reads the owner of the daemon with `peer`.
+fn jobs_checked(path: &Path, answer_within: Duration, peer: PeerUid) -> Result<Jobs, Unasked> {
+    match request(path, &Request::Status, answer_within, peer)? {
         Reply::Jobs(jobs) => Ok(jobs),
         _ => Err(wrong_reply()),
     }
@@ -299,7 +387,7 @@ pub fn jobs(path: &Path, answer_within: Duration) -> Result<Jobs, Unasked> {
 ///
 /// Returns why the daemon could not be asked.
 pub fn timeline(path: &Path, answer_within: Duration) -> Result<Timeline, Unasked> {
-    match request(path, &Request::Timeline, answer_within)? {
+    match request(path, &Request::Timeline, answer_within, peer_uid)? {
         Reply::Timeline(timeline) => Ok(timeline),
         _ => Err(wrong_reply()),
     }

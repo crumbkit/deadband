@@ -12,7 +12,12 @@ steps:
 crash:
 - {after: start, leaves: deadband run died from SIGKILL and the job keeps running, recovery: none}
 ---
-This is the fail-open path. A missing socket, a socket with no listener, a
+This is the fail-open path. Before it sends anything, the client reads the
+uid of the process on the other end of the connection (`getpeereid` on macOS,
+`SO_PEERCRED` on Linux) and compares it with its own. A listener of another
+user, or a peer whose uid cannot be read, gives `Admission::Open` with a line
+that names the socket and the uid, and the client has sent no command line
+(client.rs `connect_checked`). The check applies to every socket path. A missing socket, a socket with no listener, a
 daemon that does not answer in 2 seconds, one that closes the connection
 before it queues the job, or one whose answer cannot be read all give
 `Admission::Open`. A client whose connection closes after `Queued` asks again

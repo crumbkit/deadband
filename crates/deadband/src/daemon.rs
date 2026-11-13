@@ -43,10 +43,13 @@ mod tests;
 mod timeline;
 mod watch;
 
-pub(crate) use self::bind::take_lock;
 pub use self::bind::{
-    Bound, DAEMON_RUNNING, SOCKET_UNUSABLE, Unbound, bind, lock_path, raise_descriptor_limit,
+    Bound, DAEMON_RUNNING, DirectoryFault, SOCKET_DIRECTORY, SOCKET_UNUSABLE, Unbound, bind,
+    lock_path, raise_descriptor_limit,
 };
+pub(crate) use self::bind::{private_directory, take_lock};
+#[cfg(test)]
+pub(crate) use self::bind::{private_directory_as, take_lock_as};
 pub use self::settings::{Settings, Watching, default_max_jobs};
 
 /// How often the daemon samples the probe.
