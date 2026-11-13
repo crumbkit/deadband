@@ -366,6 +366,12 @@ memory or disk when the machine runs short. A reclaimer might stop the
 servers of idle workspaces, or delete build output that can be rebuilt.
 deadband never stops anything itself; the reclaimer decides what to stop.
 
+A daemon started with `DEADBAND_SOCKET` set ignores the config file, logs one
+line saying so, and runs no reclaimer and no `on_stuck` command. A reclaim
+holds a lock on `reclaim.lock` in the state directory while it runs, so
+daemons of one user never reclaim together; a daemon that finds the lock held
+logs one line and tries again after `reclaim_after`.
+
 The daemon reads its config file once, when it starts. The file is
 `deadband/config.toml` in `$XDG_CONFIG_HOME`, or
 `~/.config/deadband/config.toml` when `XDG_CONFIG_HOME` is not set.

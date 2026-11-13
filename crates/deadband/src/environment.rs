@@ -69,7 +69,7 @@ pub const VARIABLES: &[Variable] = &[
     },
     Variable {
         name: "DEADBAND_SOCKET",
-        purpose: "names a socket of its own, and a daemon started with it records no job history",
+        purpose: "names a socket of its own, and a daemon started with it records no job history and runs no reclaimer and no on_stuck command",
         form: "a file path",
         absent: "the daemon records each finished job",
     },
@@ -178,6 +178,17 @@ impl Environment {
             return None;
         }
         self.state.clone()
+    }
+
+    /// Returns the directory of the reclaim config, or `None` when the
+    /// configuration directory is unknown or a daemon started here runs no
+    /// reclaimer and no `on_stuck` command.
+    #[must_use]
+    pub fn reclaim_directory(&self) -> Option<PathBuf> {
+        if self.own_socket {
+            return None;
+        }
+        self.config.clone()
     }
 
     /// Returns the variables that a job with `jobs` threads gets: each

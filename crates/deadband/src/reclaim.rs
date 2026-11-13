@@ -21,6 +21,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::stuck;
 
+mod lock;
 pub(crate) mod program;
 #[cfg(test)]
 mod tests;
@@ -28,6 +29,7 @@ mod text;
 mod watch;
 mod worker;
 
+pub use self::lock::ReclaimLock;
 pub use self::watch::{MAX_REST, Watch};
 pub use self::worker::reclaim;
 
