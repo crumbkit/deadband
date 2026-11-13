@@ -53,8 +53,9 @@ fn reclaim_config<P>(machine: &Machine<P>) -> reclaim::Config {
 }
 
 /// Runs the daemon: listens on the machine's socket and admits jobs until
-/// accepting a connection fails with an error that retrying cannot fix,
-/// then returns why it stopped. A failure that can pass, such as too many
+/// accepting a connection fails with an error that retrying cannot fix, the
+/// socket file is gone or replaced, or the sampler panics, then returns why
+/// it stopped. A failure that can pass, such as too many
 /// open files, is logged and retried.
 ///
 /// `max_jobs` is the most jobs that run at once; `None` takes a quarter of

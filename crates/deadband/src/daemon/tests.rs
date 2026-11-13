@@ -20,6 +20,7 @@ use crate::probe::{ChildUsage, Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::{Job, JobState, Jobs, Reply, Request, Short, read_line, write_line};
 use crate::testing::{TestSocket, socket_path};
 
+mod alive;
 mod shown;
 mod timeline;
 mod watch;
@@ -41,13 +42,22 @@ const CORES: usize = 16;
 
 /// A probe whose pressure and free disk the test sets. Its load is 1.
 #[derive(Clone)]
-struct Dial(Arc<AtomicU8>, Arc<AtomicBool>);
+struct Dial(Arc<AtomicU8>, Arc<AtomicBool>, Arc<Mutex<()>>);
 
 impl Dial {
     fn new(pressure: Pressure) -> Self {
-        let dial = Self(Arc::new(AtomicU8::new(0)), Arc::new(AtomicBool::new(false)));
+        let dial = Self(
+            Arc::new(AtomicU8::new(0)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Mutex::new(())),
+        );
         dial.set(pressure);
         dial
+    }
+
+    /// Blocks every sample of the machine until the returned guard drops.
+    fn stall(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.2.lock().expect("the gate is not poisoned")
     }
 
     /// Makes the disk's free space critically low, or not.
@@ -71,6 +81,7 @@ impl Dial {
 
 impl Probe for Dial {
     fn sample(&self) -> Result<Sample, Unreadable> {
+        drop(self.2.lock());
         let memory_pressure = match self.0.load(Ordering::SeqCst) {
             0 => Pressure::Normal,
             1 => Pressure::Warn,
