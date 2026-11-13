@@ -493,11 +493,8 @@ fn top_refuses_a_pipe_and_names_status() {
     assert!(!String::from_utf8_lossy(&output.stdout).contains('\u{1b}'));
 }
 
-/// The tests of the history file through the built binary. They start a
-/// daemon on the default socket, which on macOS is in the directory that
-/// getconf prints, where the user's own daemon listens, so they run on other
-/// systems only.
-#[cfg(all(test, not(target_os = "macos")))]
+/// The tests of the history file through the built binary.
+#[cfg(test)]
 #[expect(
     clippy::disallowed_methods,
     reason = "a test writes the file that blocks the state directory, and a partial fixture only fails that test"
@@ -528,12 +525,14 @@ mod history {
         }
 
         /// Returns a `deadband` command that finds its socket through
-        /// `TMPDIR` and its history through `XDG_STATE_HOME`.
+        /// `DEADBAND_SOCKET_DIR`, which a daemon on the default socket reads
+        /// before the per-user directory, and its history through
+        /// `XDG_STATE_HOME`.
         fn command(&self, args: &[&str]) -> Command {
             let mut command = deadband(Path::new("unused"), args);
             command
                 .env_remove("DEADBAND_SOCKET")
-                .env("TMPDIR", self.0.join("t"))
+                .env("DEADBAND_SOCKET_DIR", self.0.join("t"))
                 .env("XDG_STATE_HOME", self.state());
             command
         }

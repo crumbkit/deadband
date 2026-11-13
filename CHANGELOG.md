@@ -23,6 +23,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `deadband status --json` gives the state in `daemon_state`.
 - Every command accepts `--no-input`, which makes a command that would ask
   a question refuse instead.
+- `DEADBAND_SOCKET_DIR` names the directory that holds `deadband.sock`. It
+  is read after `DEADBAND_SOCKET` and before the per-user directory.
+
+### Fixed
+
+- On macOS, `deadband run` and `deadband status` now find the launchd
+  daemon's socket whatever `TMPDIR` is. They use the directory that
+  `getconf DARWIN_USER_TEMP_DIR` prints, where that daemon listens, so a
+  caller with another `TMPDIR` no longer runs its jobs uncounted. They fall
+  back to `TMPDIR` when getconf fails.
 
 ## [0.2.1] - 2026-11-11
 

@@ -59,7 +59,7 @@ fn the_socket_is_in_tmp_with_the_user_name_when_no_directory_is_set() {
 fn the_per_user_directory_beats_the_callers_tmpdir_for_the_default_socket() {
     let socket = path_in_user_directory(
         environment(&[("TMPDIR", "/private/other/"), ("USER", "me")]),
-        Some(PathBuf::from("/var/folders/ab/T/")),
+        || Some(PathBuf::from("/var/folders/ab/T/")),
     );
     assert_eq!(socket, Path::new("/var/folders/ab/T/deadband.sock"));
 }
@@ -68,15 +68,47 @@ fn the_per_user_directory_beats_the_callers_tmpdir_for_the_default_socket() {
 fn deadband_socket_beats_the_per_user_directory() {
     let socket = path_in_user_directory(
         environment(&[("DEADBAND_SOCKET", "/run/me/db.sock")]),
-        Some(PathBuf::from("/var/folders/ab/T/")),
+        || Some(PathBuf::from("/var/folders/ab/T/")),
     );
     assert_eq!(socket, Path::new("/run/me/db.sock"));
 }
 
 #[test]
 fn the_callers_tmpdir_names_the_socket_when_no_per_user_directory_is_known() {
-    let socket = path_in_user_directory(environment(&[("TMPDIR", "/tmp/me")]), None);
+    let socket = path_in_user_directory(environment(&[("TMPDIR", "/tmp/me")]), || None);
     assert_eq!(socket, Path::new("/tmp/me/deadband.sock"));
+}
+
+#[test]
+fn deadband_socket_dir_beats_the_per_user_directory() {
+    let socket = path_in_user_directory(
+        environment(&[("DEADBAND_SOCKET_DIR", "/run/me"), ("TMPDIR", "/tmp/me")]),
+        || Some(PathBuf::from("/var/folders/ab/T/")),
+    );
+    assert_eq!(socket, Path::new("/run/me/deadband.sock"));
+}
+
+#[test]
+fn deadband_socket_beats_deadband_socket_dir() {
+    let socket = path_in_user_directory(
+        environment(&[
+            ("DEADBAND_SOCKET", "/run/me/db.sock"),
+            ("DEADBAND_SOCKET_DIR", "/run/other"),
+        ]),
+        || None,
+    );
+    assert_eq!(socket, Path::new("/run/me/db.sock"));
+}
+
+#[test]
+fn the_per_user_directory_is_not_looked_up_when_an_override_is_set() {
+    let asked = std::cell::Cell::new(false);
+    let lookup = || {
+        asked.set(true);
+        None
+    };
+    path_in_user_directory(environment(&[("DEADBAND_SOCKET_DIR", "/run/me")]), lookup);
+    assert!(!asked.get());
 }
 
 #[test]

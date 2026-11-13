@@ -572,7 +572,9 @@ set and not empty:
 | Variable | Socket |
 | --- | --- |
 | `DEADBAND_SOCKET` | the path it names |
-| `TMPDIR` | `deadband.sock` in that directory, which macOS makes per user |
+| `DEADBAND_SOCKET_DIR` | `deadband.sock` in that directory |
+| the directory `getconf DARWIN_USER_TEMP_DIR` prints (macOS only, not a variable) | `deadband.sock` in that directory, whatever `TMPDIR` is |
+| `TMPDIR` | `deadband.sock` in that directory |
 | `USER` | `/tmp/deadband-<USER>.sock` |
 
 When none is set, the socket is `/tmp/deadband.sock`. The daemon makes the

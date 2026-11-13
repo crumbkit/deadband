@@ -38,11 +38,17 @@ pub const VARIABLES: &[Variable] = &[
         name: "DEADBAND_SOCKET",
         purpose: "the path of the daemon's socket, which the daemon, `run` and `status` all use",
         form: "a file path",
-        absent: "deadband reads TMPDIR",
+        absent: "deadband reads DEADBAND_SOCKET_DIR",
+    },
+    Variable {
+        name: "DEADBAND_SOCKET_DIR",
+        purpose: "the directory that holds `deadband.sock`, for a daemon and its callers that are not the launchd daemon",
+        form: "a directory path",
+        absent: "on macOS deadband uses the directory that `getconf DARWIN_USER_TEMP_DIR` prints, and when that fails it reads TMPDIR",
     },
     Variable {
         name: "TMPDIR",
-        purpose: "the temporary directory, which macOS makes per-user, and which holds `deadband.sock`",
+        purpose: "the temporary directory that holds `deadband.sock` where there is no per-user directory to ask for, such as on Linux",
         form: "a directory path",
         absent: "deadband uses /tmp/deadband-<USER>.sock",
     },
@@ -55,17 +61,22 @@ pub const VARIABLES: &[Variable] = &[
 ];
 
 /// Returns the path of the daemon's socket for a caller whose per-user
-/// temporary directory is `user_directory`, which on macOS is the directory
-/// that `getconf DARWIN_USER_TEMP_DIR` prints.
+/// temporary directory `user_directory` returns, which on macOS is the
+/// directory that `getconf DARWIN_USER_TEMP_DIR` prints.
 ///
 /// The launchd daemon listens in that directory whatever `TMPDIR` its callers
-/// have, so `run` and `status` look there too. `DEADBAND_SOCKET` still wins.
-/// When `user_directory` is `None`, the path is the one [`path`] returns.
+/// have, so `run` and `status` look there too. `DEADBAND_SOCKET` and
+/// `DEADBAND_SOCKET_DIR` still win, and then `user_directory` is not called.
+/// When it returns `None`, the path is the one [`path`] returns.
 pub fn path_in_user_directory(
     read: impl Fn(&str) -> Option<OsString>,
-    user_directory: Option<PathBuf>,
+    user_directory: impl FnOnce() -> Option<PathBuf>,
 ) -> PathBuf {
-    let Some(directory) = user_directory else {
+    let overridden = ["DEADBAND_SOCKET", "DEADBAND_SOCKET_DIR"]
+        .iter()
+        .any(|name| read(name).is_some_and(|value| !value.is_empty()));
+    let directory = if overridden { None } else { user_directory() };
+    let Some(directory) = directory else {
         return path(read);
     };
     path(|name| match name {
@@ -78,13 +89,16 @@ pub fn path_in_user_directory(
 /// `read`, which returns `None` for an absent variable.
 ///
 /// The path is `DEADBAND_SOCKET` when it is set. Otherwise it is
-/// `deadband.sock` in `TMPDIR`, which macOS makes per-user. When neither is
-/// set, it is `/tmp/deadband-<USER>.sock`, where other users can see it; the
-/// daemon makes the socket readable and writable by its own user only.
+/// `deadband.sock` in `DEADBAND_SOCKET_DIR`, and otherwise in `TMPDIR`. When
+/// none is set, it is `/tmp/deadband-<USER>.sock`, where other users can see
+/// it; the daemon makes the socket readable and writable by its own user only.
 pub fn path(read: impl Fn(&str) -> Option<OsString>) -> PathBuf {
     let set = |name: &str| read(name).filter(|value| !value.is_empty());
     if let Some(socket) = set("DEADBAND_SOCKET") {
         return PathBuf::from(socket);
+    }
+    if let Some(directory) = set("DEADBAND_SOCKET_DIR") {
+        return PathBuf::from(directory).join(FILE);
     }
     if let Some(directory) = set("TMPDIR") {
         return PathBuf::from(directory).join(FILE);
