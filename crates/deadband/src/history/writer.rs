@@ -23,11 +23,9 @@
 //! recorded where readers look.
 
 use std::fmt;
-use std::fs::{self, DirBuilder, File, OpenOptions, Permissions, TryLockError};
+use std::fs::{self, File, OpenOptions, Permissions, TryLockError};
 use std::io::{self, Write as _};
-use std::os::unix::fs::{
-    DirBuilderExt as _, FileExt as _, OpenOptionsExt as _, PermissionsExt as _,
-};
+use std::os::unix::fs::{FileExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -35,11 +33,8 @@ use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 
 use super::identity::Identity;
 use super::{CHANNEL, FILE, Line, MAX_BYTES, ROTATED_FILE};
-use crate::daemon::{Log, note, take_lock};
+use crate::daemon::{Log, make_state_dir, note, take_lock};
 use crate::spawn;
-
-/// The mode of the state directory: only its owner may enter it.
-const DIRECTORY_MODE: u32 = 0o700;
 
 /// The mode of the history file: only its owner may read or write it.
 const FILE_MODE: u32 = 0o600;
@@ -276,7 +271,7 @@ impl Writer {
             }
             None => {}
         }
-        make_directory(&self.directory)?;
+        make_state_dir(&self.directory)?;
         match take_lock(&path) {
             Ok(file) => {
                 let identity = Identity::of(&file)?;
@@ -345,7 +340,7 @@ impl Writer {
 /// Opens the history file in `directory`, making the directory and the file
 /// when they do not exist, and adds a newline when the last line is torn.
 fn open_file(directory: &Path) -> io::Result<Open> {
-    make_directory(directory)?;
+    make_state_dir(directory)?;
     #[expect(
         clippy::disallowed_methods,
         reason = "crates/deadband/src/history/writer.rs appends to a log; rust-standards.toml's DUR-1 exception says why this file does not use an atomic writer"
@@ -373,14 +368,4 @@ fn open_file(directory: &Path) -> io::Result<Open> {
         identity,
         size,
     })
-}
-
-/// Makes `directory` with mode 0700 when it does not exist, and sets that
-/// mode when it does.
-fn make_directory(directory: &Path) -> io::Result<()> {
-    DirBuilder::new()
-        .recursive(true)
-        .mode(DIRECTORY_MODE)
-        .create(directory)?;
-    fs::set_permissions(directory, Permissions::from_mode(DIRECTORY_MODE))
 }

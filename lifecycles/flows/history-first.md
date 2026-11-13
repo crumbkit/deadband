@@ -28,21 +28,21 @@ crash:
     machine lines are lost', recovery: none}
 ---
 The writer thread takes the lock in `claim` when it starts, before any line
-arrives (history/writer.rs:193-196). `claim` makes the state directory before
-it locks `jobs.lock` (history/writer.rs:279); the lock step
+arrives (history/writer.rs:188-191). `claim` makes the state directory before
+it locks `jobs.lock` (history/writer.rs:274); the lock step
 runs only when `jobs.lock` does not exist yet (daemon/bind.rs:137). The
-writer's first line then opens `jobs.jsonl`, which calls `make_directory`
-again (history/writer.rs:255-258, 348). The open
+writer's first line then opens `jobs.jsonl`, which calls `make_state_dir`
+(daemon.rs) again (history/writer.rs:250-253, 343). The open
 step is `open-new` when no file exists, `repair` when the last line is torn,
 and `reopen` for a whole file.
 
 When another daemon holds `jobs.lock`, the line stops after the claim-dir
 step: this writer records nothing, logs one line, and tries the lock again on
-each later line (history/writer.rs:280-302). The format has no step that
+each later line (history/writer.rs:275-297). The format has no step that
 refuses and stops, so the prose says it.
 
 The daemon hands each line to the writer with `try_send` on a channel of 256
-lines (history/writer.rs:78), so it never waits for the disk. Lines are lost
+lines (history/writer.rs:73), so it never waits for the disk. Lines are lost
 in these cases: a full channel, a stopped writer, another daemon holding
 `jobs.lock`, a failed write, a line written in the moment a `jobs.jsonl` is removed
 (history-unlinked), and a daemon end with lines in the channel. A job that ends while no daemon holds

@@ -3,12 +3,11 @@
 //! Without it, an install racing an uninstall can load an agent whose plist
 //! the uninstall then deletes.
 
-use std::fs::{DirBuilder, File, TryLockError};
-use std::os::unix::fs::DirBuilderExt as _;
+use std::fs::{File, TryLockError};
 use std::path::Path;
 
 use super::ServiceFailed;
-use crate::daemon::take_lock;
+use crate::daemon::{make_state_dir, take_lock};
 
 /// The name of the lock file in the state directory.
 pub(super) const LOCK_FILE: &str = "service.lock";
@@ -20,10 +19,6 @@ pub(super) const LOCK_FILE: &str = "service.lock";
 /// and the second command then refuses.
 pub(super) const LOCK_POLLS: u32 = 100;
 
-/// The mode of the state directory when the lock makes it: only its owner
-/// may enter it, as the history writer makes it.
-const DIRECTORY_MODE: u32 = 0o700;
-
 /// The lock that one service command holds until the value is dropped.
 #[derive(Debug)]
 pub(super) struct ServiceLock {
@@ -31,8 +26,8 @@ pub(super) struct ServiceLock {
     _file: File,
 }
 
-/// Takes the lock in `state`, the state directory, which it makes when it
-/// does not exist. While another command holds the lock it calls `pause`
+/// Takes the lock in `state`, the state directory, which it makes with mode
+/// 0700 when it does not exist and sets to mode 0700 when it does. While another command holds the lock it calls `pause`
 /// and looks again, up to [`LOCK_POLLS`] times.
 ///
 /// # Errors
@@ -42,11 +37,7 @@ pub(super) struct ServiceLock {
 /// file cannot be made or locked.
 pub(super) fn hold(state: &Path, mut pause: impl FnMut()) -> Result<ServiceLock, ServiceFailed> {
     let path = state.join(LOCK_FILE);
-    if let Err(error) = DirBuilder::new()
-        .recursive(true)
-        .mode(DIRECTORY_MODE)
-        .create(state)
-    {
+    if let Err(error) = make_state_dir(state) {
         return Err(ServiceFailed::Lock { path, error });
     }
     let mut polls = 0;
