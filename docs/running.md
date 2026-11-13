@@ -493,8 +493,8 @@ failed, if it did, such as
 where `at` is the time the reclaim ended in RFC 3339 in UTC with
 milliseconds.
 
-While a reclaimer runs, `deadband status` also shows `reclaiming: <reclaimer>
-asking for <need>, started <time> ago`, and `deadband status --json` gives it in
+While a reclaimer runs, `deadband status` also shows `reclaiming: <need>, started
+<time> ago`, and `deadband status --json` gives it in
 the `reclaiming` field: `need`, and `since` as the start time in RFC 3339 in
 UTC, or `null` when no reclaim runs.
 
