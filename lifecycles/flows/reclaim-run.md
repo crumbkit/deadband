@@ -3,7 +3,10 @@ $type: lifecycles/flow/v1
 name: reclaim-run
 command: the daemon's reclaim thread, started by the sampler
 steps:
-- {id: dir, transition: state-dir#make-open}
+- id: dir
+  one_of:
+  - {transition: state-dir#make}
+  - {transition: state-dir#set-mode}
 - {id: dry, transition: reclaimer-process#spawn}
 - {id: dry-reap, transition: reclaimer-process#reap}
 - {id: real, transition: reclaimer-process#spawn}
@@ -39,7 +42,8 @@ it for real when the plan frees any bytes. It stops when the bytes freed cover
 the need. The steps show one reclaimer; the loop repeats dry to report for each
 one until the need is met.
 
-The dir step makes the state directory, which already exists on most runs.
+The dir step makes the state directory with mode 0700, or sets that mode on
+the directory that already exists on most runs.
 The thread holds `reclaim.lock` from before the dry step until after finish.
 When another daemon holds it, the thread runs the reclaim-skipped flow
 instead.

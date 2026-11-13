@@ -230,7 +230,7 @@ bends:
   makes them on first use and never removes them, and nothing in deadband depends on their removal.'
 - 'if_missing has no value for a write that goes to a removed file. history-file#append says if_missing:
   fail, because it writes to the open descriptor; the writer checks the path before each line, so only
-  a line written between that check and a removal goes to the removed file (history/writer.rs:248-259).'
+  a line written between that check and a removal goes to the removed file (history/writer.rs:243-254).'
 ---
 # deadband's lifecycle registry
 

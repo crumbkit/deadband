@@ -15,7 +15,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -373,4 +373,25 @@ fn start_reclaim(
         );
         lock(shared).watch.skipped(Instant::now());
     }
+}
+
+/// The mode of the state directory: only its owner may enter it.
+const STATE_DIR_MODE: u32 = 0o700;
+
+/// Makes the state directory `directory` with mode 0700 when it does not
+/// exist, and sets that mode when it does. The history writer, the reclaim
+/// lock and the service lock each call it before they open a file there, so
+/// whichever runs first leaves the directory private.
+///
+/// # Errors
+///
+/// Returns the error of making the directory or of setting its mode.
+pub(crate) fn make_state_dir(directory: &Path) -> io::Result<()> {
+    use std::fs::{self, DirBuilder, Permissions};
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+    DirBuilder::new()
+        .recursive(true)
+        .mode(STATE_DIR_MODE)
+        .create(directory)?;
+    fs::set_permissions(directory, Permissions::from_mode(STATE_DIR_MODE))
 }
