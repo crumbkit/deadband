@@ -60,7 +60,11 @@ status.
 
 - Only the throttle module changes a job's priority. clippy's
   `disallowed-methods` refuses those calls everywhere else.
-- deadband never signals or ends a job.
+- deadband never ends a job of its own choosing and sends no signal of its own
+  choosing to one. The one exception, decided by the owner on 2026-11-13, is that
+  `deadband run` passes a SIGTERM or SIGINT it received on to its job,
+  unchanged, and only the job module (`job/forward.rs`) does it. clippy's
+  `disallowed-methods` refuses `kill_process` everywhere else.
 - When the daemon cannot be reached or does not answer, the job runs at once
   and `deadband run` says why in one line on standard error. When a daemon
   closes the connection of a queued job, `deadband run` asks again for 5
