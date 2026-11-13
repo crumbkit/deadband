@@ -1008,6 +1008,25 @@ fn a_service_command_waits_for_the_lock_and_takes_it_once_the_holder_finishes() 
 }
 
 #[test]
+fn a_service_command_makes_an_open_state_directory_private() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let home = TestHome::new();
+    let state = state_dir(&home);
+    std::fs::create_dir_all(&state).expect("the state directory is made");
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755))
+        .expect("the mode changes");
+
+    let lock = hold(&state, || {});
+
+    assert!(lock.is_ok(), "{lock:?}");
+    let mode = std::fs::metadata(&state)
+        .expect("the directory reads")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700);
+}
+
+#[test]
 fn the_lock_is_released_when_the_command_ends_so_the_next_command_runs() {
     let home = TestHome::new();
     let launchd = Arc::new(FakeLaunchd::new(false));

@@ -20,5 +20,5 @@ crash:
 ---
 A failed write closes the file, and so do a rotation and a removed or
 replaced `jobs.jsonl` or `jobs.lock`. The next line opens it again:
-`make_directory` sets the directory's mode, and the open step is one of the
+`make_state_dir` (daemon.rs) sets the directory's mode, and the open step is one of the
 three opens.

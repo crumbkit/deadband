@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A reclaim that makes the state directory now makes it with mode 0700, and
+  a reclaim or a service command sets mode 0700 on a state directory that
+  exists with a wider mode. Before, a reclaim that ran after the directory
+  was removed, or in a daemon whose history thread was refused, left the
+  directory with the mode the umask allowed, usually 0755.
+
 ## [0.3.1] - 2026-11-13
 
 ### Fixed

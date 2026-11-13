@@ -80,13 +80,13 @@ No transition goes there; the history flows' crash points name it in
 file (`reopen`) sets the file's mode to 0600 and writes nothing else.
 
 Before each line the writer checks, by device and inode, that its open file is
-still the file at `jobs.jsonl` (history/writer.rs:248-254). When the path
+still the file at `jobs.jsonl` (history/writer.rs:243-249). When the path
 names no file or another file, the writer closes its file and opens the path
 again, which is `open-new` for a removed file and `reopen` for a replacement.
 `append` itself writes to the open file descriptor, not to the path, so it
 says `if_missing: fail`. The check and the write are two calls, so a removal
 between them sends that one line to the removed file
-(history/writer.rs:248-259). The format has no value for "writes to the
+(history/writer.rs:243-254). The format has no value for "writes to the
 removed file"; the bend in the index says so.
 
 When something outside deadband removes `jobs.jsonl` (`unlinked`), the next

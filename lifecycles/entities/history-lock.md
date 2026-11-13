@@ -37,7 +37,7 @@ transitions:
 exclusive flock without waiting. deadband never removes the file.
 
 Before each line, `claim` checks by device and inode that the file it locked
-is still the file at `jobs.lock` (history/writer.rs:269-278). When something
+is still the file at `jobs.lock` (history/writer.rs:264-273). When something
 outside deadband has removed or replaced it (`unlinked`), the writer releases
 its lock and closes the history file, then takes a lock on the file now at the
 path, making it when it is missing (`make`). When a second writer on the same
