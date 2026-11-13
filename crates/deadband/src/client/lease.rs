@@ -243,8 +243,9 @@ impl Seat {
     /// job has ended or the write fails. The check, the write and the change
     /// of state happen in one hold of the lock, so [`Seat::end`] runs
     /// either before it, and no daemon hears of the job, or after it, and
-    /// the new connection gets the `Done`. The write waits at most
-    /// [`WRITE_WITHIN`], which the caller sets on `stream`.
+    /// the new connection gets the `Done`. The caller sets [`WRITE_WITHIN`] on
+    /// `stream` as the timeout of each send, and `write_all` can make
+    /// several, so the hold is bounded by [`WRITE_WITHIN`] for each send.
     pub(super) fn install(&self, stream: UnixStream, seat: &Request) -> bool {
         let mut state = self.lock();
         if matches!(*state, SeatState::Ended) || write_line(&mut &stream, seat).is_err() {

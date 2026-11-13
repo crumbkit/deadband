@@ -341,6 +341,9 @@ fn service_install_counts_the_jobs_of_the_daemon_under_the_getconf_directory_wha
     assert!(launchd.changes().is_empty(), "{:?}", launchd.changes());
 }
 
+/// Guards later changes to `locked`. It does not fail on the old code, because
+/// `LaunchAgent` has no `state` field now, so the test cannot give the old code
+/// a state directory that differs from home.
 #[test]
 fn a_service_command_takes_its_lock_under_home_whatever_xdg_state_home_says() {
     let home = TestHome::new();

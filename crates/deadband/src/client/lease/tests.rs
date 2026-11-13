@@ -7,7 +7,7 @@ use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use super::{Lease, Notices, Seat, UNWATCHED};
+use super::{Lease, Notices, Seat, SeatState, UNWATCHED};
 use crate::admit::Lane;
 use crate::protocol::{Job, Request, read_line};
 use crate::testing::socket_path;
@@ -190,4 +190,17 @@ fn a_seat_installed_before_the_job_ends_gets_the_seat_and_then_the_done() {
             }
         ]
     );
+}
+
+#[test]
+fn a_seat_write_that_fails_leaves_the_seat_lost() {
+    let (old, _old_daemon) = UnixStream::pair().expect("the pair connects");
+    let lease = holding(old);
+    lease.seat.lose();
+    let (new, new_daemon) = UnixStream::pair().expect("the pair connects");
+    drop(new_daemon);
+
+    assert!(!lease.seat.install(new, &seat_request()));
+
+    assert!(matches!(*lease.seat.lock(), SeatState::Lost));
 }

@@ -68,7 +68,7 @@ locks:
   wait: 0s
 - {id: queue, kind: mutex, where: 'the std::sync::Mutex around State (Shared in crates/deadband/src/daemon.rs)',
   wait: unbounded}
-- {id: seat, kind: mutex, where: 'the std::sync::Mutex in each Seat (crates/deadband/src/client/lease.rs), which a reseat holds for its Seat write, at most WRITE_WITHIN',
+- {id: seat, kind: mutex, where: 'the std::sync::Mutex in each Seat (crates/deadband/src/client/lease.rs), which a reseat holds for its Seat write, bounded by WRITE_WITHIN for each send',
   wait: unbounded}
 - id: service
   kind: flock

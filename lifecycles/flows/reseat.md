@@ -19,7 +19,7 @@ crash:
     the seat lost; the new daemon may have counted a job that its close then frees
   recovery: the watcher looks again after 100 ms
   tests:
-  - {test: crates/deadband/src/client/tests.rs#a_connection_that_opens_after_the_job_ended_is_closed,
+  - {test: crates/deadband/src/client/lease/tests.rs#a_seat_write_that_fails_leaves_the_seat_lost,
     kind: seam}
   leaves_state:
   - lease#lost
@@ -36,6 +36,6 @@ warm directories or load at its start.
 of the lock (client/lease.rs:248-255). `Seat::end` runs either before it, and
 no `Seat` is sent and no daemon hears of the job, or after it, and `Done`
 reaches the new connection, so the new daemon records the real exit. The lock
-is held for at most `WRITE_WITHIN` (2 s), and only during a reseat.
+is held for its `Seat` write, which is bounded by `WRITE_WITHIN` (2 s) for each send, and only during a reseat.
 `Seat::end` takes the seat mutex once, so no install can come between its
 write and its shutdown.
