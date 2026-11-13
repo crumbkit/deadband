@@ -25,7 +25,11 @@
 //! `run` reads standard output while the reclaimer runs and stops waiting
 //! for it `DRAIN_GRACE` after the reclaimer exits, so a background process
 //! that holds standard output open does not hold the reclaim. Output that
-//! such a process writes after that is dropped.
+//! such a process writes after that is dropped. Soft limit: a background
+//! process that keeps standard output open for good leaves one reading
+//! thread and one pipe in the daemon until it closes the pipe, because
+//! closing the pipe sooner would risk SIGPIPE for that process. A limit on
+//! such threads would replace this if a reclaimer ever does it on every run.
 
 use std::io::{self, Read};
 use std::process::{Command, Stdio};

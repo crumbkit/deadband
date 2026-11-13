@@ -467,7 +467,10 @@ stops a reclaimer. When one runs past its timeout, the daemon stops
 waiting for it and starts no other reclaim until it exits.
 
 The reclaimer reads nothing on standard input, and the daemon discards its
-standard error. It prints one JSON object on standard output. deadband
+standard error. The daemon stops reading the report 250 ms after the
+reclaimer exits, so output that a background process writes after that is
+dropped, and a report that a loaded machine delivers later than that counts
+as failed. It prints one JSON object on standard output. deadband
 reads only `data`, an array of objects, and two fields of each object:
 
 | Field | Meaning |
@@ -489,6 +492,11 @@ failed, if it did, such as
 `deadband status --json` gives the same in the daemon's `reclaim` field,
 where `at` is the time the reclaim ended in RFC 3339 in UTC with
 milliseconds.
+
+While a reclaimer runs, `deadband status` also shows `reclaiming: <reclaimer>
+asking for <need>, started <time> ago`, and `deadband status --json` gives it in
+the `reclaiming` field: `need`, and `since` as the start time in RFC 3339 in
+UTC, or `null` when no reclaim runs.
 
 ## Embedding deadband in a program
 
