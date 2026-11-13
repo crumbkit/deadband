@@ -518,6 +518,27 @@ fn the_last_reclaim_holds_the_time_it_ended_in_json_and_reads_it_back() {
 }
 
 #[test]
+fn a_running_reclaim_names_its_need_and_when_it_started_until_it_ends() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let start = Instant::now();
+    let wall = std::time::SystemTime::now();
+    assert_eq!(watch.reclaiming(&config, wall), None);
+    watch.observe(&config, true, false, start);
+    assert_eq!(
+        watch.observe(&config, true, false, start + AFTER),
+        Some(Resource::Memory)
+    );
+    let shown = watch
+        .reclaiming(&config, wall + Duration::from_secs(125))
+        .expect("a reclaim runs");
+    assert_eq!(shown.need, "memory=4G");
+    assert_eq!(shown.to_string(), "reclaiming: memory=4G, started 2m ago");
+    watch.ended(0, start + AFTER);
+    assert_eq!(watch.reclaiming(&config, wall), None);
+}
+
+#[test]
 fn a_reclaim_time_that_is_not_rfc_3339_is_refused() {
     let at = std::time::UNIX_EPOCH;
     let mut json = serde_json::to_value(reclaimed(at, at)).expect("the reclaim serializes");

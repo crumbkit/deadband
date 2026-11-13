@@ -355,7 +355,8 @@ a new daemon, and `deadband run` starts its jobs at once while none listens.
 
 `deadband status` prints the load, memory pressure and swap, followed by the
 running and waiting jobs and the last reclaim, or `daemon: not running`
-when no daemon answers. When jobs wait, it also prints a line that names the
+when no daemon answers. While a reclaim runs, it also prints
+`reclaiming: <need>, started <age> ago`. When jobs wait, it also prints a line that names the
 first waiting job and says why it does not start yet.
 
 ## Reclaiming memory and disk

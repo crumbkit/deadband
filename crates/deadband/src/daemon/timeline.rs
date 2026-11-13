@@ -1,7 +1,7 @@
 //! What the daemon remembers of the jobs that have ended, and the reply
 //! that `deadband top` draws from them and from the queue.
 
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use super::{State, Waiter};
 use crate::admit::{JobId, Lane};
@@ -104,6 +104,10 @@ impl State {
             waiting: self.queue.waiting().map(|each| each.job.clone()).collect(),
             held: self.queue.held(),
             reclaim: self.reclaimed.clone(),
+            reclaiming: self
+                .watch
+                .reclaiming(&self.settings.reclaim, SystemTime::now())
+                .map(Box::new),
             stuck: self.stuck_jobs(now),
             busiest: self.stuck.busiest().cloned(),
             unreadable: self.stuck.unreadable(),

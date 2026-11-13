@@ -163,6 +163,9 @@ impl fmt::Display for Status {
         if let Some(reclaimed) = &jobs.reclaim {
             write!(f, "\n{reclaimed}")?;
         }
+        if let Some(reclaiming) = &jobs.reclaiming {
+            write!(f, "\n{reclaiming}")?;
+        }
         Ok(())
     }
 }

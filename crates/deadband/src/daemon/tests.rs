@@ -383,6 +383,7 @@ fn status_lists_the_running_and_the_waiting_jobs() {
             waiting: vec![shown_job("b")],
             held: Some(Hold::Full { max_jobs: 1 }),
             reclaim: None,
+            reclaiming: None,
             stuck: Vec::new(),
             busiest: None,
             unreadable: false,
