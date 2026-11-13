@@ -67,7 +67,9 @@ mod support {
         reason = "the test holds the daemon it started, to stop it when it ends"
     )]
     use std::process::Child;
-    use std::process::{ChildStderr, Command, Output, Stdio};
+    #[cfg(target_os = "macos")]
+    use std::process::ChildStderr;
+    use std::process::{Command, Output, Stdio};
 
     use super::deadband;
 
@@ -79,7 +81,9 @@ mod support {
     pub(crate) struct Daemon {
         /// The daemon's process.
         child: Child,
-        /// The daemon's log on standard error, after the first line.
+        /// The daemon's log on standard error, after the first line, which
+        /// the tests that run on macOS read.
+        #[cfg(target_os = "macos")]
         log: BufReader<ChildStderr>,
     }
 
@@ -105,11 +109,16 @@ mod support {
             let mut first = String::new();
             log.read_line(&mut first).expect("reads");
             assert!(first.contains("listens on"), "{first}");
-            Self { child: daemon, log }
+            Self {
+                child: daemon,
+                #[cfg(target_os = "macos")]
+                log,
+            }
         }
 
         /// Stops the daemon and returns what it logged after it began to
         /// listen.
+        #[cfg(target_os = "macos")]
         pub(crate) fn logged(&mut self) -> String {
             let _ = self.child.kill();
             let _ = self.child.wait();
