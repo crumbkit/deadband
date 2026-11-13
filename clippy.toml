@@ -53,6 +53,12 @@ disallowed-methods = [
     # The throttle module is the only one that changes a job's priority.
     { path = "rustix::process::setpriority_process", reason = "change a job's priority through the throttle module" },
     { path = "rustix::process::nice", reason = "change a job's priority through the throttle module" },
+    # Only the throttle module sends a signal of deadband's own choosing. The
+    # job forwarding module (crates/deadband/src/job/forward.rs) passes on a
+    # SIGTERM or SIGINT that `deadband run` received, unchanged (decided by the
+    # owner on 2026-11-13).
+    { path = "rustix::process::kill_process", reason = "send signals through the throttle module, or pass a received signal on through the job forwarding module" },
+    { path = "rustix::process::kill_process_group", reason = "send signals through the throttle module, or pass a received signal on through the job forwarding module" },
     # DUR-1
     { path = "std::fs::write", reason = "write through the atomic writer" },
     { path = "std::fs::copy", reason = "write through the atomic writer" },

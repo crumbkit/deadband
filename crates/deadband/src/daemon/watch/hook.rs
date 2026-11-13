@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -11,6 +10,7 @@ use serde::Serialize;
 use super::super::{Log, note};
 use crate::job::on_stuck::{self, Ended};
 use crate::protocol::OutsideJobs;
+use crate::spawn;
 
 /// The most `on_stuck` commands that run at once. A job that becomes stuck
 /// while this many run gets none, and the log says so in one line.
@@ -76,7 +76,7 @@ impl Hooks {
         let within = self.within;
         let log = Arc::clone(&self.log);
         let running = Arc::clone(&self.running);
-        thread::spawn(move || {
+        let started = spawn::thread("deadband-on-stuck", move || {
             let late = Arc::clone(&log);
             let ended = on_stuck::run(&command, input, within, move || {
                 note(
@@ -94,10 +94,44 @@ impl Hooks {
                 ),
                 Err(error) => note(
                     &log,
-                    format_args!("the on_stuck command could not start: {error}"),
+                    format_args!(
+                        "the on_stuck command {} could not start: {error}",
+                        command.first().map_or("", String::as_str)
+                    ),
                 ),
             }
             running.fetch_sub(1, Ordering::SeqCst);
         });
+        if let Err(error) = started {
+            self.running.fetch_sub(1, Ordering::SeqCst);
+            note(
+                &self.log,
+                format_args!("the on_stuck command for {label} could not start: {error}"),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use super::Hooks;
+    use crate::daemon::Log;
+
+    #[test]
+    fn an_on_stuck_whose_thread_cannot_start_is_one_log_line_and_frees_its_place() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let log: Log = written.clone();
+        let hooks = Hooks::new(vec!["true".to_owned()], Duration::from_secs(5), &log);
+        crate::spawn::refuse("deadband-on-stuck");
+        hooks.run("cargo", Duration::from_secs(300), None);
+        crate::spawn::allow();
+        let text = String::from_utf8(written.lock().expect("the log").clone()).expect("UTF-8");
+        assert_eq!(text.lines().count(), 1, "{text}");
+        assert!(text.contains("could not start"), "{text}");
+        assert_eq!(hooks.running.load(Ordering::SeqCst), 0);
     }
 }

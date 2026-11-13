@@ -1,9 +1,32 @@
-//! The rule that says when the daemon starts a reclaim. It reads no clock,
-//! so the tests check each case directly.
+//! The rule that says when the daemon starts a reclaim. It takes its
+//! monotonic time from the caller, so the tests check each case directly,
+//! and reads the wall clock only to note when a reclaim starts.
 
-use std::time::{Duration, Instant};
+use std::fmt;
+use std::time::{Duration, Instant, SystemTime};
 
-use super::{Config, Resource};
+use crumbkit::Age;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use super::{Config, Resource, ended_at};
+
+/// A reclaim that runs now, as `deadband status` shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Reclaiming {
+    /// The `--need` that the daemon asked for, such as `memory=4G`.
+    pub need: String,
+    /// When the reclaim started, which JSON holds in RFC 3339 and text
+    /// shows as how long ago that was.
+    #[serde(deserialize_with = "ended_at")]
+    pub since: Age,
+}
+
+impl fmt::Display for Reclaiming {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "reclaiming: {}, started {} ago", self.need, self.since)
+    }
+}
 
 /// The longest that the daemon waits between reclaims of one resource
 /// after reclaims that freed nothing. Each such reclaim doubles the wait,
@@ -21,6 +44,9 @@ struct Track {
     /// How many reclaims of the resource in a row freed nothing, while it
     /// stayed short.
     fruitless: u32,
+    /// Whether the last reclaim of the resource did not run because another
+    /// reclaim held the lock, so the rest after it is `after` alone.
+    skipped: bool,
 }
 
 impl Track {
@@ -45,7 +71,7 @@ impl Track {
     /// nothing, up to [`MAX_REST`] or `after` when that is longer.
     fn rested(&self, after: Duration, now: Instant) -> bool {
         let rest = after
-            .saturating_mul(2_u32.saturating_pow(self.fruitless))
+            .saturating_mul(2_u32.saturating_pow(if self.skipped { 0 } else { self.fruitless }))
             .min(MAX_REST.max(after));
         self.ended
             .is_none_or(|ended| now.saturating_duration_since(ended) >= rest)
@@ -61,8 +87,8 @@ pub struct Watch {
     memory: Track,
     /// What the rule remembers of disk.
     disk: Track,
-    /// The resource of the running reclaim.
-    running: Option<Resource>,
+    /// The resource of the running reclaim and when it started.
+    running: Option<(Resource, SystemTime)>,
 }
 
 impl Watch {
@@ -97,7 +123,7 @@ impl Watch {
         } else {
             return None;
         };
-        self.running = Some(resource);
+        self.running = Some((resource, SystemTime::now()));
         Some(resource)
     }
 
@@ -105,17 +131,32 @@ impl Watch {
     /// `freed_bytes`. A reclaim that freed nothing lengthens the next rest
     /// of its resource.
     pub fn ended(&mut self, freed_bytes: u64, now: Instant) {
-        let Some(resource) = self.running.take() else {
+        let Some((resource, _)) = self.running.take() else {
             return;
         };
         let track = self.track(resource);
         track.ended = Some(now);
         track.short_since = None;
+        track.skipped = false;
         track.fruitless = if freed_bytes == 0 {
             track.fruitless.saturating_add(1)
         } else {
             0
         };
+    }
+
+    /// Records that the running reclaim did not run at `now` because
+    /// another reclaim held the lock. The resource rests for
+    /// exactly `config.after`, and its count of fruitless reclaims stays as
+    /// it was.
+    pub fn skipped(&mut self, now: Instant) {
+        let Some((resource, _)) = self.running.take() else {
+            return;
+        };
+        let track = self.track(resource);
+        track.skipped = true;
+        track.ended = Some(now);
+        track.short_since = None;
     }
 
     /// Reports whether the last reclaim of `resource` freed nothing while
@@ -126,6 +167,16 @@ impl Watch {
             Resource::Memory => self.memory.fruitless > 0,
             Resource::Disk => self.disk.fruitless > 0,
         }
+    }
+
+    /// Returns the running reclaim as of `now`, or `None` when none runs.
+    #[must_use]
+    pub fn reclaiming(&self, config: &Config, now: SystemTime) -> Option<Reclaiming> {
+        let (resource, started) = self.running?;
+        Some(Reclaiming {
+            need: resource.need(config),
+            since: Age::since(started, now),
+        })
     }
 
     /// Returns what the rule remembers of `resource`.

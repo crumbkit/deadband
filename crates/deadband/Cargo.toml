@@ -43,9 +43,18 @@ schemars = { version = "1.2.3", default-features = false, features = ["std", "de
 # depends on it.
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 # rustix sets the umask while the daemon makes its socket, raises the limit
-# on open files, and names the errors of a failed accept, all without
-# unsafe code. crumbkit already depends on it on Unix.
-rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process"] }
+# on open files, names the errors of a failed accept, and polls the listening
+# socket with a timeout (the `event` feature) so the accept loop notices that
+# the daemon should stop, all without unsafe code. crumbkit already depends on
+# it on Unix.
+rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process", "event"] }
+
+# signal-hook gives `deadband run` a safe way to receive the SIGTERM or SIGINT
+# that its caller sends, so job/forward.rs can pass it on to the job. The eval
+# /evals/deadband-run-signal-handler chose it over ctrlc and over a libc module
+# with unsafe code: 0.3.18 is already in the lockfile through crossterm, and
+# it needs no unsafe code in deadband.
+signal-hook = { version = "0.3.18", default-features = false, features = ["iterator"] }
 
 # toml reads the daemon's config file, with only the features that parsing
 # into serde types needs. The eval /evals/deadband-config-toml measured it

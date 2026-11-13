@@ -50,6 +50,91 @@ fn run_adds_the_variables_it_is_given_to_the_jobs_environment() {
     assert_eq!(exit_code(status), 0);
 }
 
+/// Tests of passing a signal that the caller sent on to the job. They use
+/// SIGUSR1 and SIGUSR2, which nothing else in the test process handles, so
+/// the tests do not disturb the others. The test of a job that exits on its
+/// own registers SIGWINCH, which no test sends.
+mod forwarding {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    use rustix::process::{Signal, getpid, kill_process};
+
+    use crate::job::exit_code;
+    use crate::job::forward::run_forwarding;
+
+    use signal_hook::consts::{SIGUSR1 as USR1, SIGUSR2 as USR2, SIGWINCH as WINCH};
+
+    fn words(command: &[&str]) -> Vec<OsString> {
+        command.iter().map(OsString::from).collect()
+    }
+
+    /// Sends `signal` to this process once `ready` exists, from a thread.
+    fn send_when_ready(ready: PathBuf, signal: Signal) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while !ready.exists() && Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the test plays the caller of deadband run, which sends the signal"
+            )]
+            let _ = kill_process(getpid(), signal);
+        })
+    }
+
+    fn ready_file(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("db-fwd-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn a_signal_the_caller_sent_ends_a_sleeping_job_and_the_exit_code_follows_it() {
+        let ready = ready_file("end");
+        let sender = send_when_ready(ready.clone(), Signal::USR1);
+        let script = format!("touch {}; exec sleep 30", ready.display());
+        let started = Instant::now();
+        let status =
+            run_forwarding(&words(&["sh", "-c", &script]), &[], &[USR1]).expect("sh starts");
+        sender.join().expect("sender ends");
+        assert_eq!(i32::from(exit_code(status)), 128 + USR1);
+        assert!(started.elapsed() < Duration::from_secs(20));
+        let _ = std::fs::remove_file(ready);
+    }
+
+    #[test]
+    fn the_job_receives_the_signal_unchanged_and_decides_its_own_exit_code() {
+        let ready = ready_file("trap");
+        let sender = send_when_ready(ready.clone(), Signal::USR2);
+        let script = format!(
+            "trap 'exit 7' USR2; touch {}; sleep 30 & wait",
+            ready.display()
+        );
+        let status =
+            run_forwarding(&words(&["sh", "-c", &script]), &[], &[USR2]).expect("sh starts");
+        sender.join().expect("sender ends");
+        assert_eq!(exit_code(status), 7);
+        let _ = std::fs::remove_file(ready);
+    }
+
+    #[test]
+    fn a_job_that_exits_on_its_own_is_never_signalled() {
+        let status =
+            run_forwarding(&words(&["sh", "-c", "exit 3"]), &[], &[WINCH]).expect("sh starts");
+        assert_eq!(status.code(), Some(3));
+    }
+
+    #[test]
+    fn a_program_that_cannot_start_still_fails_with_not_found() {
+        let error = run_forwarding(&words(&["deadband-test-no-such-program"]), &[], &[USR1])
+            .expect_err("nothing starts");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+}
+
 mod busiest {
     use std::collections::BTreeSet;
     use std::time::Duration;
@@ -184,6 +269,18 @@ mod busiest {
         let second = census.read(&hung, Duration::from_millis(50), &BTreeSet::new());
         assert!(matches!(second, Err(Failed::Running)));
     }
+
+    #[test]
+    fn a_census_whose_thread_cannot_start_names_no_process_and_the_next_run_reads() {
+        let census = Census::default();
+        let busy = sh("echo '88.0 77 /bin/busy'");
+        crate::spawn::refuse("deadband-ps");
+        let refused = census.read(&busy, Duration::from_secs(10), &BTreeSet::new());
+        crate::spawn::allow();
+        assert!(matches!(refused, Err(Failed::Start(_))), "{refused:?}");
+        let next = census.read(&busy, Duration::from_secs(10), &BTreeSet::new());
+        assert!(matches!(next, Ok(OutsideJobs::Busy { .. })), "{next:?}");
+    }
 }
 
 mod on_stuck {
@@ -225,6 +322,14 @@ mod on_stuck {
         );
         assert!(timed_out);
         assert_eq!(ended.expect("sh starts"), Ended::TimedOut);
+    }
+
+    #[test]
+    fn a_command_whose_waiting_thread_cannot_start_reports_the_error() {
+        crate::spawn::refuse("deadband-on-stuck-wait");
+        let ended = run(&sh("exit 0"), Vec::new(), Duration::from_secs(10), || {});
+        crate::spawn::allow();
+        assert!(ended.is_err(), "{ended:?}");
     }
 
     #[test]

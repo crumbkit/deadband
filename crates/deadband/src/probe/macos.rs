@@ -5,8 +5,10 @@
 //! value of the type the call fills, so the kernel or libc never writes past
 //! its end. Every name passed to `sysctlbyname` is a NUL-terminated `CStr`,
 //! and no call passes a new value to the kernel. The libproc calls,
-//! `mach_timebase_info` and `getrusage` only read, and write only into a
-//! buffer that this module owns.
+//! `mach_timebase_info`, `getrusage` and `confstr` only read, and write only
+//! into a buffer that this module owns. `confstr` is first asked for the
+//! length with a null buffer of length 0, then fills a buffer of exactly that
+//! length.
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
@@ -42,6 +44,36 @@ pub(super) fn sample() -> Result<Sample, Unreadable> {
         swap_used_bytes: swap.used_bytes,
         swap_total_bytes: swap.total_bytes,
     })
+}
+
+/// Returns the per-user temporary directory that `getconf
+/// DARWIN_USER_TEMP_DIR` prints, or `None` when `confstr` has no value.
+pub(super) fn user_temp_dir() -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+
+    // SAFETY: a null buffer of length 0 makes confstr write nothing and
+    // return the length it needs, including the NUL.
+    let length = unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, std::ptr::null_mut(), 0) };
+    if length == 0 {
+        return None;
+    }
+    let mut buffer = vec![0_u8; length];
+    // SAFETY: `buffer` is writable for `length` bytes, the exact length that
+    // is passed, so confstr writes no further.
+    let written = unsafe {
+        libc::confstr(
+            libc::_CS_DARWIN_USER_TEMP_DIR,
+            buffer.as_mut_ptr().cast::<libc::c_char>(),
+            length,
+        )
+    };
+    if written == 0 {
+        return None;
+    }
+    buffer.truncate(written.min(length).saturating_sub(1));
+    Some(std::path::PathBuf::from(std::ffi::OsString::from_vec(
+        buffer,
+    )))
 }
 
 /// Returns what the kernel reports of this process's waited-for children,

@@ -56,6 +56,19 @@ shell reports it. When the program is not found, `deadband run` exits with
 127, and when the program is found but cannot start, it exits with 126, as
 `env` and `timeout` do.
 
+When `deadband run` receives a SIGTERM or SIGINT, it passes the same signal
+on to the job unchanged, keeps waiting, and exits with the job's status, so
+a `kill` of `deadband run` ends the job (exit 143 or 130) and the daemon
+records the job as ended. A Ctrl-C at the terminal reaches the job directly
+and through `deadband run`, so the job receives the SIGINT twice; a program
+that stops at once on a second SIGINT takes that path on one Ctrl-C.
+`deadband run` replaces an ignored SIGINT or SIGTERM that its caller passed
+down, such as the ignored SIGINT of a background job in a non-interactive
+shell script, so the job no longer inherits the ignore. If the signals
+cannot be registered, the job runs without forwarding. If only the forwarding
+thread cannot start, the job runs without forwarding and `deadband run` ignores
+SIGTERM and SIGINT until the job ends.
+
 The daemon samples memory pressure, the 1-minute load average and the free
 space of the disk that holds `$HOME` once a second. It admits a waiting job
 when all of these hold:
@@ -210,7 +223,9 @@ Nothing in deadband reads the file, and nothing leaves the machine.
 The file is `deadband/jobs.jsonl` in `$XDG_STATE_HOME`, or
 `~/.local/state/deadband/jobs.jsonl` when `XDG_STATE_HOME` is not set. Its
 directory has mode 0700 and the file has mode 0600. A daemon started with
-`DEADBAND_SOCKET` set records nothing. The daemon that writes the file holds a
+`DEADBAND_SOCKET` set records nothing. A daemon started with
+`DEADBAND_SOCKET_DIR` set records history like the default daemon, so a
+private daemon that uses that variable writes this file too. The daemon that writes the file holds a
 lock on `jobs.lock` in the same directory, and a second daemon that finds the
 lock held records nothing, logs one line and still admits its jobs.
 
@@ -335,13 +350,33 @@ or when it closes the connection, the job starts at once and `deadband run`
 prints one line on standard error that says why. After the daemon has
 queued a job, `deadband run` waits for the grant with no deadline, so a
 daemon that hangs while it keeps the connection open also keeps the job
-waiting. Stopping that daemon closes the connection, and the job then
-starts at once. When the probe cannot read the machine, the
+waiting. Stopping that daemon closes the connection. The waiting
+`deadband run` then tries to reach a daemon every 100 ms for 5 seconds and
+asks again, so a restarted daemon queues the job once more. The job starts at
+once, with the same line on standard error, only when no daemon answers
+within those 5 seconds. When the probe cannot read the machine, the
 daemon admits each job as soon as a place is free, and its log says why.
+The daemon treats a reading that is more than five sampling intervals old
+(at least 250 ms) as a failed probe, so a stalled sampler does not hold jobs
+back for ever; its log says so once.
+
+The daemon stops serving, and the `deadband daemon` command prints why and
+exits, in three cases. The first is that the socket path no longer names the
+socket file the daemon bound, or the lock path no longer names the lock file
+the daemon holds, checked once every 60 samples (about a minute). A removed
+lock file would let a second daemon start on the same socket. The second is
+that the sampler thread panicked. The third is that the operating system
+refused a thread the daemon needs, such as the sampler or a connection's
+thread, which happens at the user's limit on threads or processes. Launchd
+then starts a new daemon, and `deadband run` starts its jobs at once while
+none listens. When the operating system refuses the thread of a reclaim, of
+an `on_stuck` command or of a `/bin/ps` run, the daemon logs one line and
+keeps serving, and the next one tries again.
 
 `deadband status` prints the load, memory pressure and swap, followed by the
 running and waiting jobs and the last reclaim, or `daemon: not running`
-when no daemon answers. When jobs wait, it also prints a line that names the
+when no daemon answers. While a reclaim runs, it also prints
+`reclaiming: <need>, started <age> ago`. When jobs wait, it also prints a line that names the
 first waiting job and says why it does not start yet.
 
 ## Reclaiming memory and disk
@@ -351,6 +386,12 @@ daemon can ask a reclaimer, an external command that you name, to free
 memory or disk when the machine runs short. A reclaimer might stop the
 servers of idle workspaces, or delete build output that can be rebuilt.
 deadband never stops anything itself; the reclaimer decides what to stop.
+
+A daemon started with `DEADBAND_SOCKET` set ignores the config file, logs one
+line saying so, and runs no reclaimer and no `on_stuck` command. A reclaim
+holds a lock on `reclaim.lock` in the state directory while it runs, so
+daemons of one user never reclaim together; a daemon that finds the lock held
+logs one line and tries again after `reclaim_after`.
 
 The daemon reads its config file once, when it starts. The file is
 `deadband/config.toml` in `$XDG_CONFIG_HOME`, or
@@ -378,6 +419,14 @@ a bare program name on its own `PATH`, and launchd starts the daemon with a
 short `PATH` that may not hold the program, so a bare name can fail to
 start. The other words are passed to the program as they are, with no
 shell.
+
+When the daemon reads the config file, it checks the program of each
+reclaimer and of `on_stuck`. A program that is not an absolute path to an
+executable file gets one line in the daemon's log, which names the program
+and says why it cannot start. The daemon keeps the reclaimer, so a program
+installed later works at the next reclaim without a restart. A reclaim whose
+program cannot start records `it could not start <program>: <error>`, which
+`deadband status` shows.
 
 A size is a whole number with an optional `K`, `M`, `G` or `T`, each a
 power of 1024. An age is a number with a unit, such as `90s`, `5m` or
@@ -438,7 +487,10 @@ stops a reclaimer. When one runs past its timeout, the daemon stops
 waiting for it and starts no other reclaim until it exits.
 
 The reclaimer reads nothing on standard input, and the daemon discards its
-standard error. It prints one JSON object on standard output. deadband
+standard error. The daemon stops reading the report 250 ms after the
+reclaimer exits, so output that a background process writes after that is
+dropped, and a report that a loaded machine delivers later than that counts
+as failed. It prints one JSON object on standard output. deadband
 reads only `data`, an array of objects, and two fields of each object:
 
 | Field | Meaning |
@@ -460,6 +512,11 @@ failed, if it did, such as
 `deadband status --json` gives the same in the daemon's `reclaim` field,
 where `at` is the time the reclaim ended in RFC 3339 in UTC with
 milliseconds.
+
+While a reclaimer runs, `deadband status` also shows `reclaiming: <need>, started
+<time> ago`, and `deadband status --json` gives it in
+the `reclaiming` field: `need`, and `since` as the start time in RFC 3339 in
+UTC, or `null` when no reclaim runs.
 
 ## Embedding deadband in a program
 
@@ -555,7 +612,9 @@ set and not empty:
 | Variable | Socket |
 | --- | --- |
 | `DEADBAND_SOCKET` | the path it names |
-| `TMPDIR` | `deadband.sock` in that directory, which macOS makes per user |
+| `DEADBAND_SOCKET_DIR` | `deadband.sock` in that directory |
+| the directory `getconf DARWIN_USER_TEMP_DIR` prints (macOS only, not a variable) | `deadband.sock` in that directory, whatever `TMPDIR` is |
+| `TMPDIR` | `deadband.sock` in that directory |
 | `USER` | `/tmp/deadband-<USER>.sock` |
 
 When none is set, the socket is `/tmp/deadband.sock`. The daemon makes the
@@ -613,11 +672,52 @@ either. A plist written by hand, or by an earlier install script, with the
 same label is replaced like any other changed plist. Install refuses a file
 at that path that is not an XML property list, and changes nothing.
 
+`deadband service install` and `deadband service uninstall` each take an
+exclusive lock on `service.lock` in the state directory
+(`$XDG_STATE_HOME/deadband`, or `~/.local/state/deadband`) before they read
+the plist or ask launchd, and hold it until they finish. A second command
+that starts meanwhile looks for the lock every 100 milliseconds for about
+ten seconds. When the first command finishes in that time, the second one
+runs after it. Otherwise the second one changes nothing, names the lock
+file and exits 6 with `deadband::service::locked`; run it again once the
+first has finished. So an install racing an uninstall never loads an agent
+whose plist the uninstall then deletes. The uninstall question names the
+jobs it read before it took the lock, and uninstall asks launchd again once
+it holds it.
+
+The plist sets `KeepAlive`, so launchd starts the daemon again whenever it
+stops, and `ThrottleInterval` to 60 seconds. launchd starts a daemon that
+ran for 60 seconds or longer again at once, and waits out the rest of the
+60 seconds for one that exited sooner. A daemon exits at start when another
+daemon holds its socket, such as one started by hand with `deadband daemon`,
+so while that daemon runs launchd's daemon starts once a minute instead of
+every ten seconds, launchd's own default. When launchd has not loaded the
+agent and a daemon already answers on the socket, install says `a daemon
+that launchd did not start answers on <socket>`, loads the agent and does
+not wait for an answer. Stop that daemon yourself, and launchd's daemon
+takes the socket at its next start.
+
 When no daemon answers, `deadband status` says
 `daemon: not installed; run deadband service install` when the plist is
 missing, and `daemon: installed but not loaded; run deadband service
-install` when launchd has not loaded it. `deadband status --json` gives the
-same state in `daemon_state`: `running`, `not_loaded` or `not_installed`.
+install` when launchd has not loaded it. When launchd has loaded the agent
+and no daemon answers, it says `daemon: loaded but not answering; see
+~/Library/Logs/deadband.log`, because the daemon may have exited at start.
+When launchd could not be asked, it says `daemon: not running, and launchd
+could not be asked whether it loaded the agent`. `deadband status --json`
+gives the same state in `daemon_state`: `running`, `not_loaded`,
+`not_installed`, `loaded_silent` or `launchd_unasked`.
+
+`deadband service install` asks the daemon for its jobs up to 20 times, 100
+milliseconds apart, after it loads the agent, and reports `daemon answers` or
+`daemon does not answer; see ~/Library/Logs/deadband.log`. When nothing
+listens, the asks fail at once and the wait is about two seconds. A process
+that accepts the connection and never replies holds each ask for two
+seconds, so the wait can reach 42 seconds. `deadband service uninstall` and
+`install --restart` ask the daemon that launchd runs, on the socket under
+the per-user temporary directory, and print its running and waiting jobs
+first. Uninstall asks only when launchd has loaded the agent. It lists the
+socket, lock, log, history and configuration that stay.
 
 Stop the daemon and remove the agent with:
 
@@ -644,8 +744,9 @@ code.
 The new daemon does not count every job. A new daemon can admit a job in the
 moment before the running jobs have told it about themselves, at most about
 100 ms per retry after it starts listening. The jobs that were waiting on the
-earlier daemon start at once when the connection closes, and the new daemon
-does not count them. Jobs that started while no daemon listened are not
+earlier daemon ask the new daemon again, and the new daemon queues them. A
+waiting job that finds no daemon within 5 seconds starts at once, and the new
+daemon does not count it. Jobs that started while no daemon listened are not
 counted either, because they never held a place. The first restart onto this
 release counts nothing from clients of an older binary, because those clients
 never tell a new daemon about their jobs. In all of these cases the machine

@@ -9,9 +9,9 @@
 use std::num::NonZeroUsize;
 
 use crate::cli::Machine;
-use crate::daemon::{self, Settings, Unbound, note};
+use crate::daemon::{self, Log, Settings, Unbound, note};
 use crate::probe::Probe;
-use crate::reclaim::{self, CONFIG_FILE};
+use crate::reclaim::{self, CONFIG_FILE, program};
 
 /// Reads the daemon's config file in the configuration directory. A file
 /// that cannot be read turns reclaiming off, and the log says why in one
@@ -19,10 +19,17 @@ use crate::reclaim::{self, CONFIG_FILE};
 fn reclaim_config<P>(machine: &Machine<P>) -> reclaim::Config {
     let Some(path) = machine
         .environment
-        .config
-        .as_ref()
-        .map(|config| config.join(CONFIG_FILE))
+        .reclaim_directory()
+        .map(|directory| directory.join(CONFIG_FILE))
     else {
+        if machine.environment.own_socket {
+            note(
+                &machine.log,
+                format_args!(
+                    "the daemon runs on its own socket, so it reads no config.toml and runs no reclaimer and no on_stuck command"
+                ),
+            );
+        }
         return reclaim::Config::default();
     };
     let config = reclaim::Config::load(&path).unwrap_or_else(|error| {
@@ -49,12 +56,53 @@ fn reclaim_config<P>(machine: &Machine<P>) -> reclaim::Config {
             ),
         );
     }
+    warn_of_unusable_programs(&machine.log, &config);
     config
 }
 
+/// Logs one line for each reclaimer, and for `on_stuck`, whose program
+/// cannot start. The daemon keeps the reclaimer, so a program installed
+/// later works at the next reclaim.
+fn warn_of_unusable_programs(log: &Log, config: &reclaim::Config) {
+    for reclaimer in &config.reclaimers {
+        if let Err(unusable) = program::check(&reclaimer.command) {
+            note(
+                log,
+                format_args!(
+                    "the reclaimer {} names {}, {}, so {}",
+                    reclaimer.name,
+                    unusable.path.display(),
+                    unusable.reason,
+                    if unusable.reason.always_fails() {
+                        "each reclaim it is asked for fails until a program is installed there"
+                    } else {
+                        "a reclaim it is asked for may fail"
+                    }
+                ),
+            );
+        }
+    }
+    if let Err(unusable) = program::check(&config.stuck.on_stuck) {
+        note(
+            log,
+            format_args!(
+                "the on_stuck command names {}, {}, so {}",
+                unusable.path.display(),
+                unusable.reason,
+                if unusable.reason.always_fails() {
+                    "it fails each time a job becomes stuck until a program is installed there"
+                } else {
+                    "it may fail when a job becomes stuck"
+                }
+            ),
+        );
+    }
+}
+
 /// Runs the daemon: listens on the machine's socket and admits jobs until
-/// accepting a connection fails with an error that retrying cannot fix,
-/// then returns why it stopped. A failure that can pass, such as too many
+/// accepting a connection fails with an error that retrying cannot fix, the
+/// socket file is gone or replaced, or the sampler panics, then returns why
+/// it stopped. A failure that can pass, such as too many
 /// open files, is logged and retried.
 ///
 /// `max_jobs` is the most jobs that run at once; `None` takes a quarter of
@@ -104,7 +152,7 @@ pub fn run_daemon<P: Probe + Clone + Send + 'static>(
                 settings,
                 &machine.log,
             );
-            Unbound::Socket {
+            Unbound::Stopped {
                 path: machine.socket.clone(),
                 error,
             }

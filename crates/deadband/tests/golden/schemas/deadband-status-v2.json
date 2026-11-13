@@ -445,6 +445,16 @@
           "description": "No plist exists.",
           "type": "string",
           "const": "not_installed"
+        },
+        {
+          "description": "launchd has loaded the agent and no daemon answers, so the daemon\nmay have exited at start; its log says why.",
+          "type": "string",
+          "const": "loaded_silent"
+        },
+        {
+          "description": "launchd could not say whether it loaded the agent, and no daemon\nanswers.",
+          "type": "string",
+          "const": "launchd_unasked"
         }
       ]
     },
@@ -610,6 +620,18 @@
           ],
           "default": null
         },
+        "reclaiming": {
+          "description": "The reclaim that runs now, with its need and start time, or `null`\nwhen none runs.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reclaiming"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "running": {
           "description": "The running jobs, in the order they started.",
           "type": "array",
@@ -644,6 +666,7 @@
         "waiting",
         "held",
         "reclaim",
+        "reclaiming",
         "stuck",
         "busiest",
         "unreadable"
@@ -773,6 +796,25 @@
         "failed"
       ]
     },
+    "Reclaiming": {
+      "description": "A reclaim that runs now, as `deadband status` shows it.",
+      "type": "object",
+      "properties": {
+        "need": {
+          "description": "The `--need` that the daemon asked for, such as `memory=4G`.",
+          "type": "string"
+        },
+        "since": {
+          "description": "When the reclaim started, which JSON holds in RFC 3339 and text\nshows as how long ago that was.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "need",
+        "since"
+      ]
+    },
     "Short": {
       "description": "A job's short command: the kind that the history module's rule gives\nits command line, such as `cargo nextest run`, at most [`SHORT_BYTES`]\nbytes. The daemon computes it, and the full command line never reaches\na display through it. Deserializing cleans the text as [`Label`] does.\nAn empty short command says that the rule kept no word.",
       "type": "string"
@@ -851,7 +893,7 @@
           ]
         },
         "daemon_state": {
-          "description": "Whether the daemon runs, or why it does not: its launchd agent is\nnot installed or not loaded. It is absent when no daemon answers and\ndeadband cannot say why, such as on a platform without launchd.",
+          "description": "Whether the daemon runs, or why it does not: its launchd agent is\nnot installed, not loaded, loaded but silent, or launchd could not be\nasked. It is absent when no daemon answers and deadband cannot say\nwhy, such as on a platform without launchd.",
           "anyOf": [
             {
               "$ref": "#/$defs/DaemonState"

@@ -27,9 +27,9 @@ realizations = [".github/workflows/ci.yml", ".github/workflows/release.yml"]
 id = "unsafe"
 requirement = """
 - Module: crates/deadband/src/probe/macos.rs, the macOS reader of the probe. It is the only module with unsafe code. The workspace lint `unsafe_code` is `deny`, and the module's declaration in crates/deadband/src/probe.rs carries `#[expect(unsafe_code, reason = ...)]`.
-- Invariant: each unsafe call writes only into a buffer that the module owns and passes that buffer's exact length, or a pointer to one value of the type the call fills. `getloadavg` receives a one-element array and is asked for one value. `sysctlbyname` receives a NUL-terminated name, a buffer and its length, and a null new value of length 0, so it reads from the kernel and changes nothing. `proc_listchildpids` receives a buffer and its length in bytes. `proc_pid_rusage` receives a `rusage_info_v4` with the flavor that names that struct, and `mach_timebase_info` receives one `mach_timebase_info` struct. `getrusage` receives a pointer to one zeroed `rusage`, which it fills, and the module reads the value only after the call returns 0. Those four calls only read. Compile-time assertions check that the buffer lengths match the C types `xsw_usage` and `int`.
+- Invariant: each unsafe call writes only into a buffer that the module owns and passes that buffer's exact length, or a pointer to one value of the type the call fills. `getloadavg` receives a one-element array and is asked for one value. `sysctlbyname` receives a NUL-terminated name, a buffer and its length, and a null new value of length 0, so it reads from the kernel and changes nothing. `proc_listchildpids` receives a buffer and its length in bytes. `proc_pid_rusage` receives a `rusage_info_v4` with the flavor that names that struct, and `mach_timebase_info` receives one `mach_timebase_info` struct. `getrusage` receives a pointer to one zeroed `rusage`, which it fills, and the module reads the value only after the call returns 0. Those four calls only read. `confstr` is called twice with `_CS_DARWIN_USER_TEMP_DIR`: first with a null buffer of length 0, which writes nothing and returns the length needed, then with a `Vec<u8>` of that length and that exact length, and it reads only. Compile-time assertions check that the buffer lengths match the C types `xsw_usage` and `int`.
 """
-purpose = "macOS gives the memory pressure level and swap use only through sysctl, the load average through getloadavg, a process tree's CPU and disk use through libproc, and the usage of a job's waited-for children through getrusage, all C calls. A measured comparison chose to call them through libc, because the sysinfo crate has no memory pressure level. Keeping every unsafe call in one small module with one stated invariant lets a reviewer check all of it in one place."
+purpose = "macOS gives the memory pressure level and swap use only through sysctl, the load average through getloadavg, a process tree's CPU and disk use through libproc, and the usage of a job's waited-for children through getrusage, and the per-user temporary directory through confstr, all C calls. A measured comparison chose to call them through libc, because the sysinfo crate has no memory pressure level. Keeping every unsafe call in one small module with one stated invariant lets a reviewer check all of it in one place."
 realizations = ["crates/deadband/src/probe/macos.rs", "crates/deadband/src/probe.rs", "Cargo.toml"]
 
 [[exception]]
@@ -80,16 +80,16 @@ correction = "a later deadband pull request turns it on"
 
 [[exception]]
 rule = "PROC-1"
-paths = ["crates/deadband/src/job.rs", "crates/deadband/src/job/reclaimer.rs", "crates/deadband/src/job/busiest.rs", "crates/deadband/src/job/on_stuck.rs"]
+paths = ["crates/deadband/src/job.rs", "crates/deadband/src/job/forward.rs", "crates/deadband/src/job/reclaimer.rs", "crates/deadband/src/job/busiest.rs", "crates/deadband/src/job/on_stuck.rs"]
 owner = "Luke"
 reason = "`deadband run` exists to run the command its caller names, so job.rs's one operation takes an arbitrary program and arguments. The caller could run the same command without deadband, so deadband adds no privilege. job.rs states PROC-2's five items for the operation. job/reclaimer.rs runs the reclaimer command and job/on_stuck.rs the `on_stuck` command that the daemon's config file names, which the person who runs the daemon writes and could run as themselves. job/busiest.rs runs the fixed command `/bin/ps`, whose words the daemon passes. Each of the three states PROC-2's five items for its operation."
 correction = "a change to the child-process profile that covers a wrapper which runs its caller's command, or a decision that records this one"
 
 [[exception]]
 rule = "CLI-2"
-paths = ["crates/deadband/src/cli.rs", "crates/deadband/src/cli/commands.rs", "crates/deadband/src/job.rs"]
+paths = ["crates/deadband/src/cli.rs", "crates/deadband/src/cli/commands.rs", "crates/deadband/src/job.rs", "crates/deadband/src/job/forward.rs"]
 owner = "Luke"
-reason = "`deadband run` and `deadband daemon` print no crumbkit Document; both declare `prints_no_result`. `run` starts its job with std's Command in place of `crumbkit_child::hand_over`. crumbkit-child is a crate new to deadband's graph, which needs an eval first. Without it, Ctrl-C reaches both deadband and the job, and deadband can end before the job does."
+reason = "`deadband run` and `deadband daemon` print no crumbkit Document; both declare `prints_no_result`. `run` starts its job with std's Command in place of `crumbkit_child::hand_over`. crumbkit-child is a crate new to deadband's graph, which needs an eval first. Without it, a Ctrl-C at the terminal reaches both deadband and the job, and deadband passes the SIGINT on as well, so the job receives it twice."
 correction = "a later deadband pull request evaluates crumbkit-child and hands the terminal to the job through it"
 
 [[exception]]

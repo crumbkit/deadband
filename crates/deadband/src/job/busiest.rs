@@ -25,10 +25,10 @@ use std::io::{self, Read};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::thread;
 use std::time::Duration;
 
 use crate::protocol::{Label, OutsideJobs};
+use crate::spawn;
 use crate::stuck::BUSY_PERCENT;
 
 /// The most bytes of the program's standard output that deadband keeps.
@@ -92,6 +92,32 @@ impl Census {
         if self.running.swap(true, Ordering::SeqCst) {
             return Err(Failed::Running);
         }
+        // The thread that waits starts before the program, so a refused
+        // thread leaves no program unreaped, and the flag clears either way.
+        let running = Arc::clone(&self.running);
+        #[expect(
+            clippy::disallowed_types,
+            reason = "crates/deadband/src/job/busiest.rs hands the child to its own waiting thread, which reaps it"
+        )]
+        let (start, started) = mpsc::channel::<std::process::Child>();
+        let (sender, ended) = mpsc::channel();
+        let waiting = spawn::thread("deadband-ps", move || {
+            let Ok(mut child) = started.recv() else {
+                return;
+            };
+            let mut kept = Vec::new();
+            if let Some(mut stdout) = child.stdout.take() {
+                let _ = (&mut stdout).take(MAX_OUTPUT).read_to_end(&mut kept);
+                let _ = io::copy(&mut stdout, &mut io::sink());
+            }
+            let status = child.wait();
+            running.store(false, Ordering::SeqCst);
+            let _ = sender.send(status.map(|status| (status, kept)));
+        });
+        if let Err(error) = waiting {
+            self.running.store(false, Ordering::SeqCst);
+            return Err(Failed::Start(error));
+        }
         #[expect(
             clippy::disallowed_methods,
             reason = "crates/deadband/src/job/busiest.rs starts /bin/ps; the module states PROC-2's items"
@@ -102,7 +128,7 @@ impl Census {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn();
-        let mut child = match spawned {
+        let child = match spawned {
             Ok(child) => child,
             Err(error) => {
                 self.running.store(false, Ordering::SeqCst);
@@ -110,19 +136,9 @@ impl Census {
             }
         };
         let pid = child.id();
-        let stdout = child.stdout.take();
-        let running = Arc::clone(&self.running);
-        let (sender, ended) = mpsc::channel();
-        thread::spawn(move || {
-            let mut kept = Vec::new();
-            if let Some(mut stdout) = stdout {
-                let _ = (&mut stdout).take(MAX_OUTPUT).read_to_end(&mut kept);
-                let _ = io::copy(&mut stdout, &mut io::sink());
-            }
-            let status = child.wait();
-            running.store(false, Ordering::SeqCst);
-            let _ = sender.send(status.map(|status| (status, kept)));
-        });
+        // The waiting thread holds `started` until it receives, so the send
+        // reaches it.
+        let _ = start.send(child);
         let (status, stdout) = match ended.recv_timeout(within) {
             Ok(Ok(ended)) => ended,
             Ok(Err(error)) => return Err(Failed::Start(error)),

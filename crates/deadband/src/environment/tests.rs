@@ -179,3 +179,22 @@ fn an_empty_deadband_socket_counts_as_absent_so_the_daemon_records() {
     );
     assert!(read.history_directory().is_some());
 }
+
+#[test]
+fn a_daemon_started_with_its_own_socket_reads_no_reclaim_config() {
+    let read = Environment::read(
+        environment(&[("HOME", "/home/me"), ("DEADBAND_SOCKET", "/tmp/test.sock")]),
+        None,
+    );
+    assert!(read.config.is_some());
+    assert_eq!(read.reclaim_directory(), None);
+}
+
+#[test]
+fn a_daemon_on_the_default_socket_reads_the_reclaim_config_from_the_configuration_directory() {
+    let read = Environment::read(environment(&[("HOME", "/home/me")]), None);
+    assert_eq!(
+        read.reclaim_directory(),
+        Some(PathBuf::from("/home/me/.config/deadband"))
+    );
+}

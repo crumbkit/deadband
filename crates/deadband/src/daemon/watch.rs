@@ -17,7 +17,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use self::hook::Hooks;
@@ -25,6 +24,7 @@ use super::{Log, Shared, State, Watching, lock, note};
 use crate::job::busiest::{Census, Failed};
 use crate::probe::{Probe, ProcessUse, TreeUnreadable};
 use crate::protocol::{Ago, OutsideJobs, Reply, StuckJob, write_line};
+use crate::spawn;
 use crate::stuck::{self, Change, Period, Track};
 
 mod hook;
@@ -139,11 +139,11 @@ impl State {
         noticed
     }
 
-    /// Returns another handle of the connection of the running job whose
-    /// root is `pid`. A descriptor copy does not write to the client.
-    fn notice_stream(&self, pid: u32) -> Option<UnixStream> {
+    /// Returns the connection of the running job whose root is `pid`, which
+    /// the caller writes to after it releases the lock.
+    fn notice_stream(&self, pid: u32) -> Option<Arc<UnixStream>> {
         let waiter = self.queue.running().find(|waiter| waiter.job.pid == pid)?;
-        waiter.stream.try_clone().ok()
+        Some(Arc::clone(&waiter.stream))
     }
 }
 
@@ -206,14 +206,12 @@ pub(super) fn start<P: Probe + Send + 'static>(
         hooks,
     };
     // A thread that cannot start leaves every job showing as running.
-    let spawned = thread::Builder::new()
-        .name("deadband-watch".to_owned())
-        .spawn(move || {
-            let every = watcher.watching.every;
-            while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(every) {
-                watcher.tick();
-            }
-        });
+    let spawned = spawn::thread("deadband-watch", move || {
+        let every = watcher.watching.every;
+        while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(every) {
+            watcher.tick();
+        }
+    });
     if let Err(error) = spawned {
         note(
             log,
@@ -355,7 +353,7 @@ impl<P: Probe> Watcher<P> {
         };
         let stream = lock(&self.shared).notice_stream(noticed.pid);
         if let Some(stream) = stream {
-            let _ = write_line(&mut &stream, &reply);
+            let _ = write_line(&mut &*stream, &reply);
         }
         if let Change::Stuck { quiet } = noticed.change {
             self.hooks.run(&noticed.label, quiet, busiest);

@@ -12,6 +12,10 @@ repository = "https://github.com/crumbkit/deadband"
 # debug build.
 [profile.release]
 overflow-checks = true
+# A panic in any thread of the daemon ends the process, so launchd starts a
+# new daemon and clients start their jobs at once. Without it, a daemon whose
+# sampler panicked would keep accepting connections and grant no job.
+panic = "abort"
 
 # The [workspace.lints] table of the base profile of the Rust standards
 # (baseline/lints/base.toml).

@@ -7,7 +7,26 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use super::LABEL;
+use super::plist::THROTTLE_SECONDS;
+use super::{LABEL, LOG};
+
+/// The jobs that a daemon answered with: those it runs and those that wait
+/// for a place.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Counts {
+    /// The jobs that run.
+    pub running: usize,
+    /// The jobs that wait to run.
+    pub waiting: usize,
+}
+
+impl Counts {
+    /// Returns the running and waiting jobs together.
+    #[must_use]
+    pub const fn total(self) -> usize {
+        self.running + self.waiting
+    }
+}
 
 /// One step that install or uninstall took or skipped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -29,8 +48,38 @@ pub enum Step {
         /// The plist's path.
         path: PathBuf,
     },
-    /// launchd loaded the agent.
-    Loaded,
+    /// launchd loaded the agent. `answers` says whether a daemon answered on
+    /// the socket within a few seconds, and is absent in a dry run and after
+    /// a `hand_started` step, when the daemon that answers is not launchd's.
+    Loaded {
+        /// Whether the daemon answered.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        answers: Option<bool>,
+    },
+    /// The daemon held these jobs when the step after this one stopped it.
+    Counted {
+        /// The jobs that run.
+        running: usize,
+        /// The jobs that wait for a place.
+        waiting: usize,
+    },
+    /// The daemon did not answer before the step after this one stopped it,
+    /// so its jobs are unknown.
+    NoCount,
+    /// These files stay after uninstall. The person deletes them to remove
+    /// deadband's data.
+    Stays {
+        /// The files and directories that exist and stay.
+        paths: Vec<PathBuf>,
+    },
+    /// A daemon answered on the socket before launchd loaded the agent, so
+    /// launchd did not start it. launchd's daemon exits at start while it
+    /// runs, and launchd starts it again once a minute, the plist's
+    /// `ThrottleInterval`, until that daemon ends.
+    HandStarted {
+        /// The socket the daemon answered on.
+        socket: PathBuf,
+    },
     /// launchd unloaded the agent, which stopped its daemon.
     Unloaded,
     /// launchd had not loaded the agent.
@@ -108,10 +157,54 @@ impl Report {
         match step {
             Step::Wrote { path } => format!("{} {}", self.verb("write", "wrote"), self.shown(path)),
             Step::Unchanged { path } => format!("left {} unchanged", self.shown(path)),
-            Step::Loaded => format!("{} {LABEL}", self.verb("load", "loaded")),
+            Step::Loaded { answers } => {
+                let loaded = format!("{} {LABEL}", self.verb("load", "loaded"));
+                match answers {
+                    None => loaded,
+                    Some(true) => format!("{loaded}, daemon answers"),
+                    Some(false) => format!(
+                        "{loaded}, daemon does not answer; see {}",
+                        self.shown(&self.home.join(LOG))
+                    ),
+                }
+            }
+            Step::Counted { running, waiting } => {
+                let (keep, start) = if self.dry_run {
+                    ("would keep running", "would start at once")
+                } else {
+                    ("keep running", "start at once")
+                };
+                let mut effects = Vec::new();
+                if *running > 0 {
+                    effects.push(format!("the running jobs {keep}"));
+                }
+                if *waiting > 0 {
+                    effects.push(format!("the waiting jobs {start}"));
+                }
+                let counted = format!(
+                    "the daemon has {running} running and {waiting} waiting {}",
+                    if *waiting == 1 { "job" } else { "jobs" }
+                );
+                if effects.is_empty() {
+                    counted
+                } else {
+                    format!("{counted}; {}", effects.join(" and "))
+                }
+            }
+            Step::NoCount => {
+                "the daemon did not answer, so deadband cannot say how many jobs it holds".to_owned()
+            }
+            Step::Stays { paths } => {
+                let shown: Vec<String> = paths.iter().map(|path| self.shown(path)).collect();
+                format!("{} in place: {}", self.verb("leave", "left"), shown.join(", "))
+            }
             Step::UpToDate { path } => format!(
                 "{} is up to date and {LABEL} is loaded, so nothing changed",
                 self.shown(path)
+            ),
+            Step::HandStarted { socket } => format!(
+                "a daemon that launchd did not start answers on {}, so launchd's daemon exits at start and launchd starts it again every {THROTTLE_SECONDS} seconds until that daemon ends",
+                self.shown(socket)
             ),
             Step::Unloaded => format!("{} {LABEL}", self.verb("unload", "unloaded")),
             Step::NotLoaded => format!("{LABEL} was not loaded"),

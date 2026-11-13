@@ -144,7 +144,10 @@ fn run_once(config: &Config, reclaimer: &Reclaimer, need: &str, dry: bool, log: 
         },
         Err(error) => Run {
             report: None,
-            failed: Some(format!("it could not start: {error}")),
+            failed: Some(format!(
+                "it could not start {}: {error}",
+                reclaimer.command.first().map_or("", String::as_str)
+            )),
             logged: false,
         },
     }

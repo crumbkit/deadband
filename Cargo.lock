@@ -271,6 +271,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "signal-hook",
  "toml",
 ]
 

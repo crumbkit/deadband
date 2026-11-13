@@ -8,8 +8,67 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.3.0] - 2026-11-12
 
+### Changed
+
+- A client that does not read the daemon's reply no longer stops admission.
+  The daemon now writes each grant and queued reply after it releases the
+  lock that guards the queue, so other threads keep admitting jobs while the
+  write waits. A reply that a client has not taken within one second fails,
+  and the daemon closes that connection. A `deadband run` that had read no
+  queued reply then starts its job at once. One that had read a queued reply
+  asks again every 100 ms for up to 5 seconds, is queued again by a daemon
+  that is still serving, and starts its job once no daemon has kept it for
+  those 5 seconds. Before, the daemon wrote replies while it held the queue
+  lock, so each client that did not read stopped all admission for up to one
+  second, and a client whose grant failed could wait without end.
+- A daemon whose lock file (the socket's path with `.lock` added) is removed
+  or replaced now stops serving within about a minute, and `deadband daemon`
+  prints `the lock file is gone or replaced, so the daemon stops serving`.
+  Before, a removed lock file let a second daemon start, remove the first
+  one's socket and bind its own, so two daemons each counted only their own
+  jobs.
+- When the operating system refuses a thread, for example at the user's
+  limit on threads or processes, no daemon thread panics. A refused sampler,
+  watchdog or connection thread stops the daemon with the reason
+  `the <name> thread could not start: <error>, so the daemon stops serving`,
+  and launchd starts a new one while jobs start at once. A refused thread
+  for a reclaim, an `on_stuck` command or a `/bin/ps` run is one log line,
+  and the next attempt tries again. Before, a refused `/bin/ps` thread
+  switched stuck detection off until the daemon restarted.
+- `deadband service install` and `deadband service uninstall` hold a lock on
+  `service.lock` in the state directory while they read and change the plist
+  and launchd. A second command waits up to about ten seconds and then
+  refuses with `deadband::service::locked`, which names the lock file, and
+  changes nothing. Before, an install racing an uninstall could load an
+  agent whose plist the uninstall then deleted.
+- The launch agent's plist sets `ThrottleInterval` to 60 seconds, so a
+  daemon that exits at start, because a daemon started by hand holds the
+  socket, starts again once a minute instead of every ten seconds. Running
+  `deadband service install` again writes the new plist. When a daemon that
+  launchd did not start already answers on the socket, install says so.
+- `deadband run` passes a SIGTERM or SIGINT that it receives on to its job,
+  unchanged, keeps waiting, and exits with the job's status (143 or 130 when
+  the signal ended it), so a `kill` of `deadband run` ends the job and the
+  daemon records it as ended, not lost. A Ctrl-C at the terminal now reaches
+  the job twice, and `deadband run` replaces an ignored SIGINT or SIGTERM
+  that its caller passed down.
+- A waiting `deadband run` whose daemon closes the connection now tries to
+  reach a daemon every 100 ms for 5 seconds and asks again, so a restarted
+  daemon queues the job instead of every waiting job starting at once. The
+  job starts at once only when no daemon answers within the 5 seconds.
+- A reclaim ends when its reclaimer exits, even when a background process
+  of the reclaimer still holds its standard output open. Before, such a
+  process kept the reclaim running and the daemon started no later reclaim.
+- `deadband status` prints `reclaiming: <need>, started <age> ago` while a
+  reclaim runs, and the status JSON gains `reclaiming` with the need and the
+  start time.
+
 ### Added
 
+- A daemon started with `DEADBAND_SOCKET` set ignores `config.toml`, logs one
+  line saying so, and runs no reclaimer and no `on_stuck` command. A reclaim
+  holds a lock on `reclaim.lock` in the state directory while it runs, so
+  daemons of one user reclaim one at a time.
 - `deadband service install` writes and loads the launchd agent that runs
   `deadband daemon` at login and restarts it when it stops, with `TMPDIR`
   and `PATH` set for launchd. It leaves an identical, loaded plist alone. It
@@ -20,11 +79,32 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the agent and deletes the plist after it asks, or at once with `--yes`.
   Both take `--dry-run`, and on platforms other than macOS both exit with
   `deadband::service::unsupported`.
+- `deadband service install` reports `daemon answers` or `daemon does not
+  answer; see ~/Library/Logs/deadband.log` after it loads the agent, having
+  asked the daemon up to 20 times, 100 milliseconds apart.
+- `deadband service uninstall` and `install --restart` print how many jobs
+  the daemon runs and how many wait before they unload the agent, and the
+  uninstall question names them. They ask the daemon that launchd runs, and
+  uninstall asks only when launchd has loaded the agent. Uninstall ends by
+  listing the socket, lock, log, history and configuration that stay.
 - When no daemon answers on macOS, `deadband status` says whether the agent
-  is not installed or not loaded and names `deadband service install`.
-  `deadband status --json` gives the state in `daemon_state`.
+  is not installed, installed but not loaded, loaded but not answering, or
+  could not be checked, and names `deadband service install` or the log.
+  `deadband status --json` gives the state in `daemon_state`: `running`,
+  `not_loaded`, `not_installed`, `loaded_silent` or `launchd_unasked`.
 - Every command accepts `--no-input`, which makes a command that would ask
   a question refuse instead.
+- `DEADBAND_SOCKET_DIR` names the directory that holds `deadband.sock`. It
+  is read after `DEADBAND_SOCKET` and before the per-user directory.
+
+### Fixed
+
+- On macOS, `deadband run` and `deadband status` now find the launchd
+  daemon's socket whatever `TMPDIR` is. They use the directory that
+  `getconf DARWIN_USER_TEMP_DIR` prints, where that daemon listens, so a
+  caller with another `TMPDIR` no longer runs its jobs uncounted. They fall
+  back to `TMPDIR` when the system has no value. They read it with
+  `confstr`, so they start no process.
 
 ## [0.2.1] - 2026-11-11
 

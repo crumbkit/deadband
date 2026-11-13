@@ -2,16 +2,61 @@
 //! job that an earlier daemon granted and that still runs. Each one's
 //! connection thread reads the job's working directory before it takes the
 //! queue lock, and then waits on the connection for the job's end.
+//! [`connection`] reads each connection's first line and serves it.
 
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{Shared, State, Waiter, lock};
+use super::reply::deliver;
+use super::{Shared, State, WRITE_TIMEOUT, Waiter, lock};
 use crate::admit::JobId;
 use crate::history::{Arrival, Tally};
 use crate::probe::ChildUsage;
 use crate::protocol::{Exit, Job, Label, Reply, Request, Short, read_line, write_line};
+
+/// Serves one client on `stream`. A client that sends no first line within
+/// the settings' `first_line_within` is closed.
+pub(super) fn connection(shared: &Shared, stream: UnixStream) {
+    let first_line_within = lock(shared).settings.first_line_within;
+    let timeouts = stream
+        .set_write_timeout(Some(WRITE_TIMEOUT))
+        .and_then(|()| stream.set_read_timeout(Some(first_line_within)));
+    if timeouts.is_err() {
+        return;
+    }
+    let Ok(clone) = stream.try_clone() else {
+        return;
+    };
+    let mut reader = BufReader::new(clone);
+    match read_line::<Request>(&mut reader) {
+        Ok(Some(Request::Ask(job))) => {
+            // A granted job may run for hours, so its connection waits for
+            // the end without a deadline.
+            if stream.set_read_timeout(None).is_ok() {
+                ask(shared, stream, &mut reader, job);
+            }
+        }
+        Ok(Some(Request::Status)) => {
+            let jobs = lock(shared).jobs();
+            let _ = write_line(&mut &stream, &Reply::Jobs(jobs));
+        }
+        Ok(Some(Request::Timeline)) => {
+            // The write has its timeout and happens after the lock is
+            // released, so a client that does not read holds up no job. The
+            // fit also runs after the lock is released.
+            let timeline = lock(shared).timeline(Instant::now());
+            let _ = write_line(&mut &stream, &Reply::Timeline(timeline.fit()));
+        }
+        Ok(Some(Request::Seat { job, jobs, ran_ms })) => {
+            if stream.set_read_timeout(None).is_ok() {
+                seat(shared, stream, &mut reader, job, jobs, ran_ms);
+            }
+        }
+        Ok(Some(Request::Done { .. }) | None) | Err(_) => {}
+    }
+}
 
 /// Reads what the daemon learns from `job` when it arrives, and fills the
 /// job's workspace and short command from it. The workspace that a client
@@ -51,20 +96,18 @@ pub(super) fn ask(
     reader: &mut BufReader<UnixStream>,
     mut job: Job,
 ) {
-    let Ok(grant_stream) = stream.try_clone() else {
-        return;
-    };
+    let stream = Arc::new(stream);
     let arrival = arrive(shared, &mut job, None);
     let queued = Instant::now();
     let label = Label::new(&job.label);
-    let id: JobId = {
+    let (id, replies) = {
         let mut state = lock(shared);
         let lane = job.lane;
         let ahead = state.queue.ahead_in(lane);
         let id = state.queue.push(
             Waiter {
                 job,
-                stream: grant_stream,
+                stream: Arc::clone(&stream),
                 label,
                 queued,
                 arrival,
@@ -72,15 +115,16 @@ pub(super) fn ask(
             },
             lane,
         );
-        state.grant();
+        let mut replies = state.grant();
         if let Some(ahead) = state.queue.ahead_of(id) {
             let held = state.queue.held();
-            // A client that cannot take this reply also closes its
-            // connection, which the read below sees.
-            let _ = write_line(&mut &stream, &Reply::Queued { ahead, held });
+            // A client that cannot take this reply has its connection shut
+            // down, which the read in `finish` sees.
+            replies.tell(stream, Reply::Queued { ahead, held });
         }
-        id
+        (id, replies)
     };
+    deliver(shared, replies);
     finish(shared, reader, id);
 }
 
@@ -113,9 +157,12 @@ pub(super) fn seat(
 /// the job, and starts the jobs that its place lets start.
 fn finish(shared: &Shared, reader: &mut BufReader<UnixStream>, id: JobId) {
     let (exit, usage) = read_end(reader);
-    let mut state = lock(shared);
-    state.record(id, Some(exit), usage);
-    state.grant();
+    let replies = {
+        let mut state = lock(shared);
+        state.record(id, Some(exit), usage);
+        state.grant()
+    };
+    deliver(shared, replies);
 }
 
 /// Reads the job's connection until its client says how the job ended. A
@@ -152,7 +199,7 @@ impl State {
         let label = Label::new(&job.label);
         let waiter = Waiter {
             job,
-            stream,
+            stream: Arc::new(stream),
             label,
             queued: at,
             arrival,

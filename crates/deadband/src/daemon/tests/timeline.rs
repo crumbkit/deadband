@@ -3,10 +3,12 @@
 use std::num::NonZeroUsize;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use super::super::reply::deliver;
 use super::super::timeline::{MAX_ENDED, MAX_ROWS};
-use super::super::{Settings, State, Waiter};
+use super::super::{Settings, Shared, State, Waiter, lock};
 use super::{Client, Dial, REPLY_WITHIN, granted, job, queued, start};
 use crate::admit::{Hold, JobId, Lane};
 use crate::probe::Pressure;
@@ -242,7 +244,7 @@ fn the_reply_lists_running_then_waiting_then_ended_jobs_newest_first() {
 }
 
 /// A daemon's state with room for `max_jobs` jobs.
-fn state(max_jobs: usize) -> State {
+pub(super) fn state(max_jobs: usize) -> State {
     let settings = Settings::new(
         NonZeroUsize::new(max_jobs).expect("positive"),
         NonZeroUsize::new(16),
@@ -252,6 +254,18 @@ fn state(max_jobs: usize) -> State {
     State::new(settings, None, false)
 }
 
+/// The state of [`state`] as the daemon's threads share it.
+pub(super) fn shared(max_jobs: usize) -> Shared {
+    Arc::new(Mutex::new(state(max_jobs)))
+}
+
+/// Starts every job that `shared` lets start and writes their grants, as a
+/// thread of the daemon does.
+fn grant(shared: &Shared) {
+    let replies = lock(shared).grant();
+    deliver(shared, replies);
+}
+
 /// Queues a job labelled `label` whose client has gone when `gone` holds,
 /// and returns its number with the client's end of the connection.
 fn push(state: &mut State, label: &str, gone: bool) -> (JobId, Option<UnixStream>) {
@@ -259,7 +273,7 @@ fn push(state: &mut State, label: &str, gone: bool) -> (JobId, Option<UnixStream
     let id = state.queue.push(
         Waiter {
             job: job(label),
-            stream: ours,
+            stream: ours.into(),
             label: Label::new(label),
             queued: Instant::now(),
             arrival: None,
@@ -272,10 +286,10 @@ fn push(state: &mut State, label: &str, gone: bool) -> (JobId, Option<UnixStream
 
 #[test]
 fn a_job_that_cannot_take_its_grant_has_left() {
-    let mut state = state(1);
-    push(&mut state, "a", true);
-    state.grant();
-    let timeline = state.timeline(Instant::now());
+    let shared = shared(1);
+    push(&mut lock(&shared), "a", true);
+    grant(&shared);
+    let timeline = lock(&shared).timeline(Instant::now());
     assert!(
         matches!(row(&timeline, "a").state, JobState::Left { .. }),
         "{timeline:?}"
@@ -284,10 +298,10 @@ fn a_job_that_cannot_take_its_grant_has_left() {
 
 #[test]
 fn a_job_that_takes_its_grant_runs() {
-    let mut state = state(1);
-    let (_id, _client) = push(&mut state, "a", false);
-    state.grant();
-    let timeline = state.timeline(Instant::now());
+    let shared = shared(1);
+    let (_id, _client) = push(&mut lock(&shared), "a", false);
+    grant(&shared);
+    let timeline = lock(&shared).timeline(Instant::now());
     assert!(
         matches!(row(&timeline, "a").state, JobState::Running { .. }),
         "{timeline:?}"
@@ -296,28 +310,28 @@ fn a_job_that_takes_its_grant_runs() {
 
 #[test]
 fn a_job_is_recorded_once_when_its_connection_ends_after_a_failed_grant() {
-    let mut state = state(1);
-    let (id, _) = push(&mut state, "a", true);
-    state.grant();
-    state.record(id, Some(Exit::Lost), None);
-    assert_eq!(state.timeline(Instant::now()).jobs.len(), 1);
+    let shared = shared(1);
+    let (id, _) = push(&mut lock(&shared), "a", true);
+    grant(&shared);
+    lock(&shared).record(id, Some(Exit::Lost), None);
+    assert_eq!(lock(&shared).timeline(Instant::now()).jobs.len(), 1);
 }
 
-/// Ends one job labelled `label` on `state`.
-fn end_one(state: &mut State, label: &str) {
-    let (id, client) = push(state, label, false);
-    state.grant();
-    state.record(id, Some(Exit::Exited { code: 0 }), None);
+/// Ends one job labelled `label` on `shared`.
+fn end_one(shared: &Shared, label: &str) {
+    let (id, client) = push(&mut lock(shared), label, false);
+    grant(shared);
+    lock(shared).record(id, Some(Exit::Exited { code: 0 }), None);
     drop(client);
 }
 
 #[test]
 fn the_sixty_fifth_ended_job_evicts_the_oldest() {
-    let mut state = state(1);
+    let shared = shared(1);
     for n in 0..=MAX_ENDED {
-        end_one(&mut state, &n.to_string());
+        end_one(&shared, &n.to_string());
     }
-    let timeline = state.timeline(Instant::now());
+    let timeline = lock(&shared).timeline(Instant::now());
     assert_eq!(timeline.jobs.len(), MAX_ENDED);
     assert_eq!(labels(&timeline).first(), Some(&"64"));
     assert_eq!(labels(&timeline).last(), Some(&"1"));
@@ -325,11 +339,11 @@ fn the_sixty_fifth_ended_job_evicts_the_oldest() {
 
 #[test]
 fn sixty_four_ended_jobs_are_all_kept() {
-    let mut state = state(1);
+    let shared = shared(1);
     for n in 0..MAX_ENDED {
-        end_one(&mut state, &n.to_string());
+        end_one(&shared, &n.to_string());
     }
-    let timeline = state.timeline(Instant::now());
+    let timeline = lock(&shared).timeline(Instant::now());
     assert_eq!(timeline.jobs.len(), MAX_ENDED);
     assert_eq!(labels(&timeline).last(), Some(&"0"));
 }

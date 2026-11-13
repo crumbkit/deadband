@@ -75,6 +75,28 @@ impl Reclaimer {
         Self(directory)
     }
 
+    /// A configuration directory whose `config.toml` starts with `keys`
+    /// and names one reclaimer that runs `program`. A relative `program`
+    /// is a path under the directory, where no file exists.
+    fn with_command(program: &str, keys: &str) -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let directory =
+            std::env::temp_dir().join(format!("db-reclaim-cmd-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("the directory is made");
+        let program = directory.join(program);
+        let config = format!(
+            "reclaim_after = \"10s\"\n{keys}\n[[reclaim]]\nname = \"workspaces\"\ncommand = [\"{}\"]\n",
+            program.display()
+        );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test writes the config file a person would write"
+        )]
+        std::fs::write(directory.join("config.toml"), config).expect("the config writes");
+        Self(directory)
+    }
+
     fn calls(&self) -> String {
         std::fs::read_to_string(self.0.join("calls")).unwrap_or_default()
     }
@@ -217,6 +239,63 @@ fn the_daemon_command_runs_no_reclaimer_and_says_why_when_its_config_is_refused(
     assert!(
         log.contains("reclaim_timeout is 0")
             && log.contains("so the daemon runs no reclaimer and no on_stuck command"),
+        "{log}"
+    );
+}
+
+#[test]
+fn a_reclaimer_whose_program_is_missing_fails_and_status_names_the_program() {
+    let reclaimer = Reclaimer::with_command("missing/mxv", "");
+    let program = reclaimer.0.join("missing/mxv");
+    let test = Test::new(Warn);
+    start_daemon(&test, &reclaimer);
+    let out = status_until(&test, |out| out.contains("could not start"));
+    let expected = format!(
+        "could not start {}: No such file or directory",
+        program.display()
+    );
+    assert!(out.contains(&expected), "{out}");
+    let (_job, reply) = ask(&test.machine.socket, "build");
+    assert_eq!(reply, Reply::Granted { jobs: 2 });
+}
+
+#[test]
+fn the_daemon_says_at_start_that_a_reclaimer_names_a_program_that_does_not_exist() {
+    let reclaimer = Reclaimer::with_command("missing/mxv", "");
+    let program = reclaimer.0.join("missing/mxv");
+    let mut test = Test::new(Warn);
+    test.machine.environment.config = Some(reclaimer.0.clone());
+    start_daemon_command(&test);
+    let log = test.log();
+    let expected = format!(
+        "the reclaimer workspaces names {}, which does not exist, so each reclaim it is asked for fails until a program is installed there",
+        program.display()
+    );
+    assert!(log.contains(&expected), "{log}");
+}
+
+#[test]
+fn the_daemon_says_nothing_about_a_reclaimer_whose_program_exists() {
+    let reclaimer = Reclaimer::with("10s", "exit 0");
+    let mut test = Test::new(Warn);
+    test.machine.environment.config = Some(reclaimer.0.clone());
+    start_daemon_command(&test);
+    let log = test.log();
+    assert!(!log.contains("which does not exist"), "{log}");
+    assert!(!log.contains("is not an absolute path"), "{log}");
+}
+
+#[test]
+fn an_on_stuck_command_whose_program_is_missing_is_named_in_the_log() {
+    let reclaimer = Reclaimer::with_command("/bin/sh", "on_stuck = [\"/nonexistent/notify\"]\n");
+    let mut test = Test::new(Warn);
+    test.machine.environment.config = Some(reclaimer.0.clone());
+    start_daemon_command(&test);
+    let log = test.log();
+    assert!(
+        log.contains(
+            "the on_stuck command names /nonexistent/notify, which does not exist, so it fails each time a job becomes stuck until a program is installed there"
+        ),
         "{log}"
     );
 }
