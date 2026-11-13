@@ -15,6 +15,7 @@ pub mod protocol;
 pub mod reclaim;
 pub mod serve;
 pub mod socket;
+mod spawn;
 pub mod stuck;
 #[cfg(test)]
 mod testing;

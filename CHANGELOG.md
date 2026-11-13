@@ -8,6 +8,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A daemon whose lock file (the socket's path with `.lock` added) is removed
+  or replaced now stops serving within about a minute, and `deadband daemon`
+  prints `the lock file is gone or replaced, so the daemon stops serving`.
+  Before, a removed lock file let a second daemon start, remove the first
+  one's socket and bind its own, so two daemons each counted only their own
+  jobs.
+- When the operating system refuses a thread, for example at the user's
+  limit on threads or processes, no daemon thread panics. A refused sampler,
+  watchdog or connection thread stops the daemon with the reason
+  `the <name> thread could not start: <error>, so the daemon stops serving`,
+  and launchd starts a new one while jobs start at once. A refused thread
+  for a reclaim, an `on_stuck` command or a `/bin/ps` run is one log line,
+  and the next attempt tries again. Before, a refused `/bin/ps` thread
+  switched stuck detection off until the daemon restarted.
 - `deadband run` passes a SIGTERM or SIGINT that it receives on to its job,
   unchanged, keeps waiting, and exits with the job's status (143 or 130 when
   the signal ended it), so a `kill` of `deadband run` ends the job and the

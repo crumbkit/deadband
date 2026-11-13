@@ -30,13 +30,18 @@
 //! thread and one pipe in the daemon until it closes the pipe, because
 //! closing the pipe sooner would risk SIGPIPE for that process. A limit on
 //! such threads would replace this if a reclaimer ever does it on every run.
+//! Soft limit: when the operating system refuses the reading thread, the
+//! waiting thread reads standard output to its end before it waits, so in
+//! that case such a background process holds the reclaim until it closes
+//! the pipe.
 
 use std::io::{self, Read};
-use std::process::{Command, Stdio};
+use std::process::{ChildStdout, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::thread;
 use std::time::Duration;
+
+use crate::spawn;
 
 /// The most bytes of a reclaimer's standard output that deadband keeps.
 pub const MAX_OUTPUT: u64 = 1024 * 1024;
@@ -95,6 +100,45 @@ pub fn run(
     let Some((program, first)) = command.split_first() else {
         return Err(io::ErrorKind::InvalidInput.into());
     };
+    // Both threads start before the reclaimer, so a refused thread leaves no
+    // reclaimer unreaped. When the reading thread is refused, the waiting
+    // thread reads standard output itself before it waits.
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let (drained, drain) = mpsc::channel();
+    let (to_reader, for_reader) = mpsc::channel::<ChildStdout>();
+    let reader_kept = Arc::clone(&kept);
+    let reading = spawn::thread("deadband-reclaimer-read", move || {
+        if let Ok(stdout) = for_reader.recv() {
+            drain_stdout(stdout, &reader_kept);
+            let _ = drained.send(());
+        }
+    })
+    .is_ok();
+    #[expect(
+        clippy::disallowed_types,
+        reason = "crates/deadband/src/job/reclaimer.rs hands the child to its own waiting thread, which reaps it"
+    )]
+    let (start, started) = mpsc::channel::<std::process::Child>();
+    let (sender, ended) = mpsc::channel();
+    spawn::thread("deadband-reclaimer-wait", move || {
+        let Ok(mut child) = started.recv() else {
+            return;
+        };
+        if let Some(stdout) = child.stdout.take() {
+            drain_stdout(stdout, &kept);
+        }
+        let status = child.wait();
+        // The reclaimer has exited. What it wrote is in the pipe already,
+        // so a short wait collects it; a background process that still
+        // holds the pipe open is not waited for, and the reading thread
+        // ends when that process closes it.
+        let _ = drain.recv_timeout(DRAIN_GRACE);
+        let stdout = kept.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let _ = sender.send(status.map(|status| Ended::Exited {
+            code: status.code(),
+            stdout,
+        }));
+    })?;
     #[expect(
         clippy::disallowed_methods,
         reason = "crates/deadband/src/job/reclaimer.rs starts the reclaimer that the daemon's config file names; the module states PROC-2's items"
@@ -107,30 +151,10 @@ pub fn run(
         .stderr(Stdio::null())
         .spawn();
     let mut child = spawned?;
-    let stdout = child.stdout.take();
-    let (sender, ended) = mpsc::channel();
-    let kept = Arc::new(Mutex::new(Vec::new()));
-    let (drained, drain) = mpsc::channel();
-    if let Some(stdout) = stdout {
-        let kept = Arc::clone(&kept);
-        thread::spawn(move || {
-            drain_stdout(stdout, &kept);
-            let _ = drained.send(());
-        });
+    if reading && let Some(stdout) = child.stdout.take() {
+        let _ = to_reader.send(stdout);
     }
-    thread::spawn(move || {
-        let status = child.wait();
-        // The reclaimer has exited. What it wrote is in the pipe already,
-        // so a short wait collects it; a background process that still
-        // holds the pipe open is not waited for, and the reading thread
-        // ends when that process closes it.
-        let _ = drain.recv_timeout(DRAIN_GRACE);
-        let stdout = kept.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let _ = sender.send(status.map(|status| Ended::Exited {
-            code: status.code(),
-            stdout,
-        }));
-    });
+    let _ = start.send(child);
     match ended.recv_timeout(timeout) {
         Ok(ended) => ended,
         Err(RecvTimeoutError::Timeout) => {
@@ -165,6 +189,29 @@ mod tests {
         );
         assert_eq!(
             ended,
+            Ended::Exited {
+                code: Some(0),
+                stdout: b"kept\n".to_vec()
+            }
+        );
+    }
+
+    #[test]
+    fn a_reclaimer_whose_waiting_thread_cannot_start_reports_the_error() {
+        crate::spawn::refuse("deadband-reclaimer-wait");
+        let ended = run(&["true".to_owned()], &[], Duration::from_secs(30), || {});
+        crate::spawn::allow();
+        assert!(ended.is_err(), "{ended:?}");
+    }
+
+    #[test]
+    fn a_reclaimer_whose_reading_thread_cannot_start_still_has_its_output_kept() {
+        let command = ["sh", "-c", "echo kept"].map(str::to_owned);
+        crate::spawn::refuse("deadband-reclaimer-read");
+        let ended = run(&command, &[], Duration::from_secs(30), || {});
+        crate::spawn::allow();
+        assert_eq!(
+            ended.expect("the reclaimer starts and is waited for"),
             Ended::Exited {
                 code: Some(0),
                 stdout: b"kept\n".to_vec()

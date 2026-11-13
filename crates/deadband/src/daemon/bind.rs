@@ -150,8 +150,11 @@ pub(crate) fn take_lock(path: &Path) -> Result<File, TryLockError> {
 /// Makes the socket at `path` and listens on it.
 ///
 /// The daemon first takes an exclusive lock on `<path>.lock`, so two
-/// daemons never both bind. A socket left at `path` by a daemon that ended
-/// is removed; anything else at `path` is refused. The socket and the lock
+/// daemons never both bind. Removing the lock file lets a second daemon
+/// lock a new one, so a serving daemon checks its lock file with its socket
+/// file once a minute and stops when either is gone or replaced. A socket
+/// left at `path` by a daemon that ended is removed; anything else at
+/// `path` is refused. The socket and the lock
 /// file are made with a umask that keeps every other user out.
 ///
 /// # Errors
