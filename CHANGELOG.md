@@ -6,6 +6,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The daemon keeps recording job history after `jobs.jsonl` is removed or
+  replaced. Before each line it checks that its open file is still the file
+  at that path, and it opens the path again when it is not. Before, every
+  later line went into the removed file and was lost.
+- Two daemons no longer write one history directory after `jobs.lock` is
+  removed. Before each line the daemon checks that its lock is still the
+  file at that path, and it takes the lock again when it is not. When
+  another daemon already holds the new lock, this daemon logs once that
+  another daemon writes job history and records nothing more. Before, both
+  daemons kept writing, and one daemon's rotation could overwrite
+  `jobs.1.jsonl` that the other still wrote.
+
 ## [0.3.0] - 2026-11-13
 
 ### Changed

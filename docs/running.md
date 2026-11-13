@@ -227,7 +227,11 @@ directory has mode 0700 and the file has mode 0600. A daemon started with
 `DEADBAND_SOCKET_DIR` set records history like the default daemon, so a
 private daemon that uses that variable writes this file too. The daemon that writes the file holds a
 lock on `jobs.lock` in the same directory, and a second daemon that finds the
-lock held records nothing, logs one line and still admits its jobs.
+lock held records nothing, logs one line and still admits its jobs. When
+`jobs.jsonl` is removed or replaced, the daemon writes its next line to the
+file at that path. When `jobs.lock` is removed or replaced, the daemon takes the
+lock again before its next line, or stops recording if another daemon took it
+first.
 
 When the file passes 64 MiB, the daemon renames it to `jobs.1.jsonl`, replacing
 any earlier one, and starts a new file. The two files together hold about

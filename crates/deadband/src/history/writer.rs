@@ -14,6 +14,13 @@
 //! different sockets. A writer that finds the lock held records nothing and
 //! logs one line. If the writer thread stops, the first line that cannot
 //! reach it is logged once.
+//!
+//! Before each line, the writer checks by device and inode that the lock
+//! and the open file are still the files at their paths. A lock file that
+//! was removed or replaced is released and taken again, so a second daemon
+//! that took a new lock is the only writer. A history file that was removed
+//! or replaced is closed and opened again at its path, so later lines are
+//! recorded where readers look.
 
 use std::fmt;
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions, TryLockError};
@@ -26,6 +33,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 
+use super::identity::Identity;
 use super::{CHANNEL, FILE, Line, MAX_BYTES, ROTATED_FILE};
 use crate::daemon::{Log, note, take_lock};
 use crate::spawn;
@@ -128,8 +136,19 @@ impl Recorder {
 struct Open {
     /// The file, opened for appending.
     file: File,
+    /// The file's identity when the writer opened it.
+    identity: Identity,
     /// The file's length in bytes.
     size: u64,
+}
+
+/// The lock on the state directory that the writer holds.
+#[derive(Debug)]
+struct Lock {
+    /// The locked file, which the lock lasts as long as.
+    _file: File,
+    /// The lock file's identity when the writer took it.
+    identity: Identity,
 }
 
 /// The writer of the history file.
@@ -141,7 +160,7 @@ pub(super) struct Writer {
     /// Where the writer says that writing failed or recovered.
     log: Log,
     /// The lock on the state directory, once the writer holds it.
-    lock: Option<File>,
+    lock: Option<Lock>,
     /// Whether another writer held the lock when this writer last tried.
     refused: bool,
     /// The open file, or `None` when the writer is closed.
@@ -225,6 +244,14 @@ impl Writer {
         }
         let mut text = serde_json::to_vec(line).map_err(io::Error::other)?;
         text.push(b'\n');
+        let path = self.directory.join(FILE);
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|open| !open.identity.still_at(&path))
+        {
+            self.open = None;
+        }
         let open = match &mut self.open {
             Some(open) => open,
             closed => closed.insert(open_file(&self.directory)?),
@@ -236,15 +263,27 @@ impl Writer {
     }
 
     /// Takes the lock on the state directory unless the writer holds it,
-    /// and returns whether the writer holds it now.
+    /// and returns whether the writer holds it now. A lock whose file is no
+    /// longer at its path is released, with the open history file, and
+    /// taken again.
     fn claim(&mut self) -> io::Result<bool> {
-        if self.lock.is_some() {
-            return Ok(true);
+        let path = self.directory.join(LOCK_FILE);
+        match &self.lock {
+            Some(lock) if lock.identity.still_at(&path) => return Ok(true),
+            Some(_) => {
+                self.lock = None;
+                self.open = None;
+            }
+            None => {}
         }
         make_directory(&self.directory)?;
-        match take_lock(&self.directory.join(LOCK_FILE)) {
-            Ok(lock) => {
-                self.lock = Some(lock);
+        match take_lock(&path) {
+            Ok(file) => {
+                let identity = Identity::of(&file)?;
+                self.lock = Some(Lock {
+                    _file: file,
+                    identity,
+                });
                 self.refused = false;
                 Ok(true)
             }
@@ -318,7 +357,9 @@ fn open_file(directory: &Path) -> io::Result<Open> {
         .mode(FILE_MODE)
         .open(directory.join(FILE))?;
     file.set_permissions(Permissions::from_mode(FILE_MODE))?;
-    let mut size = file.metadata()?.len();
+    let metadata = file.metadata()?;
+    let identity = Identity::from(&metadata);
+    let mut size = metadata.len();
     if let Some(last) = size.checked_sub(1) {
         let mut byte = [0_u8];
         file.read_exact_at(&mut byte, last)?;
@@ -327,7 +368,11 @@ fn open_file(directory: &Path) -> io::Result<Open> {
             size = size.saturating_add(1);
         }
     }
-    Ok(Open { file, size })
+    Ok(Open {
+        file,
+        identity,
+        size,
+    })
 }
 
 /// Makes `directory` with mode 0700 when it does not exist, and sets that

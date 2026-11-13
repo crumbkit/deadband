@@ -1,7 +1,7 @@
 //! Tests of the kind rule, the record types and the writer.
 
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -11,8 +11,8 @@ use serde_json::Value;
 
 use super::writer::Writer;
 use super::{
-    Arrival, Departure, FILE, JobEnd, JobLine, Line, MachineLine, Place, ROTATED_FILE, Recorder,
-    Tally, VERSION, WORKSPACE_MARKER, kind, options,
+    Arrival, Departure, FILE, JobEnd, JobLine, LOCK_FILE, Line, MachineLine, Place, ROTATED_FILE,
+    Recorder, Tally, VERSION, WORKSPACE_MARKER, kind, options,
 };
 use crate::admit::Lane;
 use crate::daemon::Log;
@@ -927,4 +927,99 @@ fn a_fresh_writer_on_a_directory_that_holds_only_the_rotated_file_starts_a_new_f
     assert_eq!(lines_of(&scratch.path().join(FILE))[0]["at_ms"], 1);
     assert_eq!(lines_of(&rotated), [serde_json::json!({"old": 1})]);
     assert!(logged(&log).is_empty());
+}
+
+#[test]
+fn a_writer_whose_file_is_unlinked_opens_a_new_file_at_the_path_and_records_later_lines() {
+    let scratch = Scratch::new();
+    let file = scratch.path().join(FILE);
+    let (mut writer, log) = writer(scratch.path(), 1024 * 1024);
+    writer.append(&machine(1));
+    std::fs::remove_file(&file).expect("the file goes");
+    writer.append(&machine(2));
+    writer.append(&machine(3));
+    let lines = lines_of(&file);
+    let at: Vec<&Value> = lines.iter().map(|line| &line["at_ms"]).collect();
+    assert_eq!(at, [2, 3]);
+    assert!(logged(&log).is_empty(), "{:?}", logged(&log));
+}
+
+#[test]
+fn a_writer_whose_file_is_replaced_appends_to_the_file_now_at_the_path() {
+    let scratch = Scratch::new();
+    let file = scratch.path().join(FILE);
+    let (mut writer, log) = writer(scratch.path(), 1024 * 1024);
+    writer.append(&machine(1));
+    let other = scratch.path().join("other.jsonl");
+    write_file(&other, "{\"other\":1}\n").expect("the file writes");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test replaces the history file to show that the writer follows the path"
+    )]
+    std::fs::rename(&other, &file).expect("the file is replaced");
+    writer.append(&machine(2));
+    let lines = lines_of(&file);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["other"], 1);
+    assert_eq!(lines[1]["at_ms"], 2);
+    assert!(logged(&log).is_empty(), "{:?}", logged(&log));
+}
+
+#[test]
+fn a_writer_whose_file_stays_at_the_path_keeps_appending_to_it() {
+    let scratch = Scratch::new();
+    let file = scratch.path().join(FILE);
+    let (mut writer, _) = writer(scratch.path(), 1024 * 1024);
+    writer.append(&machine(1));
+    let before = std::fs::metadata(&file).expect("the file reads");
+    writer.append(&machine(2));
+    let after = std::fs::metadata(&file).expect("the file reads");
+    assert_eq!(
+        (before.dev(), before.ino()),
+        (after.dev(), after.ino()),
+        "the writer keeps the same file"
+    );
+    assert_eq!(lines_of(&file).len(), 2);
+}
+
+#[test]
+fn a_writer_whose_lock_is_removed_while_another_writer_takes_a_new_one_records_nothing_and_logs_once()
+ {
+    let scratch = Scratch::new();
+    let (mut first, first_log) = writer(scratch.path(), 1024 * 1024);
+    first.append(&machine(1));
+    std::fs::remove_file(scratch.path().join(LOCK_FILE)).expect("the lock file goes");
+    let (mut second, second_log) = writer(scratch.path(), 1024 * 1024);
+    second.append(&machine(2));
+    first.append(&machine(3));
+    first.append(&machine(4));
+    second.append(&machine(5));
+    let lines = lines_of(&scratch.path().join(FILE));
+    let at: Vec<&Value> = lines.iter().map(|line| &line["at_ms"]).collect();
+    assert_eq!(at, [1, 2, 5]);
+    let said = logged(&first_log);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("another daemon"), "{said:?}");
+    assert!(logged(&second_log).is_empty(), "{:?}", logged(&second_log));
+}
+
+#[test]
+fn a_writer_whose_lock_is_removed_with_no_other_writer_takes_a_new_lock_and_keeps_recording() {
+    let scratch = Scratch::new();
+    let lock = scratch.path().join(LOCK_FILE);
+    let (mut first, first_log) = writer(scratch.path(), 1024 * 1024);
+    first.append(&machine(1));
+    std::fs::remove_file(&lock).expect("the lock file goes");
+    first.append(&machine(2));
+    assert!(lock.exists(), "the writer takes a new lock file");
+    let (mut second, second_log) = writer(scratch.path(), 1024 * 1024);
+    second.append(&machine(3));
+    first.append(&machine(4));
+    let lines = lines_of(&scratch.path().join(FILE));
+    let at: Vec<&Value> = lines.iter().map(|line| &line["at_ms"]).collect();
+    assert_eq!(at, [1, 2, 4]);
+    assert!(logged(&first_log).is_empty(), "{:?}", logged(&first_log));
+    let said = logged(&second_log);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("another daemon"), "{said:?}");
 }
