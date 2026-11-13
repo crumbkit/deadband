@@ -12,6 +12,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reach a daemon every 100 ms for 5 seconds and asks again, so a restarted
   daemon queues the job instead of every waiting job starting at once. The
   job starts at once only when no daemon answers within the 5 seconds.
+- A reclaim ends when its reclaimer exits, even when a background process
+  of the reclaimer still holds its standard output open. Before, such a
+  process kept the reclaim running and the daemon started no later reclaim.
+- `deadband status` prints `reclaiming: <need>, started <age> ago` while a
+  reclaim runs, and the status JSON gains `reclaiming` with the need and the
+  start time.
 
 ### Added
 

@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::admit::{Hold, Lane};
 use crate::probe::ChildUsage;
-use crate::reclaim::Reclaimed;
+use crate::reclaim::{Reclaimed, Reclaiming};
 
 #[cfg(test)]
 mod tests;
@@ -225,6 +225,10 @@ pub struct Jobs<J = Job> {
     /// The last reclaim, or `null` when the daemon has run none.
     #[serde(default)]
     pub reclaim: Option<Reclaimed>,
+    /// The reclaim that runs now, with its need and start time, or `null`
+    /// when none runs.
+    #[serde(default)]
+    pub reclaiming: Option<Box<Reclaiming>>,
     /// The jobs that have shown no activity for the configured time, in the
     /// order they started.
     #[serde(default)]
@@ -249,6 +253,7 @@ impl<J> Jobs<J> {
             waiting: self.waiting.into_iter().map(&mut each).collect(),
             held: self.held,
             reclaim: self.reclaim,
+            reclaiming: self.reclaiming,
             stuck: self.stuck,
             busiest: self.busiest,
             unreadable: self.unreadable,

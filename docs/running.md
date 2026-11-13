@@ -355,7 +355,8 @@ a new daemon, and `deadband run` starts its jobs at once while none listens.
 
 `deadband status` prints the load, memory pressure and swap, followed by the
 running and waiting jobs and the last reclaim, or `daemon: not running`
-when no daemon answers. When jobs wait, it also prints a line that names the
+when no daemon answers. While a reclaim runs, it also prints
+`reclaiming: <need>, started <age> ago`. When jobs wait, it also prints a line that names the
 first waiting job and says why it does not start yet.
 
 ## Reclaiming memory and disk
@@ -466,7 +467,10 @@ stops a reclaimer. When one runs past its timeout, the daemon stops
 waiting for it and starts no other reclaim until it exits.
 
 The reclaimer reads nothing on standard input, and the daemon discards its
-standard error. It prints one JSON object on standard output. deadband
+standard error. The daemon stops reading the report 250 ms after the
+reclaimer exits, so output that a background process writes after that is
+dropped, and a report that a loaded machine delivers later than that counts
+as failed. It prints one JSON object on standard output. deadband
 reads only `data`, an array of objects, and two fields of each object:
 
 | Field | Meaning |
@@ -488,6 +492,11 @@ failed, if it did, such as
 `deadband status --json` gives the same in the daemon's `reclaim` field,
 where `at` is the time the reclaim ended in RFC 3339 in UTC with
 milliseconds.
+
+While a reclaimer runs, `deadband status` also shows `reclaiming: <need>, started
+<time> ago`, and `deadband status --json` gives it in
+the `reclaiming` field: `need`, and `since` as the start time in RFC 3339 in
+UTC, or `null` when no reclaim runs.
 
 ## Embedding deadband in a program
 

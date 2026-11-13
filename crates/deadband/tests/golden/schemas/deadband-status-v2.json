@@ -620,6 +620,18 @@
           ],
           "default": null
         },
+        "reclaiming": {
+          "description": "The reclaim that runs now, with its need and start time, or `null`\nwhen none runs.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reclaiming"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "running": {
           "description": "The running jobs, in the order they started.",
           "type": "array",
@@ -654,6 +666,7 @@
         "waiting",
         "held",
         "reclaim",
+        "reclaiming",
         "stuck",
         "busiest",
         "unreadable"
@@ -781,6 +794,25 @@
         "need",
         "freed_bytes",
         "failed"
+      ]
+    },
+    "Reclaiming": {
+      "description": "A reclaim that runs now, as `deadband status` shows it.",
+      "type": "object",
+      "properties": {
+        "need": {
+          "description": "The `--need` that the daemon asked for, such as `memory=4G`.",
+          "type": "string"
+        },
+        "since": {
+          "description": "When the reclaim started, which JSON holds in RFC 3339 and text\nshows as how long ago that was.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "need",
+        "since"
       ]
     },
     "Short": {

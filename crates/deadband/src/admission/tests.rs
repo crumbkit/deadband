@@ -314,6 +314,7 @@ fn admit_starts_the_job_when_the_daemon_answers_with_something_else() {
         waiting: Vec::new(),
         held: None,
         reclaim: None,
+        reclaiming: None,
         stuck: Vec::new(),
         busiest: None,
         unreadable: false,

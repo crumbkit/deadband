@@ -30,7 +30,7 @@ mod watch;
 mod worker;
 
 pub use self::lock::ReclaimLock;
-pub use self::watch::{MAX_REST, Watch};
+pub use self::watch::{MAX_REST, Reclaiming, Watch};
 pub use self::worker::reclaim;
 
 /// The name of the daemon's config file in deadband's configuration
