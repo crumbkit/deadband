@@ -139,11 +139,11 @@ impl State {
         noticed
     }
 
-    /// Returns another handle of the connection of the running job whose
-    /// root is `pid`. A descriptor copy does not write to the client.
-    fn notice_stream(&self, pid: u32) -> Option<UnixStream> {
+    /// Returns the connection of the running job whose root is `pid`, which
+    /// the caller writes to after it releases the lock.
+    fn notice_stream(&self, pid: u32) -> Option<Arc<UnixStream>> {
         let waiter = self.queue.running().find(|waiter| waiter.job.pid == pid)?;
-        waiter.stream.try_clone().ok()
+        Some(Arc::clone(&waiter.stream))
     }
 }
 
@@ -353,7 +353,7 @@ impl<P: Probe> Watcher<P> {
         };
         let stream = lock(&self.shared).notice_stream(noticed.pid);
         if let Some(stream) = stream {
-            let _ = write_line(&mut &stream, &reply);
+            let _ = write_line(&mut &*stream, &reply);
         }
         if let Change::Stuck { quiet } = noticed.change {
             self.hooks.run(&noticed.label, quiet, busiest);

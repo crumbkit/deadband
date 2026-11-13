@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 
+use super::reply::deliver;
 use super::{Log, Shared, State, lock, lock_path, note};
 use crate::admit::Reading;
 
@@ -60,7 +61,9 @@ pub(super) fn age(shared: &Shared, stopped: &Receiver<()>, log: &Log, ending: En
                 ),
             );
         }
-        state.grant();
+        let replies = state.grant();
+        drop(state);
+        deliver(shared, replies);
     }
 }
 
