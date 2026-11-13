@@ -502,7 +502,10 @@ mod macos {
     }
 }
 
+/// These tests ask the daemon for its status, which reads the machine, so
+/// they run on macOS only.
 #[cfg(test)]
+#[cfg(target_os = "macos")]
 #[expect(
     clippy::disallowed_methods,
     reason = "a test writes a config file, and a partial fixture only fails that test"
