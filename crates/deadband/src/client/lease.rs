@@ -51,9 +51,11 @@ const UNWATCHED: &str =
 #[cfg(test)]
 mod tests;
 
-/// Where the lines that say a job is stuck, or active again, go. The
-/// lease's thread calls it, so a line can arrive at any time while the job
-/// runs.
+/// Where the lines about a job's activity go: that it is stuck, that it is
+/// active again, and that its lease cannot be watched. The lease's thread
+/// calls it for the first two, so those lines can arrive at any time while
+/// the job runs. The job's thread calls it for the third, once, when the
+/// lease starts.
 #[derive(Clone)]
 pub struct Notices(Arc<dyn Fn(&str) + Send + Sync>);
 
