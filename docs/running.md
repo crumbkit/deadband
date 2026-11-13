@@ -640,8 +640,24 @@ at that path that is not an XML property list, and changes nothing.
 When no daemon answers, `deadband status` says
 `daemon: not installed; run deadband service install` when the plist is
 missing, and `daemon: installed but not loaded; run deadband service
-install` when launchd has not loaded it. `deadband status --json` gives the
-same state in `daemon_state`: `running`, `not_loaded` or `not_installed`.
+install` when launchd has not loaded it. When launchd has loaded the agent
+and no daemon answers, it says `daemon: loaded but not answering; see
+~/Library/Logs/deadband.log`, because the daemon may have exited at start.
+When launchd could not be asked, it says `daemon: not running, and launchd
+could not be asked whether it loaded the agent`. `deadband status --json`
+gives the same state in `daemon_state`: `running`, `not_loaded`,
+`not_installed`, `loaded_silent` or `launchd_unasked`.
+
+`deadband service install` asks the daemon for its jobs up to 20 times, 100
+milliseconds apart, after it loads the agent, and reports `daemon answers` or
+`daemon does not answer; see ~/Library/Logs/deadband.log`. When nothing
+listens, the asks fail at once and the wait is about two seconds. A process
+that accepts the connection and never replies holds each ask for two
+seconds, so the wait can reach 42 seconds. `deadband service uninstall` and
+`install --restart` ask the daemon that launchd runs, on the socket under
+the per-user temporary directory, and print its running and waiting jobs
+first. Uninstall asks only when launchd has loaded the agent. It lists the
+socket, lock, log, history and configuration that stay.
 
 Stop the daemon and remove the agent with:
 

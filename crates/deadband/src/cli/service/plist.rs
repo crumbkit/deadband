@@ -4,7 +4,7 @@
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
-use super::LABEL;
+use super::{LABEL, LOG};
 
 /// The directories after the binary's own on the daemon's `PATH`, with
 /// `~` for the home directory.
@@ -49,7 +49,7 @@ pub fn render(
         .collect();
     let path = search_path(binary, home);
     let temp_dir = temp_dir.to_string_lossy();
-    let log = home.join("Library/Logs/deadband.log");
+    let log = home.join(LOG);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
