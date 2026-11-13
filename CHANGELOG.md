@@ -16,7 +16,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   removed. Before each line the daemon checks that its lock is still the
   file at that path, and it takes the lock again when it is not. When
   another daemon already holds the new lock, this daemon logs once that
-  another daemon writes job history and records nothing more. Before, both
+  another daemon writes job history and records nothing while that daemon runs. Before, both
   daemons kept writing, and one daemon's rotation could overwrite
   `jobs.1.jsonl` that the other still wrote.
 
