@@ -280,11 +280,16 @@ that embeds deadband.
 | Uncounted | The job runs and no daemon counts it, for the rest of its run, because it holds no lease to seat | Open | The job ends |
 | Ended | The daemon records the exit code or signal and frees the place | The client sends `Done` | — |
 | Lost | The daemon records the end as lost and frees the place | The connection closes, or sends an unreadable line, without `Done` | — |
+| Left | The daemon records once that the job left before it ran, and frees any place it was granted | The client of a waiting job closes its connection, or the daemon cannot write the job's grant within 1 second | — |
 
-The daemon writes `Queued` and `Granted` to a client while it holds the
-queue lock, with a 1-second write timeout. A client that does not read
-therefore delays every other client by at most 1 second, and the daemon
-counts a client that cannot take its grant as gone and frees its place.
+The daemon writes no reply while it holds the queue lock. A thread decides
+each `Queued` and `Granted` reply under the lock, releases the lock, and then
+writes its replies one after another (`daemon/reply.rs`), each within the
+connection's 1-second write timeout. When a grant is not written in that
+second, the daemon records the job as Left, grants again under the lock, and
+shuts that connection down after it has released the lock. The client then
+goes to Open if it had read no `Queued` line, or only part of one, and to
+Asking again if it had read `Queued`.
 
 The tests are `a_queued_client_asks_a_restarted_daemon_again_before_it_starts_the_job`,
 `a_queued_client_starts_the_job_when_no_daemon_returns_within_the_bound` and
@@ -294,7 +299,10 @@ and `admit_with_bypass_asks_nothing` in `src/admission/tests.rs`;
 `a_job_that_runs_when_its_daemon_is_killed_counts_on_the_next_daemon` and
 `a_run_inside_the_job_that_holds_the_only_place_runs_at_once` in
 `tests/run.rs`; and `a_running_job_whose_client_is_killed_is_lost` and
-`a_waiting_job_whose_client_is_killed_has_left` in `src/daemon/tests/timeline.rs`.
+`a_waiting_job_whose_client_is_killed_has_left` in `src/daemon/tests/timeline.rs`;
+and `a_grant_that_cannot_be_written_frees_its_place_once_and_closes_the_connection`
+and `a_client_that_reads_gets_its_queued_reply_and_then_its_grant` in
+`src/daemon/tests/reply.rs`.
 
 ### The lifecycle of the daemon
 
@@ -372,6 +380,7 @@ in `src/cli/tests/reclaim.rs`.
 | The sampler panics | The sampler's ending sends its reason, the daemon stops serving and the process ends. Waiting clients ask again for 5 seconds and then start, and running jobs reseat on the next daemon | `a_daemon_stops_serving_when_its_sampler_panics` in `src/daemon/tests/alive.rs` |
 | The sampler blocks | After five sampling intervals the watchdog counts the reading as stale, so the jobs it held start once a place is free, and it keeps checking the socket and lock files | `a_job_starts_when_the_sampler_stalls_and_its_last_reading_holds_the_job` and `a_daemon_whose_sampler_is_stalled_stops_serving_when_its_socket_file_is_removed` in `src/daemon/tests/alive.rs` |
 | The daemon hangs after it sent `Queued`, with the connection open | The client keeps waiting with no deadline, because fail-open applies only to a closed connection or a missing first answer. A stalled sampler is the case above; a daemon whose every thread hangs keeps its waiting jobs waiting until it is stopped | No test injects a whole-daemon hang |
+| A client never reads its reply | The daemon writes the reply after it releases the queue lock, so the client never holds the lock. The write fails after 1 second. A grant that fails frees the job's place and is recorded once as Left, and the daemon shuts that connection down | `a_client_that_never_reads_its_grant_does_not_delay_the_next_grant`, `a_grant_that_cannot_be_written_frees_its_place_once_and_closes_the_connection` and `a_queued_reply_that_waits_on_its_client_leaves_the_queue_lock_free` in `src/daemon/tests/reply.rs` |
 | The daemon stops or is killed | Waiting clients ask again for 5 seconds, so a restarted daemon queues them again, and start only if no daemon answers. Running jobs keep running, and each lease seats its job on the next daemon | `a_queued_client_asks_a_restarted_daemon_again_before_it_starts_the_job` in `src/client/tests.rs`; `a_job_that_runs_when_its_daemon_is_killed_counts_on_the_next_daemon` in `tests/run.rs` |
 | A reclaimer hangs | The daemon logs that it ran past its timeout, keeps waiting for it, and starts no other reclaim until it exits; admission continues, and `deadband status` shows the reclaim in progress | `a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues` in `src/cli/tests/reclaim.rs`; `status_prints_a_reclaim_in_progress_after_the_jobs` in `src/cli/tests.rs` |
 | A reclaimer exits and leaves a background process holding its standard output | The run ends when the reclaimer exits, after at most 250 ms for its output | `a_background_child_that_holds_stdout_does_not_hold_the_reclaim_after_the_reclaimer_exits` in `src/job/reclaimer.rs` |
@@ -387,8 +396,9 @@ in `src/cli/tests/reclaim.rs`.
 
 ### Known limits left as they are
 
-These were found in the lifecycle review of 2026-11-12 and are kept on
-purpose.
+These limits are kept on purpose. The first three were found in the
+lifecycle review of 2026-11-12, and the rest are soft limits of the fixes
+that followed it.
 
 - The daemon's log, `~/Library/Logs/deadband.log`, is never rotated. The
   plist sends the daemon's standard error to it, and nothing truncates it.
@@ -412,6 +422,12 @@ purpose.
 - A background process that holds a reclaimer's standard output keeps one
   reading thread and one pipe in the daemon until it closes the pipe. The
   reclaim does not wait for it.
+- A client that does not read its reply delays the later replies that the
+  same thread writes by up to 1 second each. It never holds the queue lock.
+- A job's `Granted` reply can reach its client before its `Queued` reply,
+  when another thread grants the job between the moment the asking thread
+  releases the lock and the moment it writes `Queued`. The client then holds
+  its lease, and the lease's watcher ignores the late `Queued` line.
 
 # Planned
 
