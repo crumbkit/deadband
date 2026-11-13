@@ -269,6 +269,18 @@ mod busiest {
         let second = census.read(&hung, Duration::from_millis(50), &BTreeSet::new());
         assert!(matches!(second, Err(Failed::Running)));
     }
+
+    #[test]
+    fn a_census_whose_thread_cannot_start_names_no_process_and_the_next_run_reads() {
+        let census = Census::default();
+        let busy = sh("echo '88.0 77 /bin/busy'");
+        crate::spawn::refuse("deadband-ps");
+        let refused = census.read(&busy, Duration::from_secs(10), &BTreeSet::new());
+        crate::spawn::allow();
+        assert!(matches!(refused, Err(Failed::Start(_))), "{refused:?}");
+        let next = census.read(&busy, Duration::from_secs(10), &BTreeSet::new());
+        assert!(matches!(next, Ok(OutsideJobs::Busy { .. })), "{next:?}");
+    }
 }
 
 mod on_stuck {
@@ -310,6 +322,14 @@ mod on_stuck {
         );
         assert!(timed_out);
         assert_eq!(ended.expect("sh starts"), Ended::TimedOut);
+    }
+
+    #[test]
+    fn a_command_whose_waiting_thread_cannot_start_reports_the_error() {
+        crate::spawn::refuse("deadband-on-stuck-wait");
+        let ended = run(&sh("exit 0"), Vec::new(), Duration::from_secs(10), || {});
+        crate::spawn::allow();
+        assert!(ended.is_err(), "{ended:?}");
     }
 
     #[test]

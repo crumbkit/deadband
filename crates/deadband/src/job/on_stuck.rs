@@ -22,8 +22,9 @@
 use std::io::{self, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::thread;
 use std::time::Duration;
+
+use crate::spawn;
 
 /// How the command ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +55,25 @@ pub fn run(
     let Some((program, args)) = command.split_first() else {
         return Err(io::ErrorKind::InvalidInput.into());
     };
+    // The thread that waits starts before the command, so a refused thread
+    // leaves no command unreaped.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "crates/deadband/src/job/on_stuck.rs hands the child to its own waiting thread, which reaps it"
+    )]
+    let (start, started) = mpsc::channel::<std::process::Child>();
+    let (sender, ended) = mpsc::channel();
+    spawn::thread("deadband-on-stuck-wait", move || {
+        let Ok(mut child) = started.recv() else {
+            return;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            // A command that closes its input early loses the rest of it.
+            let _ = stdin.write_all(&input);
+        }
+        let status = child.wait();
+        let _ = sender.send(status.map(|status| Ended::Exited(status.code())));
+    })?;
     #[expect(
         clippy::disallowed_methods,
         reason = "crates/deadband/src/job/on_stuck.rs starts the on_stuck command that the daemon's config file names; the module states PROC-2's items"
@@ -64,17 +84,7 @@ pub fn run(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
-    let mut child = spawned?;
-    let stdin = child.stdin.take();
-    let (sender, ended) = mpsc::channel();
-    thread::spawn(move || {
-        if let Some(mut stdin) = stdin {
-            // A command that closes its input early loses the rest of it.
-            let _ = stdin.write_all(&input);
-        }
-        let status = child.wait();
-        let _ = sender.send(status.map(|status| Ended::Exited(status.code())));
-    });
+    let _ = start.send(spawned?);
     match ended.recv_timeout(timeout) {
         Ok(ended) => ended,
         Err(RecvTimeoutError::Timeout) => {

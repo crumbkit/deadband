@@ -50,6 +50,16 @@ fn serving(probe: impl Probe + Clone + Send + 'static) -> (TestSocket, Receiver<
 
 /// Starts a daemon as [`serving`] does on the socket at `path`.
 fn serving_at(path: &Path, probe: impl Probe + Clone + Send + 'static) -> Receiver<io::Error> {
+    serving_refusing(path, probe, None)
+}
+
+/// Starts a daemon as [`serving`] does on the socket at `path`, where the
+/// operating system refuses each thread named `refused` that `serve` starts.
+fn serving_refusing(
+    path: &Path,
+    probe: impl Probe + Clone + Send + 'static,
+    refused: Option<&'static str>,
+) -> Receiver<io::Error> {
     let bound = bind(path).expect("the test socket binds");
     let log: Log = Arc::new(Mutex::new(Vec::new()));
     let settings = Settings {
@@ -64,6 +74,9 @@ fn serving_at(path: &Path, probe: impl Probe + Clone + Send + 'static) -> Receiv
     let (ended, ends) = mpsc::channel();
     thread::spawn(move || {
         let bound = bound;
+        if let Some(name) = refused {
+            crate::spawn::refuse(name);
+        }
         let _ = ended.send(serve(&bound.listener, probe, settings, &log));
     });
     ends
@@ -149,6 +162,80 @@ fn a_daemon_stops_serving_when_another_socket_replaces_its_file() {
     std::fs::remove_file(&*path).expect("the socket file is removed");
     let _other = UnixListener::bind(&*path).expect("another socket takes the path");
     assert!(ended(&ends).to_string().contains("socket"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_daemon_stops_serving_when_its_lock_file_is_removed() {
+    let (path, ends) = serving(Dial::new(Pressure::Normal));
+    let _ = jobs(&path);
+    std::fs::remove_file(crate::daemon::lock_path(&path)).expect("the lock file is removed");
+    assert!(ended(&ends).to_string().contains("lock file"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_daemon_stops_serving_when_another_file_replaces_its_lock_file() {
+    let (path, ends) = serving(Dial::new(Pressure::Normal));
+    let _ = jobs(&path);
+    let lock = crate::daemon::lock_path(&path);
+    std::fs::remove_file(&lock).expect("the lock file is removed");
+    let _other = UnixListener::bind(&lock).expect("another file takes the path");
+    assert!(ended(&ends).to_string().contains("lock file"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_daemon_whose_lock_file_is_untouched_keeps_serving() {
+    let (path, ends) = serving(Dial::new(Pressure::Normal));
+    let _ = jobs(&path);
+    assert!(
+        ends.recv_timeout(Duration::from_millis(1500)).is_err(),
+        "the daemon passed several checks"
+    );
+    let _ = jobs(&path);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_daemon_that_cannot_start_a_connections_thread_stops_serving_and_closes_it() {
+    use std::io::Read;
+
+    let path = socket_path();
+    let ends = serving_refusing(
+        &path,
+        Dial::new(Pressure::Normal),
+        Some("deadband-connection"),
+    );
+    let mut stream = std::os::unix::net::UnixStream::connect(&*path).expect("the client connects");
+    stream
+        .set_read_timeout(Some(REPLY_WITHIN))
+        .expect("the timeout is set");
+    let error = ended(&ends).to_string();
+    assert!(error.contains("thread"), "{error}");
+    let mut rest = Vec::new();
+    assert_eq!(
+        stream.read_to_end(&mut rest).expect("the daemon closes it"),
+        0
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_daemon_that_cannot_start_its_sampler_stops_serving() {
+    let path = socket_path();
+    let ends = serving_refusing(&path, Dial::new(Pressure::Normal), Some("deadband-sampler"));
+    let error = ended(&ends).to_string();
+    assert!(error.contains("sampler"), "{error}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_daemon_that_cannot_start_its_watchdog_stops_serving() {
+    let path = socket_path();
+    let ends = serving_refusing(&path, Dial::new(Pressure::Normal), Some("deadband-age"));
+    let error = ended(&ends).to_string();
+    assert!(error.contains("watchdog"), "{error}");
 }
 
 #[test]

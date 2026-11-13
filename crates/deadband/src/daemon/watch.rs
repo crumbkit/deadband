@@ -17,7 +17,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use self::hook::Hooks;
@@ -25,6 +24,7 @@ use super::{Log, Shared, State, Watching, lock, note};
 use crate::job::busiest::{Census, Failed};
 use crate::probe::{Probe, ProcessUse, TreeUnreadable};
 use crate::protocol::{Ago, OutsideJobs, Reply, StuckJob, write_line};
+use crate::spawn;
 use crate::stuck::{self, Change, Period, Track};
 
 mod hook;
@@ -206,14 +206,12 @@ pub(super) fn start<P: Probe + Send + 'static>(
         hooks,
     };
     // A thread that cannot start leaves every job showing as running.
-    let spawned = thread::Builder::new()
-        .name("deadband-watch".to_owned())
-        .spawn(move || {
-            let every = watcher.watching.every;
-            while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(every) {
-                watcher.tick();
-            }
-        });
+    let spawned = spawn::thread("deadband-watch", move || {
+        let every = watcher.watching.every;
+        while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(every) {
+            watcher.tick();
+        }
+    });
     if let Err(error) = spawned {
         note(
             log,

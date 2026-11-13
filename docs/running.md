@@ -361,10 +361,17 @@ The daemon treats a reading that is more than five sampling intervals old
 back for ever; its log says so once.
 
 The daemon stops serving, and the `deadband daemon` command prints why and
-exits, in two cases. The first is that the socket path no longer names the
-socket file the daemon bound, checked once every 60 samples (about a
-minute). The second is that the sampler thread panicked. Launchd then starts
-a new daemon, and `deadband run` starts its jobs at once while none listens.
+exits, in three cases. The first is that the socket path no longer names the
+socket file the daemon bound, or the lock path no longer names the lock file
+the daemon holds, checked once every 60 samples (about a minute). A removed
+lock file would let a second daemon start on the same socket. The second is
+that the sampler thread panicked. The third is that the operating system
+refused a thread the daemon needs, such as the sampler or a connection's
+thread, which happens at the user's limit on threads or processes. Launchd
+then starts a new daemon, and `deadband run` starts its jobs at once while
+none listens. When the operating system refuses the thread of a reclaim, of
+an `on_stuck` command or of a `/bin/ps` run, the daemon logs one line and
+keeps serving, and the next one tries again.
 
 `deadband status` prints the load, memory pressure and swap, followed by the
 running and waiting jobs and the last reclaim, or `daemon: not running`

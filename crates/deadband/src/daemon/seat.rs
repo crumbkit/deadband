@@ -2,16 +2,59 @@
 //! job that an earlier daemon granted and that still runs. Each one's
 //! connection thread reads the job's working directory before it takes the
 //! queue lock, and then waits on the connection for the job's end.
+//! [`connection`] reads each connection's first line and serves it.
 
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
-use super::{Shared, State, Waiter, lock};
+use super::{Shared, State, WRITE_TIMEOUT, Waiter, lock};
 use crate::admit::JobId;
 use crate::history::{Arrival, Tally};
 use crate::probe::ChildUsage;
 use crate::protocol::{Exit, Job, Label, Reply, Request, Short, read_line, write_line};
+
+/// Serves one client on `stream`. A client that sends no first line within
+/// the settings' `first_line_within` is closed.
+pub(super) fn connection(shared: &Shared, stream: UnixStream) {
+    let first_line_within = lock(shared).settings.first_line_within;
+    let timeouts = stream
+        .set_write_timeout(Some(WRITE_TIMEOUT))
+        .and_then(|()| stream.set_read_timeout(Some(first_line_within)));
+    if timeouts.is_err() {
+        return;
+    }
+    let Ok(clone) = stream.try_clone() else {
+        return;
+    };
+    let mut reader = BufReader::new(clone);
+    match read_line::<Request>(&mut reader) {
+        Ok(Some(Request::Ask(job))) => {
+            // A granted job may run for hours, so its connection waits for
+            // the end without a deadline.
+            if stream.set_read_timeout(None).is_ok() {
+                ask(shared, stream, &mut reader, job);
+            }
+        }
+        Ok(Some(Request::Status)) => {
+            let jobs = lock(shared).jobs();
+            let _ = write_line(&mut &stream, &Reply::Jobs(jobs));
+        }
+        Ok(Some(Request::Timeline)) => {
+            // The write has its timeout and happens after the lock is
+            // released, so a client that does not read holds up no job. The
+            // fit also runs after the lock is released.
+            let timeline = lock(shared).timeline(Instant::now());
+            let _ = write_line(&mut &stream, &Reply::Timeline(timeline.fit()));
+        }
+        Ok(Some(Request::Seat { job, jobs, ran_ms })) => {
+            if stream.set_read_timeout(None).is_ok() {
+                seat(shared, stream, &mut reader, job, jobs, ran_ms);
+            }
+        }
+        Ok(Some(Request::Done { .. }) | None) | Err(_) => {}
+    }
+}
 
 /// Reads what the daemon learns from `job` when it arrives, and fills the
 /// job's workspace and short command from it. The workspace that a client

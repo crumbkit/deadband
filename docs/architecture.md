@@ -75,7 +75,11 @@ status.
   for five sampling intervals (at least 250 ms), the daemon starts each job
   once a place is free, and its log says why in one line.
 - The daemon stops serving when the socket path no longer names the socket it
-  bound (checked once every 60 samples) or when its sampler panics. In a
+  bound or the lock path no longer names the lock file it holds (both checked
+  once every 60 samples), when its sampler panics, or when the operating
+  system refuses its sampler, watchdog or a connection's thread. The daemon
+  starts every thread through `std::thread::Builder` and handles the refusal,
+  so a refused thread never panics. In a
   release build a panic in any thread aborts the process. Launchd then starts
   a new daemon, and clients start their jobs at once while none listens.
 - A failure to record a job never delays, holds or ends that job. The daemon

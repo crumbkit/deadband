@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::io::{self, BufReader, Write};
+use std::io::{self, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -20,14 +20,15 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use self::alive::{Ending, age, passing, wait_for_connection};
+use self::alive::{Ending, age, passing, unstarted, wait_for_connection};
 use self::reading::{priority_active, read_machine};
 use self::timeline::Ended;
 use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
 use crate::history::{Arrival, Recorder, Tally};
 use crate::probe::{Pressure, Probe};
-use crate::protocol::{Job, Label, Reply, Request, read_line, write_line};
+use crate::protocol::{Job, Label, Reply, write_line};
 use crate::reclaim::{self, ReclaimLock, Reclaimed, Resource, Watch};
+use crate::spawn;
 
 mod alive;
 mod bind;
@@ -209,10 +210,12 @@ pub fn note(log: &Log, line: fmt::Arguments<'_>) {
 }
 
 /// Serves clients on `listener` until accepting a connection fails in a way
-/// that another try cannot fix, the socket file at the listener's path is
-/// gone or replaced, or the sampler panics, and returns the reason as an
-/// error. It samples `probe` every `settings.sample_every`, and checks the
-/// socket file once every 60 samples. The caller ends its process then, so
+/// that another try cannot fix, the socket file at the listener's path or
+/// its lock file is gone or replaced, the sampler panics, or the operating
+/// system refuses the sampler's, the watchdog's or a connection's thread,
+/// and returns the reason as an error. It samples `probe` every
+/// `settings.sample_every`, and checks the socket file and the lock file
+/// once every 60 samples. The caller ends its process then, so
 /// that launchd starts a new daemon and the clients start their jobs at once.
 ///
 /// A failed accept that can pass, such as running out of descriptors or a
@@ -242,11 +245,21 @@ pub fn serve<P: Probe + Clone + Send + 'static>(
     let (reason, ends) = mpsc::channel::<String>();
     let watchdog_ending = Ending::new(listener, reason.clone());
     let ending = Ending::new(listener, reason);
-    thread::spawn(move || sample(&sampler, &probe, &stopped, &sampler_log, ending));
+    let sampling = spawn::thread("deadband-sampler", move || {
+        sample(&sampler, &probe, &stopped, &sampler_log, ending);
+    });
+    if let Err(error) = sampling {
+        return unstarted("sampler", &error);
+    }
     let (_aging, aged) = mpsc::channel::<()>();
     let watchdog = Arc::clone(&shared);
     let watchdog_log = Arc::clone(log);
-    thread::spawn(move || age(&watchdog, &aged, &watchdog_log, watchdog_ending));
+    let aging = spawn::thread("deadband-age", move || {
+        age(&watchdog, &aged, &watchdog_log, watchdog_ending);
+    });
+    if let Err(error) = aging {
+        return unstarted("watchdog", &error);
+    }
     let every = lock(&shared).settings.sample_every;
     if let Err(error) = listener.set_nonblocking(true) {
         return error;
@@ -264,7 +277,14 @@ pub fn serve<P: Probe + Clone + Send + 'static>(
                     continue;
                 }
                 let shared = Arc::clone(&shared);
-                thread::spawn(move || connection(&shared, stream));
+                // A refused thread drops `stream`, so its client sees the
+                // daemon close and starts its job.
+                let serving = spawn::thread("deadband-connection", move || {
+                    seat::connection(&shared, stream);
+                });
+                if let Err(error) = serving {
+                    return unstarted("connection", &error);
+                }
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
             Err(error) if passing(&error) => {
@@ -330,7 +350,8 @@ fn sample(
 /// own, so admission never waits for them, and records each outcome for
 /// `deadband status`. `quiet` says the last reclaim of `resource` freed
 /// nothing. The reclaim holds the lock in `lock_directory` (the state
-/// directory) while it runs; a daemon that finds it held logs that and ends.
+/// directory) while it runs; a daemon that finds it held, or that cannot
+/// start the thread, logs that and starts no reclaim now.
 fn start_reclaim(
     shared: &Shared,
     config: reclaim::Config,
@@ -339,9 +360,10 @@ fn start_reclaim(
     quiet: bool,
     log: &Log,
 ) {
-    let shared = Arc::clone(shared);
-    let log = Arc::clone(log);
-    thread::spawn(move || {
+    let reclaiming = Arc::clone(shared);
+    let reclaim_log = Arc::clone(log);
+    let started = spawn::thread("deadband-reclaim", move || {
+        let (shared, log) = (reclaiming, reclaim_log);
         let Some(_lock) = ReclaimLock::take(lock_directory.as_deref()) else {
             note(
                 &log,
@@ -355,46 +377,13 @@ fn start_reclaim(
         });
         lock(&shared).watch.ended(freed, Instant::now());
     });
-}
-
-/// Serves one client on `stream`. A client that sends no first line within
-/// the settings' `first_line_within` is closed.
-fn connection(shared: &Shared, stream: UnixStream) {
-    let first_line_within = lock(shared).settings.first_line_within;
-    let timeouts = stream
-        .set_write_timeout(Some(WRITE_TIMEOUT))
-        .and_then(|()| stream.set_read_timeout(Some(first_line_within)));
-    if timeouts.is_err() {
-        return;
-    }
-    let Ok(clone) = stream.try_clone() else {
-        return;
-    };
-    let mut reader = BufReader::new(clone);
-    match read_line::<Request>(&mut reader) {
-        Ok(Some(Request::Ask(job))) => {
-            // A granted job may run for hours, so its connection waits for
-            // the end without a deadline.
-            if stream.set_read_timeout(None).is_ok() {
-                seat::ask(shared, stream, &mut reader, job);
-            }
-        }
-        Ok(Some(Request::Status)) => {
-            let jobs = lock(shared).jobs();
-            let _ = write_line(&mut &stream, &Reply::Jobs(jobs));
-        }
-        Ok(Some(Request::Timeline)) => {
-            // The write has its timeout and happens after the lock is
-            // released, so a client that does not read holds up no job. The
-            // fit also runs after the lock is released.
-            let timeline = lock(shared).timeline(Instant::now());
-            let _ = write_line(&mut &stream, &Reply::Timeline(timeline.fit()));
-        }
-        Ok(Some(Request::Seat { job, jobs, ran_ms })) => {
-            if stream.set_read_timeout(None).is_ok() {
-                seat::seat(shared, stream, &mut reader, job, jobs, ran_ms);
-            }
-        }
-        Ok(Some(Request::Done { .. }) | None) | Err(_) => {}
+    if let Err(error) = started {
+        note(
+            log,
+            format_args!(
+                "the reclaim thread could not start: {error}, so this daemon starts no reclaim now"
+            ),
+        );
+        lock(shared).watch.skipped(Instant::now());
     }
 }

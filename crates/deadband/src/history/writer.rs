@@ -25,10 +25,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::thread;
 
 use super::{CHANNEL, FILE, Line, MAX_BYTES, ROTATED_FILE};
 use crate::daemon::{Log, note, take_lock};
+use crate::spawn;
 
 /// The mode of the state directory: only its owner may enter it.
 const DIRECTORY_MODE: u32 = 0o700;
@@ -69,9 +69,7 @@ impl Recorder {
     pub fn start(directory: PathBuf, log: &Log) -> Option<Self> {
         let (recorder, lines) = Self::channel(CHANNEL, Arc::clone(log));
         let writer = Writer::new(directory, MAX_BYTES, Arc::clone(log));
-        let spawned = thread::Builder::new()
-            .name("deadband-history".to_owned())
-            .spawn(move || writer.run(&lines));
+        let spawned = spawn::thread("deadband-history", move || writer.run(&lines));
         match spawned {
             Ok(_) => Some(recorder),
             Err(error) => {
