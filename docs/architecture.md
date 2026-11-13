@@ -80,9 +80,10 @@ status.
   once every 60 samples), when its sampler panics, or when the operating
   system refuses its sampler, watchdog or a connection's thread. The daemon
   starts every thread through the spawn module (`spawn.rs`) and handles the
-  refusal, so a refused thread never panics. The client's two threads, the
-  lease watcher and the signal forwarder, start through
-  `std::thread::Builder` and handle a refusal the same way. In a
+  refusal, so a refused thread never panics. The client's lease watcher starts through the same module, and the signal
+  forwarder starts through `std::thread::Builder`; both handle a refusal
+  without failing the job. A lease whose watcher cannot start tells the job's
+  notices that a restarted daemon will not count the job. In a
   release build a panic in any thread aborts the process. Launchd then starts
   a new daemon, and clients start their jobs at once while none listens.
 - A failure to record a job never delays, holds or ends that job. The daemon

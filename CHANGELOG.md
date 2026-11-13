@@ -8,6 +8,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A job whose lease the daemon already closed after `Done` is no longer
+  seated again and recorded a second time as lost. The job's end now writes
+  how the job ended, closes the connection and marks the lease ended in one
+  step, so the watcher cannot seat the ended job on the same daemon, or on a
+  restarted one, in the gap between the write and the close. A job that ends
+  while the watcher is connecting, or after it has written its seat request
+  and before the connection is installed, is still recorded by the new
+  daemon as lost.
+- When deadband cannot start the thread that watches a job's connection to
+  the daemon, or cannot copy that connection for it, `deadband run` now
+  prints `deadband cannot watch the daemon connection, so a restarted
+  daemon will not count this job`. The job still runs as before.
 - The daemon keeps recording job history after `jobs.jsonl` is removed or
   replaced. Before each line it checks that its open file is still the file
   at that path, and it opens the path again when it is not. Before, every

@@ -16,7 +16,8 @@
 //!
 //! Nothing here touches the job. The job's own thread never waits for the
 //! watcher, and a watcher that cannot start leaves a lease that nothing
-//! watches.
+//! watches. Such a lease passes one line to its notices, saying that a
+//! restarted daemon will not count the job.
 
 use std::fmt;
 use std::io::{self, BufReader};
@@ -26,12 +27,12 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use super::connect;
 use crate::probe::ChildUsage;
 use crate::protocol::{Job, Reply, Request, read_line, write_line};
+use crate::spawn;
 use crate::stuck::{active_line, still_line, stuck_line};
 
 /// How long the watcher waits before each try to reach a daemon. A daemon
@@ -42,9 +43,19 @@ const RETRY_EVERY: Duration = Duration::from_millis(100);
 /// line in this time counts as gone.
 const WRITE_WITHIN: Duration = Duration::from_secs(2);
 
-/// Where the lines that say a job is stuck, or active again, go. The
-/// lease's thread calls it, so a line can arrive at any time while the job
-/// runs.
+/// The line a lease passes to its notices when nothing can watch its
+/// connection.
+const UNWATCHED: &str =
+    "deadband cannot watch the daemon connection, so a restarted daemon will not count this job";
+
+#[cfg(test)]
+mod tests;
+
+/// Where the lines about a job's activity go: that it is stuck, that it is
+/// active again, and that its lease cannot be watched. The lease's thread
+/// calls it for the first two, so those lines can arrive at any time while
+/// the job runs. The job's thread calls it for the third, once, when the
+/// lease starts.
 #[derive(Clone)]
 pub struct Notices(Arc<dyn Fn(&str) + Send + Sync>);
 
@@ -87,7 +98,7 @@ impl Lease {
     ) -> Self {
         let clone = stream.try_clone();
         let seat = Arc::new(Seat::new(stream));
-        if let Ok(read) = clone {
+        let watching = clone.and_then(|read| {
             let watcher = Watcher {
                 seat: Arc::clone(&seat),
                 path: path.to_owned(),
@@ -96,11 +107,14 @@ impl Lease {
                 started: Instant::now(),
                 notices: notices.cloned(),
             };
-            // A thread that cannot start leaves the lease unwatched, and
-            // the job runs as it would with no restart.
-            let _ = thread::Builder::new()
-                .name("deadband-lease".to_owned())
-                .spawn(move || watcher.run(read));
+            spawn::thread("deadband-lease", move || watcher.run(read))
+        });
+        // A lease that nothing watches runs the job as it would with no
+        // restart, and says so once.
+        if watching.is_err()
+            && let Some(notices) = notices
+        {
+            notices.tell(UNWATCHED);
         }
         Self { seat, jobs }
     }
@@ -131,25 +145,21 @@ impl Lease {
     }
 
     /// Writes the `Done` line to the current connection, if the lease has
-    /// one. A failed write closes the connection all the same when `self`
-    /// drops.
+    /// one, and ends the seat in the same hold of its lock. A failed write
+    /// closes the connection all the same. The drop of `self` that follows
+    /// finds the seat ended and does nothing.
     fn send_done(self, exit_code: Option<i32>, signal: Option<i32>, usage: Option<ChildUsage>) {
-        if let SeatState::Held(stream) = &*self.seat.lock() {
-            let _ = write_line(
-                &mut &*stream,
-                &Request::Done {
-                    exit_code,
-                    signal,
-                    usage,
-                },
-            );
-        }
+        self.seat.end(Some(&Request::Done {
+            exit_code,
+            signal,
+            usage,
+        }));
     }
 }
 
 impl Drop for Lease {
     fn drop(&mut self) {
-        self.seat.end();
+        self.seat.end(None);
     }
 }
 
@@ -189,12 +199,19 @@ impl Seat {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Marks the job as ended, and wakes the watcher. Shutting the
+    /// Writes `done` to the connection the seat holds, if it holds one,
+    /// shuts the connection down, marks the job as ended and wakes the
+    /// watcher, all in one hold of the lock, so the watcher cannot install
+    /// a connection between the write and the shutdown. Shutting the
     /// connection down also ends the watcher's blocked read, so the
-    /// watcher's clone cannot keep the connection open.
-    pub(super) fn end(&self) {
+    /// watcher's clone cannot keep the connection open. A seat that has
+    /// already ended stays as it is.
+    pub(super) fn end(&self, done: Option<&Request>) {
         let mut state = self.lock();
         if let SeatState::Held(stream) = &*state {
+            if let Some(done) = done {
+                let _ = write_line(&mut &*stream, done);
+            }
             let _ = stream.shutdown(Shutdown::Both);
         }
         *state = SeatState::Ended;
