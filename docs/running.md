@@ -379,6 +379,14 @@ short `PATH` that may not hold the program, so a bare name can fail to
 start. The other words are passed to the program as they are, with no
 shell.
 
+When the daemon reads the config file, it checks the program of each
+reclaimer and of `on_stuck`. A program that is not an absolute path to an
+executable file gets one line in the daemon's log, which names the program
+and says why it cannot start. The daemon keeps the reclaimer, so a program
+installed later works at the next reclaim without a restart. A reclaim whose
+program cannot start records `it could not start <program>: <error>`, which
+`deadband status` shows.
+
 A size is a whole number with an optional `K`, `M`, `G` or `T`, each a
 power of 1024. An age is a number with a unit, such as `90s`, `5m` or
 `1h`. `reclaim_after` must be at least 10 seconds, and `reclaim_timeout`

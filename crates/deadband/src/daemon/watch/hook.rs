@@ -94,7 +94,10 @@ impl Hooks {
                 ),
                 Err(error) => note(
                     &log,
-                    format_args!("the on_stuck command could not start: {error}"),
+                    format_args!(
+                        "the on_stuck command {} could not start: {error}",
+                        command.first().map_or("", String::as_str)
+                    ),
                 ),
             }
             running.fetch_sub(1, Ordering::SeqCst);

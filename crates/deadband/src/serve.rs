@@ -9,9 +9,9 @@
 use std::num::NonZeroUsize;
 
 use crate::cli::Machine;
-use crate::daemon::{self, Settings, Unbound, note};
+use crate::daemon::{self, Log, Settings, Unbound, note};
 use crate::probe::Probe;
-use crate::reclaim::{self, CONFIG_FILE};
+use crate::reclaim::{self, CONFIG_FILE, program};
 
 /// Reads the daemon's config file in the configuration directory. A file
 /// that cannot be read turns reclaiming off, and the log says why in one
@@ -49,7 +49,37 @@ fn reclaim_config<P>(machine: &Machine<P>) -> reclaim::Config {
             ),
         );
     }
+    warn_of_unusable_programs(&machine.log, &config);
     config
+}
+
+/// Logs one line for each reclaimer, and for `on_stuck`, whose program
+/// cannot start. The daemon keeps the reclaimer, so a program installed
+/// later works at the next reclaim.
+fn warn_of_unusable_programs(log: &Log, config: &reclaim::Config) {
+    for reclaimer in &config.reclaimers {
+        if let Err(unusable) = program::check(&reclaimer.command) {
+            note(
+                log,
+                format_args!(
+                    "the reclaimer {} names {}, {}, so each reclaim it is asked for fails until a program is installed there",
+                    reclaimer.name,
+                    unusable.path.display(),
+                    unusable.reason
+                ),
+            );
+        }
+    }
+    if let Err(unusable) = program::check(&config.stuck.on_stuck) {
+        note(
+            log,
+            format_args!(
+                "the on_stuck command names {}, {}, so it fails each time a job becomes stuck until a program is installed there",
+                unusable.path.display(),
+                unusable.reason
+            ),
+        );
+    }
 }
 
 /// Runs the daemon: listens on the machine's socket and admits jobs until
