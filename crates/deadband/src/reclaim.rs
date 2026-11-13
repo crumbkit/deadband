@@ -21,6 +21,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::stuck;
 
+pub(crate) mod program;
 #[cfg(test)]
 mod tests;
 mod text;
