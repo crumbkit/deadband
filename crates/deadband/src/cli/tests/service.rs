@@ -19,6 +19,7 @@ fn with_agent(home: &Path, launchd: &Arc<FakeLaunchd>) -> Test<Fixed> {
     let mut test = Test::new(Fixed);
     test.machine.service = Some(LaunchAgent {
         home: Some(home.to_path_buf()),
+        state: Some(home.join(".local/state/deadband")),
         binary: Some(PathBuf::from("/Users/me/.local/bin/deadband")),
         uid: 501,
         launchd: Arc::clone(launchd) as _,

@@ -18,11 +18,16 @@ pub const SERVICE_UNLOCATED: Code = Code::new("deadband", "service", "unlocated"
 /// The code of an install that found a file it cannot read as a plist.
 pub const SERVICE_PLIST_UNREADABLE: Code = Code::new("deadband", "service", "plist_unreadable");
 
-/// The code of a `service` command that could not write or delete the plist.
+/// The code of a `service` command that could not write or delete the plist,
+/// or make or lock its lock file.
 pub const SERVICE_WRITE_FAILED: Code = Code::new("deadband", "service", "write_failed");
 
 /// The code of a `service` command whose launchctl or getconf run failed.
 pub const SERVICE_LAUNCHCTL_FAILED: Code = Code::new("deadband", "service", "launchctl_failed");
+
+/// The code of a `service` command that waited for another one to finish
+/// and gave up.
+pub const SERVICE_LOCKED: Code = Code::new("deadband", "service", "locked");
 
 /// Why a `service` command changed nothing, or stopped part way.
 #[derive(Debug, Failure)]
@@ -79,6 +84,28 @@ pub enum ServiceFailed {
         /// The error of the delete.
         error: io::Error,
     },
+    /// Another service command held the lock for longer than the wait.
+    #[failure(
+        code = SERVICE_LOCKED,
+        recovery = crumbkit::Recovery::Retry,
+        field(path = path.to_string_lossy())
+    )]
+    Locked {
+        /// The lock file.
+        path: PathBuf,
+    },
+    /// The state directory or the lock file in it cannot be made or locked.
+    #[failure(
+        code = SERVICE_WRITE_FAILED,
+        hint = "make the state directory writable and run the command again",
+        field(path = path.to_string_lossy())
+    )]
+    Lock {
+        /// The lock file.
+        path: PathBuf,
+        /// The error of the open or the lock.
+        error: io::Error,
+    },
     /// A launchctl or getconf run failed.
     #[failure(code = SERVICE_LAUNCHCTL_FAILED, recovery = crumbkit::Recovery::Retry)]
     Launchctl(Failed),
@@ -97,6 +124,14 @@ impl fmt::Display for ServiceFailed {
             }
             Self::Write { path, error } => {
                 write!(f, "deadband could not write {}: {error}", path.display())
+            }
+            Self::Locked { path } => write!(
+                f,
+                "another deadband service command still holds {} after ten seconds, so this one changed nothing",
+                path.display()
+            ),
+            Self::Lock { path, error } => {
+                write!(f, "deadband could not lock {}: {error}", path.display())
             }
             Self::Launchctl(failed) => failed.fmt(f),
         }
