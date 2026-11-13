@@ -96,8 +96,9 @@ pub fn path_in_user_directory(
 ///
 /// The path is `DEADBAND_SOCKET` when it is set. Otherwise it is
 /// `deadband.sock` in `DEADBAND_SOCKET_DIR`, and otherwise in `TMPDIR`. When
-/// none is set, it is `deadband.sock` in the directory that
-/// [`fallback_directory`] names, which only this user can enter.
+/// none is set, it is `deadband.sock` in `deadband` inside `XDG_RUNTIME_DIR`,
+/// or else in `/tmp/deadband-<uid>`, a directory that the daemon makes so
+/// that only this user can enter it.
 pub fn path(read: impl Fn(&str) -> Option<OsString>) -> PathBuf {
     path_for(read, getuid().as_raw())
 }
