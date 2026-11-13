@@ -62,10 +62,15 @@ fn warn_of_unusable_programs(log: &Log, config: &reclaim::Config) {
             note(
                 log,
                 format_args!(
-                    "the reclaimer {} names {}, {}, so each reclaim it is asked for fails until a program is installed there",
+                    "the reclaimer {} names {}, {}, so {}",
                     reclaimer.name,
                     unusable.path.display(),
-                    unusable.reason
+                    unusable.reason,
+                    if unusable.reason.always_fails() {
+                        "each reclaim it is asked for fails until a program is installed there"
+                    } else {
+                        "a reclaim it is asked for may fail"
+                    }
                 ),
             );
         }
@@ -74,9 +79,14 @@ fn warn_of_unusable_programs(log: &Log, config: &reclaim::Config) {
         note(
             log,
             format_args!(
-                "the on_stuck command names {}, {}, so it fails each time a job becomes stuck until a program is installed there",
+                "the on_stuck command names {}, {}, so {}",
                 unusable.path.display(),
-                unusable.reason
+                unusable.reason,
+                if unusable.reason.always_fails() {
+                    "it fails each time a job becomes stuck until a program is installed there"
+                } else {
+                    "it may fail when a job becomes stuck"
+                }
             ),
         );
     }

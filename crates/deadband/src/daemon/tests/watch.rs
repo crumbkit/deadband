@@ -474,6 +474,20 @@ fn a_job_with_no_on_stuck_logs_nothing_when_it_becomes_stuck() {
     assert!(!log_text(&log).contains("on_stuck"));
 }
 
+#[test]
+fn an_on_stuck_command_that_cannot_start_is_named_in_the_log_when_a_job_becomes_stuck() {
+    let probe = Trees::new(QUIET);
+    let mut options = Options::default();
+    options.stuck.on_stuck = vec!["/nonexistent/notify".to_owned()];
+    let (path, log) = start(&probe, options);
+    let _client = ask(&path, watched("hook-missing", ROOT));
+    let begun = Instant::now();
+    while !log_text(&log).contains("the on_stuck command /nonexistent/notify could not start") {
+        let _ = jobs(&path);
+        assert!(begun.elapsed() < REPLY_WITHIN, "{}", log_text(&log));
+    }
+}
+
 fn timeline(path: &Path) -> crate::protocol::Timeline {
     let mut client = Client::connect(path);
     client.send(&Request::Timeline);

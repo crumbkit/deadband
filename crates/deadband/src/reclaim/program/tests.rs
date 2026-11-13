@@ -90,3 +90,29 @@ fn each_reason_reads_as_a_clause_that_ends_a_sentence() {
     assert_eq!(Reason::NotExecutable.to_string(), "which is not executable");
     assert!(Reason::Relative.to_string().contains("PATH"));
 }
+
+#[test]
+fn only_a_relative_program_may_still_start() {
+    assert!(Reason::Missing.always_fails());
+    assert!(Reason::NotAFile.always_fails());
+    assert!(Reason::NotExecutable.always_fails());
+    assert!(Reason::Unreadable("denied".to_owned()).always_fails());
+    assert!(!Reason::Relative.always_fails());
+}
+
+#[test]
+fn a_path_inside_a_directory_the_user_cannot_enter_is_reported_as_unreadable_with_the_error() {
+    let directory = Directory::new();
+    let locked = directory.0.join("locked");
+    std::fs::create_dir(&locked).expect("the directory is made");
+    let inside = PathBuf::from(directory.file("locked/mxv", 0o755));
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+        .expect("the mode is set");
+    let unusable = check(&command(&inside.display().to_string())).expect_err("the path is locked");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+        .expect("the mode is restored");
+    let Reason::Unreadable(error) = unusable.reason else {
+        panic!("{:?}", unusable.reason);
+    };
+    assert!(error.contains("Permission denied"), "{error}");
+}

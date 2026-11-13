@@ -6,6 +6,7 @@
 //! installed later works without a restart.
 
 use std::fmt;
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -15,8 +16,10 @@ mod tests;
 /// Why a program cannot start.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Reason {
-    /// Nothing exists at the path, or the path cannot be read.
+    /// Nothing exists at the path.
     Missing,
+    /// The path cannot be examined, with the operating system's error.
+    Unreadable(String),
     /// The path names something other than a regular file.
     NotAFile,
     /// The file has no execute permission bit.
@@ -27,14 +30,23 @@ pub(crate) enum Reason {
 
 impl fmt::Display for Reason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Missing => "which does not exist",
-            Self::NotAFile => "which is not a file",
-            Self::NotExecutable => "which is not executable",
-            Self::Relative => {
-                "which is not an absolute path and may not be on the short PATH that launchd gives a daemon"
-            }
-        })
+        match self {
+            Self::Missing => f.write_str("which does not exist"),
+            Self::Unreadable(error) => write!(f, "which cannot be read: {error}"),
+            Self::NotAFile => f.write_str("which is not a file"),
+            Self::NotExecutable => f.write_str("which is not executable"),
+            Self::Relative => f.write_str(
+                "which is not an absolute path and may not be on the short PATH that launchd gives a daemon",
+            ),
+        }
+    }
+}
+
+impl Reason {
+    /// Reports whether the program cannot start until something changes.
+    /// A relative program can start when the daemon's `PATH` holds it.
+    pub(crate) fn always_fails(&self) -> bool {
+        !matches!(self, Self::Relative)
     }
 }
 
@@ -70,7 +82,8 @@ pub(crate) fn check(command: &[String]) -> Result<(), Unusable> {
         return fail(Reason::Relative);
     }
     match path.metadata() {
-        Err(_) => fail(Reason::Missing),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => fail(Reason::Missing),
+        Err(error) => fail(Reason::Unreadable(error.to_string())),
         Ok(found) if !found.is_file() => fail(Reason::NotAFile),
         Ok(found) if found.permissions().mode() & 0o111 == 0 => fail(Reason::NotExecutable),
         Ok(_) => Ok(()),
