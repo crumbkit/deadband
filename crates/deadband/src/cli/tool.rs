@@ -184,8 +184,11 @@ pub const TOOL: Tool = Tool::new()
         Failures::new().exits(&[
             Exit::new(EXIT_MACHINE, "deadband could not read the machine.")
                 .failures(&[&MACHINE_UNREADABLE, &MACHINE_UNSUPPORTED]),
-            Exit::new(EXIT_DAEMON, "the daemon could not listen on its socket.")
-                .failures(&[&SOCKET_UNUSABLE]),
+            Exit::new(
+                EXIT_DAEMON,
+                "the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.",
+            )
+            .failures(&[&SOCKET_UNUSABLE]),
             Exit::new(
                 EXIT_SERVICE,
                 "deadband could not install or uninstall its launchd agent.",

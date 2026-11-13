@@ -34,7 +34,7 @@ transitions:
   - service
   unchecked_reads:
   - the daemon's running and waiting jobs, which uninstall asks for before it takes service.lock and reports
-    after the bootout (cli/commands.rs:273-297)
+    after the bootout (cli/commands.rs:281-305)
 ---
 launchd holds this store. deadband changes it only through `launchctl
 bootstrap` and `launchctl bootout`, and reads it with `launchctl print`, whose
