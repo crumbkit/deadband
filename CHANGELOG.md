@@ -19,6 +19,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Exit 4 is listed only for `deadband daemon` in `deadband help exit-codes`
+  and `docs/commands.md`, where it repeated in every command's section.
+- `deadband status` says, when launchd has loaded the agent and no daemon
+  answers, to see the log or run `deadband service install --restart`.
+- A history rotation renames `jobs.jsonl` only when the writer's open file
+  is still the file there. Another file that replaced it stays in place and
+  receives the next line.
+- A job that ends while its watcher reconnects to a new daemon no longer
+  sends that daemon a `Seat`: the check for the end and the write of the
+  `Seat` are one hold of the seat lock.
+- `deadband service install` and `uninstall` take `service.lock` in
+  `~/.local/state/deadband` whatever `XDG_STATE_HOME` says, so two commands
+  that share a plist share the lock.
 - A reclaim that makes the state directory now makes it with mode 0700, and
   a reclaim or a service command sets mode 0700 on a state directory that
   exists with a wider mode. Before, a reclaim that ran after the directory

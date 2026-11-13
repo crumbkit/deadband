@@ -941,6 +941,21 @@ fn the_exit_codes_topic_says_run_passes_on_the_jobs_exit_code() {
     );
 }
 
+#[test]
+fn the_exit_codes_topic_names_exit_4_only_for_the_daemon() {
+    let (code, out, err) = Test::new(Fixed).run(&["help", "exit-codes"]);
+    assert_eq!(code, 0, "{err}");
+    let line = out
+        .lines()
+        .find(|line| line.trim_start().starts_with("4 "))
+        .unwrap_or_else(|| panic!("no line for 4: {out}"));
+    assert!(
+        line.contains("`deadband daemon` exits 0 with `deadband::daemon::running`"),
+        "{out}"
+    );
+    assert!(line.ends_with("Commands: `deadband daemon`."), "{out}");
+}
+
 #[cfg(feature = "tui")]
 #[test]
 fn the_exit_codes_topic_says_top_exits_130_on_ctrl_c() {

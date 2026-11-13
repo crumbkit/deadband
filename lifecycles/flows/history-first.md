@@ -32,7 +32,7 @@ arrives (history/writer.rs:188-191). `claim` makes the state directory before
 it locks `jobs.lock` (history/writer.rs:274); the lock step
 runs only when `jobs.lock` does not exist yet (daemon/bind.rs:137). The
 writer's first line then opens `jobs.jsonl`, which calls `make_state_dir`
-(daemon.rs) again (history/writer.rs:250-253, 343). The open
+(daemon.rs) again (history/writer.rs:250-253, 354). The open
 step is `open-new` when no file exists, `repair` when the last line is torn,
 and `reopen` for a whole file.
 

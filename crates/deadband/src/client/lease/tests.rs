@@ -7,7 +7,7 @@ use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use super::{Lease, Notices, Seat, UNWATCHED};
+use super::{Lease, Notices, Seat, SeatState, UNWATCHED};
 use crate::admit::Lane;
 use crate::protocol::{Job, Request, read_line};
 use crate::testing::socket_path;
@@ -25,6 +25,15 @@ fn job() -> Job {
         cwd: None,
         workspace: None,
         short: None,
+    }
+}
+
+/// Returns the `Seat` request that a watcher sends to a new daemon.
+fn seat_request() -> Request {
+    Request::Seat {
+        job: job(),
+        jobs: 1,
+        ran_ms: 0,
     }
 }
 
@@ -89,7 +98,7 @@ fn a_lost_lease_that_ends_while_a_new_daemon_seats_it_never_shuts_the_new_connec
                 for _ in 0..(round % 200) {
                     spin_loop();
                 }
-                seat.install(new)
+                seat.install(new, &seat_request())
             })
         };
         start.wait();
@@ -99,11 +108,14 @@ fn a_lost_lease_that_ends_while_a_new_daemon_seats_it_never_shuts_the_new_connec
         if installed {
             assert_eq!(
                 told,
-                vec![Request::Done {
-                    exit_code: Some(0),
-                    signal: None,
-                    usage: None,
-                }],
+                vec![
+                    seat_request(),
+                    Request::Done {
+                        exit_code: Some(0),
+                        signal: None,
+                        usage: None,
+                    }
+                ],
                 "round {round}: the end shut the new connection without telling it"
             );
         } else {
@@ -123,7 +135,7 @@ fn a_seat_that_ended_while_lost_refuses_the_next_connection() {
     // macOS refuses a read timeout once the peer has closed, so it is set
     // before the install.
     let mut late_daemon = daemon_end(late_daemon);
-    assert!(!seat.install(late));
+    assert!(!seat.install(late, &seat_request()));
     assert!(requests(&mut late_daemon).is_empty());
 }
 
@@ -154,4 +166,41 @@ fn a_lease_that_cannot_be_watched_says_so_and_the_job_still_ends_with_the_daemon
             usage: None,
         }]
     );
+}
+
+#[test]
+fn a_seat_installed_before_the_job_ends_gets_the_seat_and_then_the_done() {
+    let (old, _old_daemon) = UnixStream::pair().expect("the pair connects");
+    let lease = holding(old);
+    lease.seat.lose();
+    let (new, new_daemon) = UnixStream::pair().expect("the pair connects");
+    let mut new_daemon = daemon_end(new_daemon);
+
+    assert!(lease.seat.install(new, &seat_request()));
+    lease.end(Some(0));
+
+    assert_eq!(
+        requests(&mut new_daemon),
+        vec![
+            seat_request(),
+            Request::Done {
+                exit_code: Some(0),
+                signal: None,
+                usage: None,
+            }
+        ]
+    );
+}
+
+#[test]
+fn a_seat_write_that_fails_leaves_the_seat_lost() {
+    let (old, _old_daemon) = UnixStream::pair().expect("the pair connects");
+    let lease = holding(old);
+    lease.seat.lose();
+    let (new, new_daemon) = UnixStream::pair().expect("the pair connects");
+    drop(new_daemon);
+
+    assert!(!lease.seat.install(new, &seat_request()));
+
+    assert!(matches!(*lease.seat.lock(), SeatState::Lost));
 }

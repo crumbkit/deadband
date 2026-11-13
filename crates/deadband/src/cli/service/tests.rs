@@ -29,7 +29,6 @@ const TEMP: &str = "/var/folders/xy/abc123/T/";
 fn agent(home: &Path, launchd: &Arc<FakeLaunchd>) -> LaunchAgent {
     LaunchAgent {
         home: Some(home.to_path_buf()),
-        state: Some(state_dir(home)),
         binary: Some(PathBuf::from("/Users/me/.local/bin/deadband")),
         uid: 501,
         launchd: Arc::clone(launchd) as _,

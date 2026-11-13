@@ -68,13 +68,13 @@ locks:
   wait: 0s
 - {id: queue, kind: mutex, where: 'the std::sync::Mutex around State (Shared in crates/deadband/src/daemon.rs)',
   wait: unbounded}
-- {id: seat, kind: mutex, where: 'the std::sync::Mutex in each Seat (crates/deadband/src/client/lease.rs)',
+- {id: seat, kind: mutex, where: 'the std::sync::Mutex in each Seat (crates/deadband/src/client/lease.rs), which a reseat holds for its Seat write, bounded by WRITE_WITHIN for each send',
   wait: unbounded}
 - id: service
   kind: flock
-  where: $XDG_STATE_HOME/deadband/service.lock (default ~/.local/state/deadband/service.lock), held by
-    deadband service install and uninstall for the whole command and never removed; the plist's path follows
-    HOME instead
+  where: $HOME/.local/state/deadband/service.lock whatever XDG_STATE_HOME says, held by
+    deadband service install and uninstall for the whole command and never removed; the plist's path
+    follows HOME too
   wait: 10s
 - id: reclaim
   kind: flock
@@ -230,7 +230,7 @@ bends:
   makes them on first use and never removes them, and nothing in deadband depends on their removal.'
 - 'if_missing has no value for a write that goes to a removed file. history-file#append says if_missing:
   fail, because it writes to the open descriptor; the writer checks the path before each line, so only
-  a line written between that check and a removal goes to the removed file (history/writer.rs:243-254).'
+  a line written between that check and a removal goes to the removed file (history/writer.rs:243-254). The rotation check before the rename (history/writer.rs:307-317) leaves one stat between check and rename, which macOS has no conditional rename to close.'
 ---
 # deadband's lifecycle registry
 

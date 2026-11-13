@@ -9,7 +9,6 @@
 //! client whose daemon stops starts its job at once.
 
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -22,6 +21,7 @@ use rustix::io::Errno;
 use super::reply::deliver;
 use super::{Log, Shared, State, lock, lock_path, note};
 use crate::admit::Reading;
+use crate::file_id::FileId;
 
 impl State {
     /// Reports whether the sampler stored its reading longer ago than
@@ -127,10 +127,8 @@ pub(super) fn wait_for_connection(listener: &UnixListener, within: Duration) -> 
 struct HeldFile {
     /// The file's path.
     path: PathBuf,
-    /// The device that holds the file.
-    device: u64,
-    /// The file's inode.
-    inode: u64,
+    /// The file's identity when the daemon named it.
+    id: FileId,
 }
 
 impl HeldFile {
@@ -146,8 +144,7 @@ impl HeldFile {
         let metadata = std::fs::symlink_metadata(&path).ok()?;
         Some(Self {
             path,
-            device: metadata.dev(),
-            inode: metadata.ino(),
+            id: FileId::from(&metadata),
         })
     }
 
@@ -155,7 +152,7 @@ impl HeldFile {
     /// cannot be read for another reason counts as still there.
     fn gone(&self) -> bool {
         match std::fs::symlink_metadata(&self.path) {
-            Ok(metadata) => metadata.dev() != self.device || metadata.ino() != self.inode,
+            Ok(metadata) => !self.id.is(&metadata),
             Err(error) => error.kind() == std::io::ErrorKind::NotFound,
         }
     }

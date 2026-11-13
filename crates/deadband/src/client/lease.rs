@@ -238,11 +238,17 @@ impl Seat {
         matches!(*state, SeatState::Ended)
     }
 
-    /// Makes `stream` the current connection and returns `true`, or closes
-    /// it and returns `false` when the job has ended.
-    pub(super) fn install(&self, stream: UnixStream) -> bool {
+    /// Sends `seat` on `stream` and makes `stream` the current connection,
+    /// and returns `true`. It closes `stream` and returns `false` when the
+    /// job has ended or the write fails. The check, the write and the change
+    /// of state happen in one hold of the lock, so [`Seat::end`] runs
+    /// either before it, and no daemon hears of the job, or after it, and
+    /// the new connection gets the `Done`. The caller sets [`WRITE_WITHIN`] on
+    /// `stream` as the timeout of each send, and `write_all` can make
+    /// several, so the hold is bounded by [`WRITE_WITHIN`] for each send.
+    pub(super) fn install(&self, stream: UnixStream, seat: &Request) -> bool {
         let mut state = self.lock();
-        if matches!(*state, SeatState::Ended) {
+        if matches!(*state, SeatState::Ended) || write_line(&mut &stream, seat).is_err() {
             return false;
         }
         *state = SeatState::Held(stream);
@@ -330,25 +336,24 @@ impl Watcher {
             if self.seat.ended_after_wait() {
                 return None;
             }
-            let Some((stream, read)) = self.try_seat() else {
-                continue;
-            };
-            return self.seat.install(stream).then_some(read);
+            if let Some(read) = self.try_seat() {
+                return Some(read);
+            }
         }
     }
 
-    /// Connects to the daemon and sends the seat, and returns two handles
-    /// of the connection, or `None` when any step fails.
-    fn try_seat(&self) -> Option<(UnixStream, UnixStream)> {
+    /// Connects to the daemon and seats the job on the connection, and
+    /// returns a handle to read it, or `None` when any step fails or the job
+    /// ended.
+    fn try_seat(&self) -> Option<UnixStream> {
         let stream = connect(&self.path).ok()?;
         stream.set_write_timeout(Some(WRITE_WITHIN)).ok()?;
+        let read = stream.try_clone().ok()?;
         let seat = Request::Seat {
             job: self.job.clone(),
             jobs: self.jobs,
             ran_ms: u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
         };
-        write_line(&mut &stream, &seat).ok()?;
-        let read = stream.try_clone().ok()?;
-        Some((stream, read))
+        self.seat.install(stream, &seat).then_some(read)
     }
 }

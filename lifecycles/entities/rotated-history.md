@@ -25,5 +25,6 @@ transitions:
   locks:
   - history
 ---
-The rename replaces an earlier `jobs.1.jsonl`, which is the only deletion of
-history. deadband never removes the rotated file, so `present` is terminal.
+The rename moves only the file the writer has open, because the writer checks
+by device and inode that it is still at `jobs.jsonl` first. It replaces an
+earlier `jobs.1.jsonl`, which is the only deletion of history. deadband never removes the rotated file, so `present` is terminal.
