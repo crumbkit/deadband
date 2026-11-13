@@ -44,7 +44,7 @@ pub const VARIABLES: &[Variable] = &[
         name: "DEADBAND_SOCKET_DIR",
         purpose: "the directory that holds `deadband.sock`, for a daemon and its callers that are not the launchd daemon",
         form: "a directory path",
-        absent: "on macOS deadband uses the directory that `getconf DARWIN_USER_TEMP_DIR` prints, and when that fails it reads TMPDIR",
+        absent: "on macOS deadband uses the directory that `getconf DARWIN_USER_TEMP_DIR` prints, which it reads with `confstr`, and when that fails it reads TMPDIR",
     },
     Variable {
         name: "TMPDIR",

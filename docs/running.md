@@ -210,7 +210,9 @@ Nothing in deadband reads the file, and nothing leaves the machine.
 The file is `deadband/jobs.jsonl` in `$XDG_STATE_HOME`, or
 `~/.local/state/deadband/jobs.jsonl` when `XDG_STATE_HOME` is not set. Its
 directory has mode 0700 and the file has mode 0600. A daemon started with
-`DEADBAND_SOCKET` set records nothing. The daemon that writes the file holds a
+`DEADBAND_SOCKET` set records nothing. A daemon started with
+`DEADBAND_SOCKET_DIR` set records history like the default daemon, so a
+private daemon that uses that variable writes this file too. The daemon that writes the file holds a
 lock on `jobs.lock` in the same directory, and a second daemon that finds the
 lock held records nothing, logs one line and still admits its jobs.
 

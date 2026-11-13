@@ -112,6 +112,20 @@ fn the_per_user_directory_is_not_looked_up_when_an_override_is_set() {
 }
 
 #[test]
+fn the_per_user_directory_is_not_looked_up_when_deadband_socket_is_set() {
+    let asked = std::cell::Cell::new(false);
+    let lookup = || {
+        asked.set(true);
+        None
+    };
+    path_in_user_directory(
+        environment(&[("DEADBAND_SOCKET", "/run/me/db.sock")]),
+        lookup,
+    );
+    assert!(!asked.get());
+}
+
+#[test]
 fn the_catalog_lists_every_variable_that_path_reads_in_order() {
     let read = RefCell::new(Vec::new());
     path(|name: &str| {

@@ -1,19 +1,19 @@
 //! Asks launchd about deadband's launch agent and loads or unloads it, by
-//! running `/bin/launchctl`, and reads the per-user temporary directory by
-//! running `/usr/bin/getconf`. With the other operations of the parent
-//! module, these are operations of the module that starts processes
-//! (PROC-1).
+//! running `/bin/launchctl`. It reads the per-user temporary directory from
+//! the probe's `confstr` call, which starts no process. With the other
+//! operations of the parent module, these are operations of the module that
+//! starts processes (PROC-1).
 //!
 //! Each run states the five items of PROC-2:
 //!
-//! - Program: `/bin/launchctl` or `/usr/bin/getconf`, by absolute path.
+//! - Program: `/bin/launchctl`, by absolute path.
 //! - Arguments: fixed words, the launchd domain or service target, and the
 //!   plist's path, each passed as a separate value. No shell reads them.
 //! - Environment: the program inherits deadband's whole environment.
 //! - Streams and deadline: the program reads nothing on standard input, and
 //!   deadband keeps its standard output and standard error to report a
-//!   failure. There is no deadline, because both programs only ask launchd
-//!   or the C library and return, and a person waits at the terminal.
+//!   failure. There is no deadline, because launchctl only asks launchd
+//!   and returns, and a person waits at the terminal.
 //! - End: deadband waits for the program and reaps it, and never signals it.
 
 use std::fmt;
@@ -50,7 +50,7 @@ pub trait Launchd: fmt::Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`Failed`] when getconf fails or prints nothing.
+    /// Returns [`Failed`] when the system has no value.
     fn temp_dir(&self) -> Result<PathBuf, Failed>;
 
     /// Reports whether launchd has loaded the service `target`, such as
@@ -89,13 +89,10 @@ pub struct System;
 
 impl Launchd for System {
     fn temp_dir(&self) -> Result<PathBuf, Failed> {
-        let words = ["DARWIN_USER_TEMP_DIR"];
-        let output = output("/usr/bin/getconf", &words)?;
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        if !output.status.success() || text.is_empty() {
-            return Err(failed("/usr/bin/getconf", &words, &output));
-        }
-        Ok(PathBuf::from(text))
+        crate::probe::user_temp_dir().ok_or_else(|| Failed {
+            command: "confstr _CS_DARWIN_USER_TEMP_DIR".to_owned(),
+            detail: "it returned no value".to_owned(),
+        })
     }
 
     fn is_loaded(&self, target: &str) -> Result<bool, Failed> {
@@ -147,7 +144,7 @@ fn launchctl(words: &[&str]) -> Result<(), Failed> {
 fn output(program: &str, words: &[&str]) -> Result<Output, Failed> {
     #[expect(
         clippy::disallowed_methods,
-        reason = "crates/deadband/src/job/launchd.rs runs launchctl and getconf; the module states PROC-2's items"
+        reason = "crates/deadband/src/job/launchd.rs runs launchctl; the module states PROC-2's items"
     )]
     let output = Command::new(program)
         .args(words)

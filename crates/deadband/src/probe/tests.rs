@@ -212,3 +212,13 @@ fn a_failed_load_reading_has_no_fields() {
 
     assert!(Unreadable::Load.fields().is_empty());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_per_user_temporary_directory_is_an_existing_absolute_directory_without_a_nul() {
+    let directory = super::user_temp_dir().expect("macOS knows the per-user temporary directory");
+
+    assert!(directory.is_absolute(), "{directory:?}");
+    assert!(directory.is_dir(), "{directory:?}");
+    assert!(!directory.to_string_lossy().contains('\0'), "{directory:?}");
+}

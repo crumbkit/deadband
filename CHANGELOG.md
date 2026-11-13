@@ -32,7 +32,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   daemon's socket whatever `TMPDIR` is. They use the directory that
   `getconf DARWIN_USER_TEMP_DIR` prints, where that daemon listens, so a
   caller with another `TMPDIR` no longer runs its jobs uncounted. They fall
-  back to `TMPDIR` when getconf fails.
+  back to `TMPDIR` when the system has no value. They read it with
+  `confstr`, so they start no process.
 
 ## [0.2.1] - 2026-11-11
 
