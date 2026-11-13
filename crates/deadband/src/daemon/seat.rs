@@ -9,6 +9,10 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 use super::{Shared, State, WRITE_TIMEOUT, Waiter, lock};
+use crate::admit::JobId;
+use crate::history::{Arrival, Tally};
+use crate::probe::ChildUsage;
+use crate::protocol::{Exit, Job, Label, Reply, Request, Short, read_line, write_line};
 
 /// Serves one client on `stream`. A client that sends no first line within
 /// the settings' `first_line_within` is closed.
@@ -51,10 +55,6 @@ pub(super) fn connection(shared: &Shared, stream: UnixStream) {
         Ok(Some(Request::Done { .. }) | None) | Err(_) => {}
     }
 }
-use crate::admit::JobId;
-use crate::history::{Arrival, Tally};
-use crate::probe::ChildUsage;
-use crate::protocol::{Exit, Job, Label, Reply, Request, Short, read_line, write_line};
 
 /// Reads what the daemon learns from `job` when it arrives, and fills the
 /// job's workspace and short command from it. The workspace that a client

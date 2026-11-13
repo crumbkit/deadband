@@ -229,6 +229,15 @@ fn a_daemon_that_cannot_start_its_sampler_stops_serving() {
     assert!(error.contains("sampler"), "{error}");
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn a_daemon_that_cannot_start_its_watchdog_stops_serving() {
+    let path = socket_path();
+    let ends = serving_refusing(&path, Dial::new(Pressure::Normal), Some("deadband-age"));
+    let error = ended(&ends).to_string();
+    assert!(error.contains("watchdog"), "{error}");
+}
+
 #[test]
 fn a_daemon_stops_serving_when_its_sampler_panics() {
     let (_path, ends) = serving(PanicsAfterOne(Arc::new(AtomicUsize::new(0))));

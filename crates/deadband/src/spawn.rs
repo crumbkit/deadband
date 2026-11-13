@@ -42,7 +42,10 @@ fn refused(name: &str) -> bool {
 
 /// Makes [`thread`] fail for every thread named `name` that the calling
 /// thread starts, as the operating system does at its thread limit, until
-/// [`allow`] is called.
+/// [`allow`] is called. The refusal is thread-local: it reaches only threads
+/// that the calling thread itself starts, never threads started by a thread
+/// it started. A test therefore cannot refuse the reclaim thread, which the
+/// sampler thread starts.
 #[cfg(test)]
 pub(crate) fn refuse(name: &str) {
     REFUSED.with(|refused| refused.borrow_mut().push(name.to_owned()));

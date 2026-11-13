@@ -174,9 +174,11 @@ pub(super) struct Ending {
 }
 
 impl Ending {
-    /// Returns the ending for the daemon that serves `listener`. The daemon
-    /// bound `listener` after it locked the lock file, so the lock file at
-    /// the lock path now is the one it holds.
+    /// Returns the ending for the daemon that serves `listener`. It names
+    /// the lock file by a stat of the lock path when `serve` builds its
+    /// endings, not from the file the daemon locked. Soft limit: a lock file
+    /// replaced between `bind` and that stat is recorded as the daemon's own,
+    /// and the daemon never notices the replacement.
     pub(super) fn new(listener: &UnixListener, reason: Sender<String>) -> Self {
         let socket = HeldFile::of(listener);
         let lock = socket
