@@ -210,7 +210,9 @@ Nothing in deadband reads the file, and nothing leaves the machine.
 The file is `deadband/jobs.jsonl` in `$XDG_STATE_HOME`, or
 `~/.local/state/deadband/jobs.jsonl` when `XDG_STATE_HOME` is not set. Its
 directory has mode 0700 and the file has mode 0600. A daemon started with
-`DEADBAND_SOCKET` set records nothing. The daemon that writes the file holds a
+`DEADBAND_SOCKET` set records nothing. A daemon started with
+`DEADBAND_SOCKET_DIR` set records history like the default daemon, so a
+private daemon that uses that variable writes this file too. The daemon that writes the file holds a
 lock on `jobs.lock` in the same directory, and a second daemon that finds the
 lock held records nothing, logs one line and still admits its jobs.
 
@@ -572,7 +574,9 @@ set and not empty:
 | Variable | Socket |
 | --- | --- |
 | `DEADBAND_SOCKET` | the path it names |
-| `TMPDIR` | `deadband.sock` in that directory, which macOS makes per user |
+| `DEADBAND_SOCKET_DIR` | `deadband.sock` in that directory |
+| the directory `getconf DARWIN_USER_TEMP_DIR` prints (macOS only, not a variable) | `deadband.sock` in that directory, whatever `TMPDIR` is |
+| `TMPDIR` | `deadband.sock` in that directory |
 | `USER` | `/tmp/deadband-<USER>.sock` |
 
 When none is set, the socket is `/tmp/deadband.sock`. The daemon makes the

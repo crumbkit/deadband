@@ -5,7 +5,7 @@
 //! fake one. [`System`] reads the machine deadband runs on.
 //! On macOS it calls `getloadavg` and `sysctlbyname` in the `macos` module,
 //! which is the only module with unsafe code, and [`child_usage`] calls
-//! `getrusage` there. The `sysctl` module
+//! `getrusage` there. [`user_temp_dir`] calls `confstr` there. The `sysctl` module
 //! parses each sysctl value in safe code that runs on every platform.
 
 use std::ffi::CStr;
@@ -125,6 +125,23 @@ pub struct ChildUsage {
 #[must_use]
 pub fn child_usage() -> Option<ChildUsage> {
     macos::child_usage()
+}
+
+/// Returns the per-user temporary directory that `getconf
+/// DARWIN_USER_TEMP_DIR` prints, which is where the launchd daemon listens
+/// whatever `TMPDIR` a caller has, or `None` when the system has no value.
+#[cfg(target_os = "macos")]
+#[must_use]
+pub fn user_temp_dir() -> Option<std::path::PathBuf> {
+    macos::user_temp_dir()
+}
+
+/// Returns `None`, because only macOS has a per-user directory apart from
+/// `TMPDIR`.
+#[cfg(not(target_os = "macos"))]
+#[must_use]
+pub const fn user_temp_dir() -> Option<std::path::PathBuf> {
+    None
 }
 
 /// Returns `None`, because deadband reads child usage only on macOS.

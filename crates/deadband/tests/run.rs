@@ -525,12 +525,14 @@ mod history {
         }
 
         /// Returns a `deadband` command that finds its socket through
-        /// `TMPDIR` and its history through `XDG_STATE_HOME`.
+        /// `DEADBAND_SOCKET_DIR`, which a daemon on the default socket reads
+        /// before the per-user directory, and its history through
+        /// `XDG_STATE_HOME`.
         fn command(&self, args: &[&str]) -> Command {
             let mut command = deadband(Path::new("unused"), args);
             command
                 .env_remove("DEADBAND_SOCKET")
-                .env("TMPDIR", self.0.join("t"))
+                .env("DEADBAND_SOCKET_DIR", self.0.join("t"))
                 .env("XDG_STATE_HOME", self.state());
             command
         }

@@ -20,7 +20,10 @@ fn main() -> ExitCode {
         clippy::disallowed_methods,
         reason = "the entry point reads the environment once, for the variables that deadband::socket::VARIABLES lists"
     )]
-    let socket = deadband::socket::path(|name| std::env::var_os(name));
+    let socket = deadband::socket::path_in_user_directory(
+        |name| std::env::var_os(name),
+        deadband::probe::user_temp_dir,
+    );
     #[expect(
         clippy::disallowed_methods,
         reason = "the entry point reads the environment and the working directory once, for the variables that deadband::environment::VARIABLES lists"

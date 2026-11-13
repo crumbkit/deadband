@@ -48,7 +48,7 @@ status.
 | protocol | The messages over the socket, one JSON object per line. |
 | name | The rule that names a job in `status` and `top` from its workspace, its label and its short command, and leaves the label out when it repeats the workspace or the command's first word. |
 | socket | Finds the socket's path from the environment, and lists the variables deadband reads. |
-| job | The only module that starts a process: the job that `deadband run` was given, the reclaimers and the `on_stuck` command that the daemon's config file names, `/bin/ps`, which names the busiest process outside the jobs, and `launchctl` and `getconf`, behind a trait so tests use a fake launchd. |
+| job | The only module that starts a process: the job that `deadband run` was given, the reclaimers and the `on_stuck` command that the daemon's config file names, `/bin/ps`, which names the busiest process outside the jobs, and `launchctl`, behind a trait so tests use a fake launchd. |
 | reclaim | Reads the daemon's config file, decides when to reclaim memory or disk, runs the reclaimers on a thread of their own, and keeps the last reclaim for `deadband status`. |
 | environment | Reads the variables that `deadband run` uses, and gives a granted job its parallelism variables. |
 | priority | Chooses a job's lane from the priority file. |
@@ -173,7 +173,9 @@ The daemon is the only writer. Its writer thread takes an exclusive lock on
 the daemon runs, so one daemon writes each state directory even when two
 daemons listen on different sockets. A daemon that finds the lock held records
 nothing and logs one line. A daemon started with `DEADBAND_SOCKET` set records
-nothing, so test daemons do not write to the file. The client adds the two things that only it
+nothing, so test daemons do not write to the file. A daemon started with
+`DEADBAND_SOCKET_DIR` set records history like the default daemon, because
+only `DEADBAND_SOCKET` turns recording off. The client adds the two things that only it
 knows, its working directory on `Ask` and the usage of the job's children on
 `Done`. The working directory is shortened to 1 KiB by the client.
 
