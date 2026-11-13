@@ -21,6 +21,9 @@ struct Track {
     /// How many reclaims of the resource in a row freed nothing, while it
     /// stayed short.
     fruitless: u32,
+    /// Whether the last reclaim of the resource did not run because another
+    /// reclaim held the lock, so the rest after it is `after` alone.
+    skipped: bool,
 }
 
 impl Track {
@@ -45,7 +48,7 @@ impl Track {
     /// nothing, up to [`MAX_REST`] or `after` when that is longer.
     fn rested(&self, after: Duration, now: Instant) -> bool {
         let rest = after
-            .saturating_mul(2_u32.saturating_pow(self.fruitless))
+            .saturating_mul(2_u32.saturating_pow(if self.skipped { 0 } else { self.fruitless }))
             .min(MAX_REST.max(after));
         self.ended
             .is_none_or(|ended| now.saturating_duration_since(ended) >= rest)
@@ -111,6 +114,7 @@ impl Watch {
         let track = self.track(resource);
         track.ended = Some(now);
         track.short_since = None;
+        track.skipped = false;
         track.fruitless = if freed_bytes == 0 {
             track.fruitless.saturating_add(1)
         } else {
@@ -120,12 +124,14 @@ impl Watch {
 
     /// Records that the running reclaim did not run at `now` because
     /// another reclaim held the lock. The resource rests for
-    /// `config.after` and its back-off stays as it was.
+    /// exactly `config.after`, and its count of fruitless reclaims stays as
+    /// it was.
     pub fn skipped(&mut self, now: Instant) {
         let Some(resource) = self.running.take() else {
             return;
         };
         let track = self.track(resource);
+        track.skipped = true;
         track.ended = Some(now);
         track.short_since = None;
     }
