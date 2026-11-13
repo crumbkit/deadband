@@ -338,6 +338,15 @@ daemon that hangs while it keeps the connection open also keeps the job
 waiting. Stopping that daemon closes the connection, and the job then
 starts at once. When the probe cannot read the machine, the
 daemon admits each job as soon as a place is free, and its log says why.
+The daemon treats a reading that is more than five sampling intervals old
+(at least 250 ms) as a failed probe, so a stalled sampler does not hold jobs
+back for ever; its log says so once.
+
+The daemon stops serving, and the `deadband daemon` command prints why and
+exits, in two cases. The first is that the socket path no longer names the
+socket file the daemon bound, checked once every 60 samples (about a
+minute). The second is that the sampler thread panicked. Launchd then starts
+a new daemon, and `deadband run` starts its jobs at once while none listens.
 
 `deadband status` prints the load, memory pressure and swap, followed by the
 running and waiting jobs and the last reclaim, or `daemon: not running`

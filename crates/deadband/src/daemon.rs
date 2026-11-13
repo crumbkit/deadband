@@ -19,8 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rustix::io::Errno;
-
+use self::alive::{Ending, age, passing, wait_for_connection};
 use self::reading::{priority_active, read_machine};
 use self::timeline::Ended;
 use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
@@ -29,6 +28,7 @@ use crate::probe::{Pressure, Probe};
 use crate::protocol::{Job, Label, Reply, Request, read_line, write_line};
 use crate::reclaim::{self, Reclaimed, Resource, Watch};
 
+mod alive;
 mod bind;
 mod reading;
 mod seat;
@@ -87,6 +87,10 @@ struct State {
     queue: Queue<Waiter>,
     /// The latest reading of the machine, or `None` when the probe failed.
     reading: Option<Reading>,
+    /// When the sampler stored `reading`.
+    read_at: Instant,
+    /// Whether the log has said that the reading went stale.
+    stale_noted: bool,
     /// Whether the priority file held an entry at the latest reading.
     reserve_lanes: bool,
     /// How the daemon admits jobs.
@@ -117,6 +121,8 @@ impl State {
         Self {
             queue: Queue::default(),
             reading,
+            read_at: now,
+            stale_noted: false,
             reserve_lanes,
             settings,
             watch: Watch::default(),
@@ -145,9 +151,9 @@ impl State {
     fn grant(&mut self) {
         let limits = self.limits();
         loop {
-            let started = self
-                .queue
-                .admit(self.reading.as_ref(), &limits, Instant::now());
+            let now = Instant::now();
+            let reading = self.fresh_reading(now).copied();
+            let started = self.queue.admit(reading.as_ref(), &limits, now);
             if started.is_empty() {
                 return;
             }
@@ -202,8 +208,11 @@ pub fn note(log: &Log, line: fmt::Arguments<'_>) {
 }
 
 /// Serves clients on `listener` until accepting a connection fails in a way
-/// that another try cannot fix, and returns that error. It samples `probe`
-/// every `settings.sample_every`.
+/// that another try cannot fix, the socket file at the listener's path is
+/// gone or replaced, or the sampler panics, and returns the reason as an
+/// error. It samples `probe` every `settings.sample_every`, and checks the
+/// socket file once every 60 samples. The caller ends its process then, so
+/// that launchd starts a new daemon and the clients start their jobs at once.
 ///
 /// A failed accept that can pass, such as running out of descriptors or a
 /// client that gave up while it connected, is logged, and the daemon
@@ -229,13 +238,34 @@ pub fn serve<P: Probe + Clone + Send + 'static>(
     let sampler_log = Arc::clone(log);
     let (_watching, watch_stopped) = mpsc::channel::<()>();
     watch::start(&shared, probe.clone(), watch_stopped, log);
-    thread::spawn(move || sample(&sampler, &probe, &stopped, &sampler_log));
+    let (reason, ends) = mpsc::channel::<String>();
+    let watchdog_ending = Ending::new(listener, reason.clone());
+    let ending = Ending::new(listener, reason);
+    thread::spawn(move || sample(&sampler, &probe, &stopped, &sampler_log, ending));
+    let (_aging, aged) = mpsc::channel::<()>();
+    let watchdog = Arc::clone(&shared);
+    let watchdog_log = Arc::clone(log);
+    thread::spawn(move || age(&watchdog, &aged, &watchdog_log, watchdog_ending));
+    let every = lock(&shared).settings.sample_every;
+    if let Err(error) = listener.set_nonblocking(true) {
+        return error;
+    }
     loop {
+        if let Ok(reason) = ends.try_recv() {
+            return io::Error::other(reason);
+        }
+        if !wait_for_connection(listener, every) {
+            continue;
+        }
         match listener.accept() {
             Ok((stream, _)) => {
+                if stream.set_nonblocking(false).is_err() {
+                    continue;
+                }
                 let shared = Arc::clone(&shared);
                 thread::spawn(move || connection(&shared, stream));
             }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
             Err(error) if passing(&error) => {
                 note(
                     log,
@@ -252,29 +282,25 @@ pub fn serve<P: Probe + Clone + Send + 'static>(
     }
 }
 
-/// Reports whether a failed accept can pass, so another try may succeed.
-fn passing(error: &io::Error) -> bool {
-    [
-        Errno::MFILE,
-        Errno::NFILE,
-        Errno::NOBUFS,
-        Errno::NOMEM,
-        Errno::CONNABORTED,
-        Errno::INTR,
-        Errno::AGAIN,
-        Errno::PROTO,
-    ]
-    .contains(&Errno::from_io_error(error).unwrap_or(Errno::INVAL))
-}
-
 /// Samples `probe` every `sample_every` and starts the jobs that the new
-/// reading admits, until `stopped` receives or disconnects.
+/// reading admits, until `stopped` receives or disconnects or `ending`
+/// says the daemon should stop. A panic here drops `ending`, which tells
+/// the accept loop to stop.
 ///
 /// The probe has no event to wait on, so the sampler polls it. The wait
 /// is a timed receive on the daemon's stop channel.
-fn sample(shared: &Shared, probe: &impl Probe, stopped: &mpsc::Receiver<()>, log: &Log) {
+fn sample(
+    shared: &Shared,
+    probe: &impl Probe,
+    stopped: &mpsc::Receiver<()>,
+    log: &Log,
+    mut ending: Ending,
+) {
     let every = lock(shared).settings.sample_every;
     while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(every) {
+        if ending.tick() {
+            return;
+        }
         let (before, settings) = {
             let state = lock(shared);
             (state.reading, state.settings.clone())
@@ -283,6 +309,8 @@ fn sample(shared: &Shared, probe: &impl Probe, stopped: &mpsc::Receiver<()>, log
         let reserve_lanes = priority_active(settings.priority_file.as_deref());
         let mut state = lock(shared);
         state.reading = reading;
+        state.read_at = Instant::now();
+        state.stale_noted = false;
         state.reserve_lanes = reserve_lanes;
         state.observe();
         state.grant();

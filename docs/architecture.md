@@ -65,8 +65,13 @@ status.
   the job runs at once and `deadband run` says why in one line on standard
   error. A daemon that hangs while it keeps the connection open still keeps a
   queued job waiting, as [running.md](running.md) says.
-- When the probe cannot read the machine, the daemon starts each job once a
-  place is free, and its log says why in one line.
+- When the probe cannot read the machine, or the sampler has stored no reading
+  for five sampling intervals (at least 250 ms), the daemon starts each job
+  once a place is free, and its log says why in one line.
+- The daemon stops serving when the socket path no longer names the socket it
+  bound (checked once every 60 samples) or when its sampler panics. In a
+  release build a panic in any thread aborts the process. Launchd then starts
+  a new daemon, and clients start their jobs at once while none listens.
 - A failure to record a job never delays, holds or ends that job. The daemon
   does no file I/O while it holds the queue lock.
 - No source file outside tests is longer than 400 lines.

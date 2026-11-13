@@ -59,6 +59,18 @@ pub enum Unbound {
         /// The error of the call that failed.
         error: io::Error,
     },
+    /// The daemon listened and then stopped serving.
+    #[failure(
+        code = SOCKET_UNUSABLE,
+        no_next_step = "launchd starts a new daemon in its place, and jobs start at once while none listens",
+        field(path = path.to_string_lossy())
+    )]
+    Stopped {
+        /// The socket's path.
+        path: PathBuf,
+        /// Why the daemon stopped serving.
+        error: io::Error,
+    },
 }
 
 impl fmt::Display for Unbound {
@@ -77,6 +89,9 @@ impl fmt::Display for Unbound {
                 "deadband could not listen on {}: {error}",
                 path.display()
             ),
+            Self::Stopped { path, error } => {
+                write!(f, "the daemon on {} stopped: {error}", path.display())
+            }
         }
     }
 }
