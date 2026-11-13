@@ -32,7 +32,7 @@ pub use self::failed::{
     SERVICE_LAUNCHCTL_FAILED, SERVICE_PLIST_UNREADABLE, SERVICE_UNLOCATED, SERVICE_UNSUPPORTED,
     SERVICE_WRITE_FAILED, ServiceFailed,
 };
-pub use self::report::{Report, Step};
+pub use self::report::{Counts, Report, Step};
 
 /// The label of deadband's launch agent.
 pub const LABEL: &str = "io.github.crumbkit.deadband";
@@ -159,7 +159,7 @@ pub fn state(agent: &LaunchAgent) -> Option<DaemonState> {
 pub fn install(
     agent: Option<&LaunchAgent>,
     install: &Install,
-    jobs: impl FnOnce(&Path) -> Option<usize>,
+    mut jobs: impl FnMut(&Path) -> Option<Counts>,
 ) -> Result<Prose<Report>, ServiceFailed> {
     let agent = agent.ok_or(ServiceFailed::Unsupported)?;
     let home = located(agent.home.as_deref(), "the home directory")?;
@@ -177,30 +177,35 @@ pub fn install(
         report.plist = Some(text.clone());
     }
     let changed = existing.as_deref() != Some(text.as_str());
+    // The daemon that launchd runs listens under the directory that getconf
+    // prints, whatever the caller's TMPDIR says.
+    let socket =
+        crate::socket::path(|name| (name == "TMPDIR").then(|| temp_dir.clone().into_os_string()));
     if loaded {
         if !changed && !install.restart {
             report.steps.push(Step::UpToDate { path });
             return Ok(Prose::new(report));
         }
-        if !install.restart {
-            // The daemon that launchd runs listens under the directory that
-            // getconf prints, whatever the caller's TMPDIR says.
-            let socket = crate::socket::path(|name| {
-                (name == "TMPDIR").then(|| temp_dir.clone().into_os_string())
-            });
-            // The old plist stays when the reload waits, so a later install
-            // still sees the change. A loaded agent whose daemon does not
-            // answer may hold jobs, so it counts as busy.
-            match jobs(&socket) {
-                Some(0) => {}
-                Some(jobs) => {
-                    report.steps.push(Step::Kept { jobs });
-                    return Ok(Prose::new(report));
-                }
-                None => {
-                    report.steps.push(Step::Unanswered);
-                    return Ok(Prose::new(report));
-                }
+        // The old plist stays when the reload waits, so a later install
+        // still sees the change. A loaded agent whose daemon does not
+        // answer may hold jobs, so it counts as busy. With --restart the
+        // reload goes ahead, and the report says what the daemon held.
+        match (jobs(&socket), install.restart) {
+            (Some(counts), true) => report.steps.push(Step::Counted {
+                running: counts.running,
+                waiting: counts.waiting,
+            }),
+            (None, true) => report.steps.push(Step::NoCount),
+            (Some(counts), false) if counts.total() == 0 => {}
+            (Some(counts), false) => {
+                report.steps.push(Step::Kept {
+                    jobs: counts.total(),
+                });
+                return Ok(Prose::new(report));
+            }
+            (None, false) => {
+                report.steps.push(Step::Unanswered);
+                return Ok(Prose::new(report));
             }
         }
         if !install.dry_run {
@@ -220,14 +225,32 @@ pub fn install(
     } else {
         report.steps.push(Step::Unchanged { path: path.clone() });
     }
+    let mut answers = None;
     if !install.dry_run {
         agent
             .launchd
             .bootstrap(&agent.domain(), &path)
             .map_err(ServiceFailed::Launchctl)?;
+        answers = Some(wait_for_answer(agent, || jobs(&socket).is_some()));
     }
-    report.steps.push(Step::Loaded);
+    report.steps.push(Step::Loaded { answers });
     Ok(Prose::new(report))
+}
+
+/// The most times that install asks a freshly loaded daemon for its jobs,
+/// [`PAUSE`](crate::job::launchd::PAUSE) apart, about two seconds in all.
+const ANSWER_POLLS: u32 = 20;
+
+/// Returns whether `answers` becomes true within [`ANSWER_POLLS`] asks, which
+/// is whether the daemon that launchd started listens on its socket.
+fn wait_for_answer(agent: &LaunchAgent, mut answers: impl FnMut() -> bool) -> bool {
+    for _ in 0..ANSWER_POLLS {
+        if answers() {
+            return true;
+        }
+        agent.launchd.pause();
+    }
+    false
 }
 
 /// Unloads the agent and deletes its plist, or with `dry_run` reports the
@@ -240,6 +263,8 @@ pub fn install(
 pub fn uninstall(
     agent: Option<&LaunchAgent>,
     dry_run: bool,
+    daemon: Option<Counts>,
+    stays: &[PathBuf],
 ) -> Result<Prose<Report>, ServiceFailed> {
     let agent = agent.ok_or(ServiceFailed::Unsupported)?;
     let home = located(agent.home.as_deref(), "the home directory")?;
@@ -250,6 +275,12 @@ pub fn uninstall(
         .is_loaded(&agent.target())
         .map_err(ServiceFailed::Launchctl)?
     {
+        report
+            .steps
+            .push(daemon.map_or(Step::NoCount, |counts| Step::Counted {
+                running: counts.running,
+                waiting: counts.waiting,
+            }));
         if !dry_run {
             agent
                 .launchd
@@ -260,17 +291,26 @@ pub fn uninstall(
     } else {
         report.steps.push(Step::NotLoaded);
     }
-    if !path.exists() {
+    if path.exists() {
+        if !dry_run {
+            std::fs::remove_file(&path).map_err(|error| ServiceFailed::Delete {
+                path: path.clone(),
+                error,
+            })?;
+        }
+        report.steps.push(Step::Deleted { path });
+    } else {
         report.steps.push(Step::Absent { path });
-        return Ok(Prose::new(report));
     }
-    if !dry_run {
-        std::fs::remove_file(&path).map_err(|error| ServiceFailed::Delete {
-            path: path.clone(),
-            error,
-        })?;
+    let paths: Vec<PathBuf> = stays
+        .iter()
+        .cloned()
+        .chain([home.join(report::LOG)])
+        .filter(|stay| stay.exists())
+        .collect();
+    if !paths.is_empty() {
+        report.steps.push(Step::Stays { paths });
     }
-    report.steps.push(Step::Deleted { path });
     Ok(Prose::new(report))
 }
 

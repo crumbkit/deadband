@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crumbkit::{Code, Failure, Field, Prose, Recovery, Run, Sink};
@@ -13,7 +13,7 @@ use super::service::{self, Install, Report, SERVICE_INSTALL, SERVICE_UNINSTALL, 
 use super::{DaemonArgs, Machine, RunArgs};
 use crate::admission::{self, Asked, Notices};
 use crate::client::{self, ANSWER_WITHIN};
-use crate::daemon::note;
+use crate::daemon::{lock_path, note};
 use crate::job;
 use crate::probe::{Probe, child_usage};
 use crate::protocol::Jobs;
@@ -220,8 +220,33 @@ pub(super) fn top<O: Write, W: Write, P: Probe>(
     }
 }
 
+/// Asks the daemon on `socket` for its jobs, or returns `None` when no
+/// daemon answers.
+fn counts(socket: &Path) -> Option<service::Counts> {
+    client::jobs(socket, ANSWER_WITHIN)
+        .ok()
+        .map(|jobs| service::Counts {
+            running: jobs.running.len(),
+            waiting: jobs.waiting.len(),
+        })
+}
+
 /// The question that `deadband service uninstall` asks before it acts.
 const UNINSTALL_QUESTION: &str = "Unload deadband's launchd agent and delete its plist?";
+
+/// Returns the question of `deadband service uninstall`, which starts with
+/// the jobs of the daemon that it stops when `held` has them.
+fn uninstall_question(held: Option<service::Counts>) -> String {
+    match held {
+        Some(counts) => format!(
+            "The daemon has {} running and {} waiting {}. {UNINSTALL_QUESTION}",
+            counts.running,
+            counts.waiting,
+            if counts.waiting == 1 { "job" } else { "jobs" }
+        ),
+        None => UNINSTALL_QUESTION.to_owned(),
+    }
+}
 
 /// Runs `deadband service install|uninstall` and prints the result to
 /// `sink`. Uninstall asks at the terminal when `terminal` is true, and
@@ -241,26 +266,34 @@ pub(super) fn service<O: Write, W: Write, P>(
                 restart: args.restart,
                 dry_run: output.is_dry_run(),
             };
-            // A daemon that does not answer counts as having no jobs.
-            let jobs = |socket: &Path| {
-                client::jobs(socket, ANSWER_WITHIN)
-                    .ok()
-                    .map(|jobs| jobs.running.len() + jobs.waiting.len())
-            };
-            let result = service::install(agent, &install, jobs);
+            let result = service::install(agent, &install, counts);
             crumbkit::finish_to(sink, output, SERVICE_INSTALL, result)
         }
         ServiceCommand::Uninstall(args) => {
+            // The daemon that uninstall stops listens on the machine's
+            // socket, so the question and the report name its jobs.
+            let held = counts(&machine.socket);
+            let question = uninstall_question(held);
             let confirmed = if terminal {
-                output.confirm(args.yes, UNINSTALL_QUESTION)
+                output.confirm(args.yes, &question)
             } else {
-                output.confirm_to(sink, args.yes, UNINSTALL_QUESTION)
+                output.confirm_to(sink, args.yes, &question)
             };
             if let Err(refused) = confirmed {
                 let refused = Err::<Prose<Report>, _>(refused);
                 return crumbkit::finish_to(sink, output, SERVICE_UNINSTALL, refused);
             }
-            let result = service::uninstall(agent, output.is_dry_run());
+            let environment = &machine.environment;
+            let stays: Vec<PathBuf> = [
+                Some(machine.socket.clone()),
+                Some(lock_path(&machine.socket)),
+                environment.history_directory(),
+                environment.config.clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            let result = service::uninstall(agent, output.is_dry_run(), held, &stays);
             crumbkit::finish_to(sink, output, SERVICE_UNINSTALL, result)
         }
     }

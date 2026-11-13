@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::thread;
 
 use super::{Fixed, Test, ask};
-use crate::cli::{EXIT_SERVICE, LaunchAgent};
+use crumbkit::Sink;
+
+use crate::cli::{EXIT_SERVICE, LaunchAgent, run_to};
 use crate::daemon::{Settings, bind, serve};
 use crate::protocol::Reply;
 use crate::testing::{FakeLaunchd, TestHome};
@@ -111,7 +113,59 @@ fn service_install_writes_the_plist_and_prints_one_line_per_step() {
     assert!(plist_path(&home).exists());
     assert_eq!(
         out,
-        "wrote ~/Library/LaunchAgents/io.github.crumbkit.deadband.plist\nloaded io.github.crumbkit.deadband\n"
+        "wrote ~/Library/LaunchAgents/io.github.crumbkit.deadband.plist\nloaded io.github.crumbkit.deadband, daemon does not answer; see ~/Library/Logs/deadband.log\n"
+    );
+}
+
+#[test]
+fn service_uninstall_asks_with_the_jobs_the_daemon_holds_and_prints_them_afterwards() {
+    let home = TestHome::new();
+    write_plist(&home);
+    let launchd = Arc::new(FakeLaunchd::new(true));
+    let test = with_agent(&home, &launchd);
+    test.start_daemon(1);
+    let (_job, _) = ask(&test.machine.socket, "build");
+    let (_waiting, queued) = ask(&test.machine.socket, "lint");
+    assert!(!matches!(queued, Reply::Granted { .. }), "{queued:?}");
+
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let mut sink = Sink::with_input(&mut out, &mut err, std::io::empty(), true);
+    let code = run_to(
+        &mut sink,
+        &test.machine,
+        ["deadband", "service", "uninstall"],
+    );
+    assert_eq!(code, 1);
+    let err = String::from_utf8(err).expect("UTF-8");
+    assert!(
+        err.contains("The daemon has 1 running and 1 waiting job. Unload deadband's launchd agent and delete its plist? [y/N] "),
+        "{err}"
+    );
+
+    let (code, out, err) = test.run(&["service", "uninstall", "--yes", "--no-input"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.starts_with("the daemon has 1 running and 1 waiting job; "),
+        "{out}"
+    );
+}
+
+#[test]
+fn service_uninstall_names_the_socket_and_lock_files_that_stay() {
+    let home = TestHome::new();
+    write_plist(&home);
+    let launchd = Arc::new(FakeLaunchd::new(true));
+    let test = with_agent(&home, &launchd);
+    test.start_daemon(1);
+    let socket = test.machine.socket.display().to_string();
+
+    let (code, out, err) = test.run(&["service", "uninstall", "--yes", "--no-input"]);
+
+    assert_eq!(code, 0, "{err}");
+    let last = out.lines().last().expect("a line");
+    assert!(
+        last.starts_with(&format!("left in place: {socket}, {socket}.lock")),
+        "{out}"
     );
 }
 
@@ -154,8 +208,11 @@ fn service_uninstall_with_yes_unloads_the_agent_and_deletes_the_plist() {
     assert_eq!(code, 0, "{err}");
     assert!(!plist_path(&home).exists());
     assert_eq!(
-        out,
-        "unloaded io.github.crumbkit.deadband\ndeleted ~/Library/LaunchAgents/io.github.crumbkit.deadband.plist\n"
+        out.lines().skip(1).take(2).collect::<Vec<_>>(),
+        [
+            "unloaded io.github.crumbkit.deadband",
+            "deleted ~/Library/LaunchAgents/io.github.crumbkit.deadband.plist"
+        ]
     );
 }
 
