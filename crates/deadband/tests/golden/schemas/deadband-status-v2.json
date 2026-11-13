@@ -445,6 +445,16 @@
           "description": "No plist exists.",
           "type": "string",
           "const": "not_installed"
+        },
+        {
+          "description": "launchd has loaded the agent and no daemon answers, so the daemon\nmay have exited at start; its log says why.",
+          "type": "string",
+          "const": "loaded_silent"
+        },
+        {
+          "description": "launchd could not say whether it loaded the agent, and no daemon\nanswers.",
+          "type": "string",
+          "const": "launchd_unasked"
         }
       ]
     },
@@ -851,7 +861,7 @@
           ]
         },
         "daemon_state": {
-          "description": "Whether the daemon runs, or why it does not: its launchd agent is\nnot installed or not loaded. It is absent when no daemon answers and\ndeadband cannot say why, such as on a platform without launchd.",
+          "description": "Whether the daemon runs, or why it does not: its launchd agent is\nnot installed, not loaded, loaded but silent, or launchd could not be\nasked. It is absent when no daemon answers and deadband cannot say\nwhy, such as on a platform without launchd.",
           "anyOf": [
             {
               "$ref": "#/$defs/DaemonState"

@@ -96,8 +96,9 @@ pub struct Status {
     /// answers.
     pub daemon: Option<Jobs<ShownJob>>,
     /// Whether the daemon runs, or why it does not: its launchd agent is
-    /// not installed or not loaded. It is absent when no daemon answers and
-    /// deadband cannot say why, such as on a platform without launchd.
+    /// not installed, not loaded, loaded but silent, or launchd could not be
+    /// asked. It is absent when no daemon answers and deadband cannot say
+    /// why, such as on a platform without launchd.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon_state: Option<DaemonState>,
 }
@@ -112,6 +113,12 @@ impl fmt::Display for Status {
                 }
                 Some(DaemonState::NotLoaded) => {
                     "daemon: installed but not loaded; run deadband service install"
+                }
+                Some(DaemonState::LoadedSilent) => {
+                    "daemon: loaded but not answering; see ~/Library/Logs/deadband.log"
+                }
+                Some(DaemonState::LaunchdUnasked) => {
+                    "daemon: not running, and launchd could not be asked whether it loaded the agent"
                 }
                 Some(DaemonState::Running) | None => "daemon: not running",
             });

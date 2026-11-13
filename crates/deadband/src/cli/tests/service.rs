@@ -66,14 +66,38 @@ fn status_names_service_install_when_launchd_has_not_loaded_the_plist() {
 }
 
 #[test]
-fn status_says_not_running_when_launchd_has_loaded_the_agent_and_no_daemon_answers() {
+fn status_names_the_log_when_launchd_has_loaded_the_agent_and_no_daemon_answers() {
     let home = TestHome::new();
     write_plist(&home);
     let test = with_agent(&home, &Arc::new(FakeLaunchd::new(true)));
 
     let (_, out, _) = test.run(&["status"]);
 
-    assert!(out.ends_with("daemon: not running\n"), "{out}");
+    assert!(
+        out.ends_with("daemon: loaded but not answering; see ~/Library/Logs/deadband.log\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn status_says_launchd_could_not_be_asked_when_launchctl_fails() {
+    let home = TestHome::new();
+    write_plist(&home);
+    let test = with_agent(&home, &Arc::new(FakeLaunchd::failing(true, "print")));
+
+    let (_, out, _) = test.run(&["status"]);
+
+    assert!(
+        out.ends_with(
+            "daemon: not running, and launchd could not be asked whether it loaded the agent\n"
+        ),
+        "{out}"
+    );
+    let (_, json, _) = test.run(&["status", "--json"]);
+    assert!(
+        json.contains(r#""daemon_state":"launchd_unasked""#),
+        "{json}"
+    );
 }
 
 #[test]
@@ -88,6 +112,11 @@ fn status_with_json_gives_the_daemon_state_of_each_kind() {
     let (_, out, _) = test.run(&["status", "--json"]);
     assert!(out.contains(r#""daemon_state":"not_loaded""#), "{out}");
     assert!(out.contains(r#""daemon":null"#), "{out}");
+
+    *launchd.loaded.lock().expect("the loaded lock") = true;
+    let (_, out, _) = test.run(&["status", "--json"]);
+    assert!(out.contains(r#""daemon_state":"loaded_silent""#), "{out}");
+    *launchd.loaded.lock().expect("the loaded lock") = false;
 
     test.start_daemon(1);
     let (_, out, _) = test.run(&["status", "--json"]);

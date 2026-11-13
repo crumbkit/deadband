@@ -751,7 +751,16 @@ fn state_names_a_missing_plist_and_a_plist_that_launchd_has_not_loaded() {
     );
 
     let loaded = Arc::new(FakeLaunchd::new(true));
-    assert_eq!(state(&agent(&home, &loaded)), None);
+    assert_eq!(
+        state(&agent(&home, &loaded)),
+        Some(DaemonState::LoadedSilent)
+    );
+
+    let failing = Arc::new(FakeLaunchd::failing(true, "print"));
+    assert_eq!(
+        state(&agent(&home, &failing)),
+        Some(DaemonState::LaunchdUnasked)
+    );
 }
 
 #[test]

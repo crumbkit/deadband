@@ -132,20 +132,27 @@ pub enum DaemonState {
     NotLoaded,
     /// No plist exists.
     NotInstalled,
+    /// launchd has loaded the agent and no daemon answers, so the daemon
+    /// may have exited at start; its log says why.
+    LoadedSilent,
+    /// launchd could not say whether it loaded the agent, and no daemon
+    /// answers.
+    LaunchdUnasked,
 }
 
-/// Returns the agent's state when no daemon answers: not installed or not
-/// loaded, or `None` when launchd has loaded it or cannot say.
+/// Returns the agent's state when no daemon answers, or `None` when the
+/// home directory is unknown.
 #[must_use]
 pub fn state(agent: &LaunchAgent) -> Option<DaemonState> {
     let path = plist_path(agent.home.as_deref()?);
     if !path.exists() {
         return Some(DaemonState::NotInstalled);
     }
-    match agent.launchd.is_loaded(&agent.target()) {
-        Ok(false) => Some(DaemonState::NotLoaded),
-        Ok(true) | Err(_) => None,
-    }
+    Some(match agent.launchd.is_loaded(&agent.target()) {
+        Ok(false) => DaemonState::NotLoaded,
+        Ok(true) => DaemonState::LoadedSilent,
+        Err(_) => DaemonState::LaunchdUnasked,
+    })
 }
 
 /// Installs the agent as `install` asks. `jobs` returns the running and
