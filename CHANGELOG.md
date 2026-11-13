@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-13
+
 ### Changed
 
 - A client that does not read the daemon's reply no longer stops admission.
