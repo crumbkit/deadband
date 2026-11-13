@@ -536,6 +536,16 @@ mod reclaim_config {
         }
     }
 
+    /// Runs the `status` command and checks that a daemon answered it. The
+    /// exit code is not checked, because `status` exits 1 when the machine
+    /// reading is incomplete, as it can be on Linux. A daemon answers only
+    /// after it has read its config.
+    fn answered(status: std::process::Command) {
+        let run = output(status);
+        let text = String::from_utf8_lossy(&run.stdout);
+        assert!(text.contains("at most"), "{run:?}");
+    }
+
     #[test]
     fn a_daemon_started_with_its_own_socket_runs_no_reclaimer_from_the_config_file() {
         let config = Config::new("own");
@@ -544,7 +554,7 @@ mod reclaim_config {
         command.env("XDG_CONFIG_HOME", &config.0);
         let mut daemon = Daemon::started(command);
         // The daemon answers a request only after it has read its config.
-        assert!(output(deadband(&socket.0, &["status"])).status.success());
+        answered(deadband(&socket.0, &["status"]));
         let log = daemon.logged();
         assert!(!log.contains("marker"), "{log}");
         assert!(
@@ -573,7 +583,7 @@ mod reclaim_config {
         status
             .env_remove("DEADBAND_SOCKET")
             .env("DEADBAND_SOCKET_DIR", &tmp);
-        assert!(output(status).status.success());
+        answered(status);
         let log = daemon.logged();
         assert!(log.contains("asks marker to reclaim"), "{log}");
     }
