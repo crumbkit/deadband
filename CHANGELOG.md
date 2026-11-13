@@ -8,6 +8,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- A daemon started with `DEADBAND_SOCKET` set ignores `config.toml`, logs one
+  line saying so, and runs no reclaimer and no `on_stuck` command. A reclaim
+  holds a lock on `reclaim.lock` in the state directory while it runs, so
+  daemons of one user reclaim one at a time.
 - `deadband service install` writes and loads the launchd agent that runs
   `deadband daemon` at login and restarts it when it stops, with `TMPDIR`
   and `PATH` set for launchd. It leaves an identical, loaded plist alone. It

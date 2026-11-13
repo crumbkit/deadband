@@ -1,39 +1,9 @@
 //! The rule that says when the daemon starts a reclaim. It reads no clock,
 //! so the tests check each case directly.
 
-use std::fs::{File, TryLockError};
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::{Config, Resource};
-use crate::daemon::take_lock;
-
-/// The name of the lock file in the state directory that one reclaim holds.
-const LOCK_FILE: &str = "reclaim.lock";
-
-/// The lock that lets one reclaim at a time run for a user, whichever
-/// daemons are up. It holds until the value is dropped.
-#[derive(Debug)]
-pub struct ReclaimLock {
-    /// The open lock file, which holds the lock until it is closed.
-    _file: Option<File>,
-}
-
-impl ReclaimLock {
-    /// Takes the lock in `directory` without waiting, and returns `None`
-    /// when another reclaim holds it. A lock file that cannot be made or
-    /// locked holds nothing, and the reclaim runs without a lock.
-    pub fn take(directory: &Path) -> Option<Self> {
-        if std::fs::create_dir_all(directory).is_err() {
-            return Some(Self { _file: None });
-        }
-        match take_lock(&directory.join(LOCK_FILE)) {
-            Ok(file) => Some(Self { _file: Some(file) }),
-            Err(TryLockError::WouldBlock) => None,
-            Err(TryLockError::Error(_)) => Some(Self { _file: None }),
-        }
-    }
-}
 
 /// The longest that the daemon waits between reclaims of one resource
 /// after reclaims that freed nothing. Each such reclaim doubles the wait,
@@ -148,6 +118,18 @@ impl Watch {
         };
     }
 
+    /// Records that the running reclaim did not run at `now` because
+    /// another reclaim held the lock. The resource rests for
+    /// `config.after` and its back-off stays as it was.
+    pub fn skipped(&mut self, now: Instant) {
+        let Some(resource) = self.running.take() else {
+            return;
+        };
+        let track = self.track(resource);
+        track.ended = Some(now);
+        track.short_since = None;
+    }
+
     /// Reports whether the last reclaim of `resource` freed nothing while
     /// it stayed short, so a plan of nothing need not be logged again.
     #[must_use]
@@ -164,21 +146,5 @@ impl Watch {
             Resource::Memory => &mut self.memory,
             Resource::Disk => &mut self.disk,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ReclaimLock;
-
-    #[test]
-    fn a_second_reclaim_finds_the_lock_held_until_the_first_ends() {
-        let directory = std::env::temp_dir().join(format!("db-rl-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).expect("the directory is made");
-        let first = ReclaimLock::take(&directory).expect("the first reclaim takes the lock");
-        assert!(ReclaimLock::take(&directory).is_none());
-        drop(first);
-        assert!(ReclaimLock::take(&directory).is_some());
-        let _ = std::fs::remove_dir_all(&directory);
     }
 }

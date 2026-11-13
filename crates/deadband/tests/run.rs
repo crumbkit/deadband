@@ -547,6 +547,10 @@ mod reclaim_config {
         assert!(output(deadband(&socket.0, &["status"])).status.success());
         let log = daemon.logged();
         assert!(!log.contains("marker"), "{log}");
+        assert!(
+            log.contains("on its own socket, so it reads no config.toml"),
+            "{log}"
+        );
     }
 
     #[test]
@@ -561,6 +565,8 @@ mod reclaim_config {
         command
             .env_remove("DEADBAND_SOCKET")
             .env("TMPDIR", &tmp)
+            .env("HOME", config.0.join("home"))
+            .env("XDG_STATE_HOME", config.0.join("state"))
             .env("XDG_CONFIG_HOME", &config.0);
         let mut daemon = Daemon::started(command);
         let mut status = deadband(std::path::Path::new("unused"), &["status"]);

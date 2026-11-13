@@ -329,9 +329,8 @@ fn sample(
 /// Runs the reclaimers of `config` for `resource` on a thread of their
 /// own, so admission never waits for them, and records each outcome for
 /// `deadband status`. `quiet` says the last reclaim of `resource` freed
-/// nothing. The reclaim holds the lock in `lock_directory` while it runs,
-/// so another daemon of the same user starts none meanwhile; a reclaim that
-/// finds the lock held logs that and frees nothing.
+/// nothing. The reclaim holds the lock in `lock_directory` (the state
+/// directory) while it runs; a daemon that finds it held logs that and ends.
 fn start_reclaim(
     shared: &Shared,
     config: reclaim::Config,
@@ -343,18 +342,13 @@ fn start_reclaim(
     let shared = Arc::clone(shared);
     let log = Arc::clone(log);
     thread::spawn(move || {
-        let _lock = match lock_directory.as_deref().map(ReclaimLock::take) {
-            Some(None) => {
-                note(
-                    &log,
-                    format_args!(
-                        "another daemon is reclaiming, so this daemon starts no reclaim now"
-                    ),
-                );
-                lock(&shared).watch.ended(0, Instant::now());
-                return;
-            }
-            held => held.flatten(),
+        let Some(_lock) = ReclaimLock::take(lock_directory.as_deref()) else {
+            note(
+                &log,
+                format_args!("another daemon is reclaiming, so this daemon starts no reclaim now"),
+            );
+            lock(&shared).watch.skipped(Instant::now());
+            return;
         };
         let freed = reclaim::reclaim(&config, resource, quiet, &log, &mut |reclaimed| {
             lock(&shared).reclaimed = Some(reclaimed);
