@@ -120,7 +120,7 @@ pub(super) fn ask(
             let held = state.queue.held();
             // A client that cannot take this reply has its connection shut
             // down, which the read in `finish` sees.
-            replies.tell(stream, &Reply::Queued { ahead, held });
+            replies.tell(stream, Reply::Queued { ahead, held });
         }
         (id, replies)
     };

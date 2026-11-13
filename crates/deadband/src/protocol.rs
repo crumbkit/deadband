@@ -278,19 +278,10 @@ pub struct StuckJob {
 ///
 /// Returns the error of a write that failed.
 pub fn write_line<T: Serialize>(writer: &mut impl Write, message: &T) -> io::Result<()> {
-    writer.write_all(&line(message)?)?;
-    writer.flush()
-}
-
-/// Returns `message` as the one JSON line that [`write_line`] writes.
-///
-/// # Errors
-///
-/// Returns the error of a message that JSON cannot represent.
-pub(crate) fn line<T: Serialize>(message: &T) -> io::Result<Vec<u8>> {
     let mut line = serde_json::to_vec(message).map_err(io::Error::other)?;
     line.push(b'\n');
-    Ok(line)
+    writer.write_all(&line)?;
+    writer.flush()
 }
 
 /// Reads one JSON line from `reader`, or returns `None` when the peer closed

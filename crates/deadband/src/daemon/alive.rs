@@ -113,16 +113,12 @@ pub(super) fn passing(error: &std::io::Error) -> bool {
 /// and reports whether accepting can proceed. A wait that fails reports
 /// `true`, so the caller accepts and meets the failure there.
 pub(super) fn wait_for_connection(listener: &UnixListener, within: Duration) -> bool {
-    let mut fds = [PollFd::new(listener, PollFlags::IN)];
-    poll(&mut fds, Some(&timespec(within))).map_or(true, |ready| ready > 0)
-}
-
-/// Returns `within` as the timeout that `poll` takes.
-pub(super) fn timespec(within: Duration) -> Timespec {
-    Timespec {
+    let timeout = Timespec {
         tv_sec: i64::try_from(within.as_secs()).unwrap_or(i64::MAX),
         tv_nsec: i64::from(within.subsec_nanos()),
-    }
+    };
+    let mut fds = [PollFd::new(listener, PollFlags::IN)];
+    poll(&mut fds, Some(&timeout)).map_or(true, |ready| ready > 0)
 }
 
 /// A file that the daemon depends on, its socket or its lock file, named by

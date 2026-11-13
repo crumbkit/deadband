@@ -53,8 +53,8 @@ pub use self::settings::{Settings, Watching, default_max_jobs};
 pub const SAMPLE_EVERY: Duration = Duration::from_secs(1);
 
 /// How long the daemon waits for a client to take a reply before it counts
-/// the client as gone. One delivery of grant and queued replies waits at
-/// most this long in all, however many of their clients do not read.
+/// the client as gone. The daemon writes every reply with the queue lock
+/// released, so this wait never holds the lock.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// How long the daemon waits for a new connection's first line before it
