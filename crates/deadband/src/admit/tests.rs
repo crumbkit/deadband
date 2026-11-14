@@ -716,14 +716,14 @@ fn seated_jobs_list_in_the_order_they_started() {
 }
 
 #[test]
-fn the_running_jobs_list_when_they_started() {
+fn the_running_jobs_list_their_numbers_and_when_they_started() {
     let mut queue = Queue::default();
     let limits = limits(2, 16);
     let at = Instant::now();
-    queue.push("job", Lane::Normal);
+    let id = queue.push("job", Lane::Normal);
     admitted(&mut queue, None, &limits, at);
     assert_eq!(
         queue.running_since().collect::<Vec<_>>(),
-        vec![(&"job", at)]
+        vec![(id, &"job", at)]
     );
 }

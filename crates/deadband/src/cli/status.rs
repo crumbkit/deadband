@@ -11,10 +11,10 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::service::{DaemonState, LOG};
-use crate::admit::Lane;
+use crate::admit::{JobId, Lane};
 use crate::name::name;
 use crate::probe::Sample;
-use crate::protocol::{Job, Jobs, Label, Short};
+use crate::protocol::{Job, Jobs, Label, Short, StuckJob};
 use crate::stuck::quiet_text;
 
 /// A job as `deadband status` shows it, which leaves out its command line.
@@ -34,6 +34,11 @@ pub struct ShownJob {
     pub short: Option<Short>,
     /// The process ID of the `deadband run` that asked for the job.
     pub pid: u32,
+    /// The job's number in the daemon's queue, or absent from an older
+    /// daemon. A stuck row with the same number belongs to this job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<u64>")]
+    pub id: Option<JobId>,
     /// The lane the job waits in.
     pub lane: Lane,
     /// Whether the daemon watches this job's process tree.
@@ -57,6 +62,7 @@ impl From<Job> for ShownJob {
             workspace: job.workspace,
             short: job.short,
             pid: job.pid,
+            id: job.id,
             lane: job.lane,
             watched: job.watched,
             cwd: job.cwd,
@@ -65,6 +71,15 @@ impl From<Job> for ShownJob {
 }
 
 impl ShownJob {
+    /// Reports whether `stuck` is this job's stuck row: the numbers match,
+    /// or, from an older daemon that sends no number, the process IDs do.
+    fn is(&self, stuck: &StuckJob) -> bool {
+        match (self.id, stuck.id) {
+            (Some(id), Some(stuck)) => id == stuck,
+            _ => self.pid == stuck.pid,
+        }
+    }
+
     /// Returns the job's name: its workspace and its label, joined.
     fn name(&self) -> String {
         name(self.workspace.as_ref(), &self.label, self.short.as_ref())
@@ -146,7 +161,7 @@ impl fmt::Display for Status {
             jobs.max_jobs
         )?;
         for stuck in &jobs.stuck {
-            let shown = jobs.running.iter().find(|job| job.pid == stuck.pid);
+            let shown = jobs.running.iter().find(|job| job.is(stuck));
             write!(
                 f,
                 "\nstuck: {} (pid {}): no CPU, new process or disk use for {}",
@@ -166,7 +181,7 @@ impl fmt::Display for Status {
         if let (Some(job), Some(hold)) = (jobs.waiting.first(), &jobs.held) {
             write!(f, "\n{} waits because: {hold}", job.name())?;
         }
-        let is_stuck = |job: &&ShownJob| jobs.stuck.iter().any(|stuck| stuck.pid == job.pid);
+        let is_stuck = |job: &&ShownJob| jobs.stuck.iter().any(|stuck| job.is(stuck));
         let (stuck, others): (Vec<_>, Vec<_>) = jobs.running.iter().partition(is_stuck);
         let running = stuck.into_iter().chain(others).map(|job| ("running", job));
         for (state, job) in running.chain(jobs.waiting.iter().map(|job| ("waiting", job))) {

@@ -360,7 +360,7 @@ impl<J> Queue<J> {
     /// `None` when that job does not wait.
     #[must_use]
     pub fn ahead_of(&self, id: JobId) -> Option<usize> {
-        self.waiting_ids().position(|each| each == id)
+        self.waiting_numbered().position(|(each, _)| *each == id)
     }
 
     /// Returns how many waiting jobs start before a job that joins `lane`
@@ -373,9 +373,10 @@ impl<J> Queue<J> {
         }
     }
 
-    /// Returns the numbers of the waiting jobs in the order they start.
-    fn waiting_ids(&self) -> impl Iterator<Item = JobId> + '_ {
-        self.fast.iter().chain(&self.normal).map(|(id, _)| *id)
+    /// Returns the waiting jobs in the order that [`Queue::waiting`] gives,
+    /// each with its number.
+    pub fn waiting_numbered(&self) -> impl Iterator<Item = &(JobId, J)> {
+        self.fast.iter().chain(&self.normal)
     }
 
     /// Returns the running jobs in the order they started.
@@ -383,15 +384,17 @@ impl<J> Queue<J> {
         self.running.iter().map(|each| &each.job)
     }
 
-    /// Returns the running jobs in the order they started, each with when
-    /// it started.
-    pub fn running_since(&self) -> impl Iterator<Item = (&J, Instant)> {
-        self.running.iter().map(|each| (&each.job, each.at))
+    /// Returns the running jobs in the order they started, each with its
+    /// number and when it started.
+    pub fn running_since(&self) -> impl Iterator<Item = (JobId, &J, Instant)> {
+        self.running
+            .iter()
+            .map(|each| (each.id, &each.job, each.at))
     }
 
     /// Returns the waiting jobs in the order they start: the fast lane,
     /// then the normal lane, each oldest first.
     pub fn waiting(&self) -> impl Iterator<Item = &J> {
-        self.fast.iter().chain(&self.normal).map(|(_, job)| job)
+        self.waiting_numbered().map(|(_, job)| job)
     }
 }
