@@ -24,7 +24,7 @@ use schemars::JsonSchema;
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::admit::{Hold, Lane, Threads};
+use crate::admit::{Hold, JobId, Lane, Threads};
 use crate::probe::ChildUsage;
 use crate::reclaim::{Reclaimed, Reclaiming};
 
@@ -87,6 +87,13 @@ pub struct Job {
     /// daemon sends none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short: Option<Short>,
+    /// The job's number in the daemon's queue, which tells apart two jobs
+    /// that report one `pid`. The daemon sets it when it lists the job and
+    /// ignores whatever a client sent. A client and an older daemon send
+    /// none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<u64>")]
+    pub id: Option<JobId>,
 }
 
 /// What the daemon knows of the processes outside the jobs when a job is
@@ -282,6 +289,11 @@ impl<J> Jobs<J> {
 /// A job that has shown no activity for the configured time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StuckJob {
+    /// The number of the running job that is stuck, which that job's row
+    /// also carries. An older daemon sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<u64>")]
+    pub id: Option<JobId>,
     /// The job's label.
     #[schemars(with = "String")]
     pub label: Label,

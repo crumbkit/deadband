@@ -193,7 +193,14 @@ passes no notices and its job is not watched. A daemon restart keeps
 | Stuck | The tree has shown no activity for `stuck_after` | Watching passes `stuck_after` | Activity goes to Watching; `Done` or a closed connection ends the record |
 
 A job that a client does not mark `watched`, or whose command matches
-`stuck_ignore`, has no record. A waiting job has no record.
+`stuck_ignore`, has no record. A waiting job has no record. The daemon
+keys each record by the number its queue gave the job, and the record ends
+when that job leaves the queue. Two jobs that report one process ID, as
+every job of a program that embeds deadband does, each have their own
+record and notice, and a waiting job that leaves ends no other job's record. The
+tests are `two_watched_jobs_reported_with_one_pid_each_get_their_own_stuck_notice`
+and `a_waiting_job_with_the_same_pid_that_leaves_keeps_the_running_jobs_stuck_period`
+in `src/daemon/tests/watch.rs`.
 
 | Crash or fault | Result |
 | --- | --- |

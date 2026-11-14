@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::super::{Log, Settings, Watching, bind, serve};
+use super::timeline::{ended, row, timeline_until};
 use super::{Client, REPLY_WITHIN, SAMPLE_EVERY, job, jobs};
 use crate::admit::{GIB, Threads};
 use crate::probe::{Disk, Pressure, Probe, ProcessUse, Sample, TreeUnreadable, Unreadable};
@@ -556,4 +557,55 @@ fn a_job_that_ends_stops_being_read() {
         let _ = jobs(&path);
     }
     assert!(probe.reads() <= settled);
+}
+
+#[test]
+fn two_watched_jobs_reported_with_one_pid_each_get_their_own_stuck_notice() {
+    let probe = Trees::new(QUIET);
+    let (path, _log) = start(&probe, Options::default());
+    let mut first = ask(&path, watched("first", ROOT));
+    let mut second = ask(&path, watched("second", ROOT));
+    for client in [&mut first, &mut second] {
+        let reply = client.reply();
+        assert!(
+            matches!(reply, Reply::Stuck { again: false, .. }),
+            "{reply:?}"
+        );
+    }
+    let answer = jobs_until(&path, |jobs| jobs.stuck.len() == 2);
+    let running: Vec<_> = answer.running.iter().map(|job| job.id).collect();
+    let stuck: Vec<_> = answer.stuck.iter().map(|job| job.id).collect();
+    assert_eq!(stuck, running);
+    assert_ne!(stuck[0], stuck[1]);
+}
+
+#[test]
+fn a_waiting_job_with_the_same_pid_that_leaves_keeps_the_running_jobs_stuck_period() {
+    let probe = Trees::new(QUIET);
+    let (path, _log) = start(&probe, Options::default());
+    let _runs = ask(&path, watched("runs", ROOT));
+    let _others: Vec<Client> = ["b", "c", "d"]
+        .into_iter()
+        .map(|label| ask(&path, job(label)))
+        .collect();
+    // A period that began at least 200 ms ago cannot be a new track's,
+    // which needs 30 ms of quiet before it opens a period.
+    let old = |timeline: &crate::protocol::Timeline| {
+        row(timeline, "runs")
+            .stuck
+            .first()
+            .is_some_and(|period| period.since.as_millis() >= 200)
+    };
+    timeline_until(&path, old);
+    let mut leaves = Client::connect(&path);
+    leaves.send(&Request::Ask(Job {
+        pid: ROOT,
+        ..job("leaves")
+    }));
+    let reply = leaves.reply();
+    assert!(matches!(reply, Reply::Queued { .. }), "{reply:?}");
+    drop(leaves);
+    let after = timeline_until(&path, |timeline| ended(timeline, "leaves"));
+    assert!(old(&after), "{after:?}");
+    assert!(row(&after, "leaves").stuck.is_empty(), "{after:?}");
 }

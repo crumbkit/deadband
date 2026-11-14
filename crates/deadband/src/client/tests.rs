@@ -37,6 +37,7 @@ fn job() -> Job {
         cwd: None,
         workspace: None,
         short: None,
+        id: None,
     }
 }
 

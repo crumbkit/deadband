@@ -4,8 +4,11 @@
 use serde::{Deserialize, Serialize};
 
 /// The number that the queue gives each job it receives. The daemon keeps
-/// it in memory only, and no message carries it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+/// it in memory only, so a new daemon numbers a job it seats afresh. The
+/// daemon's list of jobs carries it as a JSON number, so a reader can tell
+/// apart two jobs that report one process ID.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct JobId(u64);
 
 impl JobId {
@@ -15,6 +18,12 @@ impl JobId {
         let id = *self;
         self.0 = self.0.wrapping_add(1);
         id
+    }
+
+    /// Returns the number `number`, which a test expects the queue to give.
+    #[cfg(test)]
+    pub(crate) const fn new(number: u64) -> Self {
+        Self(number)
     }
 }
 

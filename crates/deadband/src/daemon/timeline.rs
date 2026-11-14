@@ -7,7 +7,9 @@ use super::{State, Waiter};
 use crate::admit::{JobId, Lane, Threads};
 use crate::history::{Departure, JobLine, Line, MachineLine, Tally, VERSION, now_ms};
 use crate::probe::ChildUsage;
-use crate::protocol::{Ago, Exit, JobRecord, JobState, Jobs, Label, Short, StuckPeriod, Timeline};
+use crate::protocol::{
+    Ago, Exit, Job, JobRecord, JobState, Jobs, Label, Short, StuckPeriod, Timeline,
+};
 use crate::stuck::Period;
 
 /// The most ended jobs that the daemon remembers. The 65th evicts the
@@ -95,13 +97,25 @@ impl Waiter {
 }
 
 impl State {
-    /// Returns the running and waiting jobs.
+    /// Returns the running and waiting jobs, each with its number.
     pub(super) fn jobs(&self) -> Jobs {
         let now = Instant::now();
+        let listed = |id: JobId, each: &Waiter| Job {
+            id: Some(id),
+            ..each.job.clone()
+        };
         Jobs {
             max_jobs: self.settings.max_jobs.get(),
-            running: self.queue.running().map(|each| each.job.clone()).collect(),
-            waiting: self.queue.waiting().map(|each| each.job.clone()).collect(),
+            running: self
+                .queue
+                .running_since()
+                .map(|(id, each, _)| listed(id, each))
+                .collect(),
+            waiting: self
+                .queue
+                .waiting_numbered()
+                .map(|(id, each)| listed(*id, each))
+                .collect(),
             held: self.queue.held(),
             reclaim: self.reclaimed.clone(),
             reclaiming: self
@@ -145,7 +159,7 @@ impl State {
         }
         self.ended.push_back(Ended {
             lane: waiter.job.lane,
-            stuck: self.stuck.end(waiter.job.pid),
+            stuck: self.stuck.end(id),
             label: waiter.job.label,
             workspace: waiter.job.workspace,
             short: waiter.job.short,
@@ -212,12 +226,12 @@ impl State {
     /// running ones, then the waiting ones, then the ended ones, the
     /// newest first.
     pub(super) fn timeline(&self, now: Instant) -> Timeline {
-        let running = self.queue.running_since().map(|(waiter, started)| {
+        let running = self.queue.running_since().map(|(id, waiter, started)| {
             let started = Ago::between(started, now);
             let mut row = waiter.row(now, JobState::Running { started });
             row.stuck = self
                 .stuck
-                .periods(waiter.job.pid)
+                .periods(id)
                 .iter()
                 .map(|period| stuck_period(period, None, now))
                 .collect();
