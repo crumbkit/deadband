@@ -13,11 +13,13 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use super::{Log, Settings, Unbound, bind, default_max_jobs, lock_path, serve};
-use crate::admit::{GIB, Hold, Lane};
+use crate::admit::{GIB, Hold, Lane, Threads};
 use crate::history::FILE;
 use crate::history::tests::{Scratch, handled, lines_of, write_file};
 use crate::probe::{ChildUsage, Disk, Pressure, Probe, Sample, Unreadable};
-use crate::protocol::{Job, JobState, Jobs, Reply, Request, Short, read_line, write_line};
+use crate::protocol::{
+    Ago, Job, JobState, Jobs, Label, Reply, Request, Short, read_line, write_line,
+};
 use crate::testing::{TestSocket, socket_path};
 
 mod alive;
@@ -190,7 +192,7 @@ impl Client {
 
 fn job(label: &str) -> Job {
     Job {
-        label: label.to_owned(),
+        label: Label::new(label),
         pid: 7,
         command: format!("make {label}"),
         lane: Lane::Normal,
@@ -231,7 +233,7 @@ fn queued(ahead: usize, max_jobs: usize) -> Reply {
 /// The grant of a normal-lane job on a daemon of `max_jobs` jobs.
 fn granted(max_jobs: usize) -> Reply {
     Reply::Granted {
-        jobs: CORES / max_jobs,
+        threads: Threads::new(CORES / max_jobs),
     }
 }
 
@@ -240,8 +242,8 @@ fn seat(path: &Path, label: &str, claimed: usize, ran_ms: u64) -> Client {
     let mut client = Client::connect(path);
     client.send(&Request::Seat {
         job: job(label),
-        jobs: claimed,
-        ran_ms,
+        threads: Threads::new(claimed),
+        ran: Ago::from_millis(ran_ms),
     });
     client
 }
@@ -475,7 +477,9 @@ fn a_fast_job_gets_one_more_thread_than_a_normal_job() {
     let (path, _) = start(2, &Dial::new(Pressure::Normal));
     assert_eq!(
         Client::ask_in(&path, "a", Lane::Fast).reply(),
-        Reply::Granted { jobs: 9 }
+        Reply::Granted {
+            threads: Threads::new(9)
+        }
     );
 }
 
@@ -513,7 +517,12 @@ fn with_an_active_priority_file_a_fast_job_takes_the_place_that_normal_jobs_leav
         }
     );
     let mut fast = Client::ask_in(&path, "fast", Lane::Fast);
-    assert_eq!(fast.reply(), Reply::Granted { jobs: 9 });
+    assert_eq!(
+        fast.reply(),
+        Reply::Granted {
+            threads: Threads::new(9)
+        }
+    );
     let _ = std::fs::remove_file(&file);
 }
 
@@ -531,7 +540,12 @@ fn a_waiting_fast_job_starts_before_a_normal_job_that_waited_longer() {
         signal: None,
         usage: None,
     });
-    assert_eq!(fast.reply(), Reply::Granted { jobs: 17 });
+    assert_eq!(
+        fast.reply(),
+        Reply::Granted {
+            threads: Threads::new(17)
+        }
+    );
     fast.send(&Request::Done {
         exit_code: Some(0),
         signal: None,

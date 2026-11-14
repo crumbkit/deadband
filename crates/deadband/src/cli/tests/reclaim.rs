@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crumbkit::Sink;
 
 use super::{REPLY_WITHIN, Test, ask};
-use crate::admit::GIB;
+use crate::admit::{GIB, Threads};
 use crate::cli::{Machine, run_to};
 use crate::daemon::{Settings, bind, serve};
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
@@ -214,7 +214,12 @@ fn a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues() {
         "{log}"
     );
     let (_job, reply) = ask(&test.machine.socket, "build");
-    assert_eq!(reply, Reply::Granted { jobs: 2 });
+    assert_eq!(
+        reply,
+        Reply::Granted {
+            threads: Threads::new(2)
+        }
+    );
 }
 
 #[test]
@@ -257,7 +262,12 @@ fn a_reclaimer_whose_program_is_missing_fails_and_status_names_the_program() {
     );
     assert!(out.contains(&expected), "{out}");
     let (_job, reply) = ask(&test.machine.socket, "build");
-    assert_eq!(reply, Reply::Granted { jobs: 2 });
+    assert_eq!(
+        reply,
+        Reply::Granted {
+            threads: Threads::new(2)
+        }
+    );
 }
 
 #[test]

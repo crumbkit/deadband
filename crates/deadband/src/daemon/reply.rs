@@ -41,14 +41,14 @@ impl State {
             if started.is_empty() {
                 return replies;
             }
-            for (id, jobs) in started {
+            for (id, threads) in started {
                 self.count_started(id);
                 let stream = self
                     .queue
                     .running_job(id)
                     .map(|job| Arc::clone(&job.stream));
                 match stream {
-                    Some(stream) => replies.grant(id, stream, Reply::Granted { jobs }),
+                    Some(stream) => replies.grant(id, stream, Reply::Granted { threads }),
                     None => self.record(id, None, None),
                 }
             }

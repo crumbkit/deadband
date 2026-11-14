@@ -8,8 +8,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::{Lease, Notices, Seat, SeatState, UNWATCHED};
-use crate::admit::Lane;
-use crate::protocol::{Job, Request, read_line};
+use crate::admit::{Lane, Threads};
+use crate::protocol::{Ago, Job, Label, Request, read_line};
 use crate::testing::socket_path;
 
 /// How long a test waits for a line that must arrive.
@@ -17,7 +17,7 @@ const WITHIN: Duration = Duration::from_secs(10);
 
 fn job() -> Job {
     Job {
-        label: "build".to_owned(),
+        label: Label::new("build"),
         pid: 9,
         command: "make".to_owned(),
         lane: Lane::Normal,
@@ -32,8 +32,8 @@ fn job() -> Job {
 fn seat_request() -> Request {
     Request::Seat {
         job: job(),
-        jobs: 1,
-        ran_ms: 0,
+        threads: Threads::new(1),
+        ran: Ago::from_millis(0),
     }
 }
 
@@ -41,7 +41,7 @@ fn seat_request() -> Request {
 fn holding(stream: UnixStream) -> Lease {
     Lease {
         seat: Arc::new(Seat::new(stream)),
-        jobs: 1,
+        threads: Threads::new(1),
     }
 }
 
@@ -149,14 +149,20 @@ fn a_lease_that_cannot_be_watched_says_so_and_the_job_still_ends_with_the_daemon
         let _ = sender.lock().expect("locks").send(line.to_owned());
     });
     crate::spawn::refuse("deadband-lease");
-    let lease = Lease::watched(client, 3, &socket_path(), &job(), Some(&notices));
+    let lease = Lease::watched(
+        client,
+        Threads::new(3),
+        &socket_path(),
+        &job(),
+        Some(&notices),
+    );
     crate::spawn::allow();
     assert_eq!(lines.try_recv().as_deref(), Ok(UNWATCHED));
     assert!(
         lines.try_recv().is_err(),
         "one line says the lease is unwatched"
     );
-    assert_eq!(lease.jobs(), 3);
+    assert_eq!(lease.threads(), Threads::new(3));
     lease.end(Some(0));
     assert_eq!(
         requests(&mut daemon),

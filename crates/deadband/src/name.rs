@@ -8,6 +8,8 @@
 //! that `deadband run` gives when `--label` is absent. A job with no short
 //! command, as from an older daemon, always shows its label.
 
+use crate::protocol::{Label, Short};
+
 #[cfg(test)]
 mod tests;
 
@@ -25,7 +27,10 @@ pub fn shows_label(workspace: Option<&str>, label: &str, short: Option<&str>) ->
 /// the label joined by a middle dot, or the one of them that shows. A job
 /// with no workspace is named by its label.
 #[must_use]
-pub fn name(workspace: Option<&str>, label: &str, short: Option<&str>) -> String {
+pub fn name(workspace: Option<&Label>, label: &Label, short: Option<&Short>) -> String {
+    let workspace = workspace.map(Label::as_str);
+    let label = label.as_str();
+    let short = short.map(Short::as_str);
     match workspace {
         Some(workspace) if workspace != label && shows_label(Some(workspace), label, short) => {
             format!("{workspace} · {label}")

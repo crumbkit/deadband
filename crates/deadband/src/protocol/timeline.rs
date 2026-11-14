@@ -119,6 +119,12 @@ impl Ago {
     pub const fn duration(self) -> Duration {
         Duration::from_millis(self.0)
     }
+
+    /// Returns the age in whole milliseconds.
+    #[must_use]
+    pub const fn as_millis(self) -> u64 {
+        self.0
+    }
 }
 
 /// How a job that started ended.

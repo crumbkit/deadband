@@ -16,11 +16,13 @@ use serde::{Deserialize, Serialize};
 use crate::probe::{Disk, Pressure};
 
 mod hold;
+mod ids;
 #[cfg(test)]
 mod tests;
 
 pub use self::hold::Hold;
 use self::hold::percent;
+pub use self::ids::{JobId, Threads};
 
 /// The bytes in a gibibyte.
 pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -79,13 +81,13 @@ impl Limits {
     /// Returns the threads a job in `lane` gets: the cores divided by the
     /// most jobs, at least 1, and one more in the fast lane.
     #[must_use]
-    pub fn parallelism(&self, lane: Lane) -> usize {
+    pub fn parallelism(&self, lane: Lane) -> Threads {
         let cores = self.cores.map_or(1, NonZeroUsize::get);
         let normal = (cores / self.max_jobs.get()).max(1);
-        match lane {
+        Threads::new(match lane {
             Lane::Fast => normal.saturating_add(1),
             Lane::Normal => normal,
-        }
+        })
     }
 }
 
@@ -97,7 +99,7 @@ pub struct Running {
     /// How many of them run in the waiting job's lane.
     pub in_lane: usize,
     /// The threads of the running jobs that started in the last [`RECENT`].
-    pub recent_jobs: usize,
+    pub recent_threads: usize,
 }
 
 /// Reports whether one more job starts now, or why it waits.
@@ -150,7 +152,7 @@ pub fn admits(reading: Option<&Reading>, running: &Running, limits: &Limits) -> 
             reason = "thread and core counts are far below 2^52, so the conversion is exact"
         )]
         let (projected, cores_f) = (
-            reading.load_1m + running.recent_jobs as f64,
+            reading.load_1m + running.recent_threads as f64,
             cores.get() as f64,
         );
         if projected >= cores_f {
@@ -171,9 +173,6 @@ pub fn disk_critical(disk: &Disk) -> bool {
         || percent(disk.free_bytes, disk.total_bytes) < DISK_CRITICAL_PERCENT
 }
 
-/// The number that the queue gives each job it receives.
-pub type JobId = u64;
-
 /// The waiting jobs in each lane in the order they arrived, and the
 /// running jobs.
 #[derive(Debug)]
@@ -193,7 +192,7 @@ pub struct Queue<J> {
 impl<J> Default for Queue<J> {
     fn default() -> Self {
         Self {
-            next: 0,
+            next: JobId::default(),
             fast: VecDeque::new(),
             normal: VecDeque::new(),
             running: Vec::new(),
@@ -214,14 +213,13 @@ struct Started<J> {
     /// When the job started.
     at: Instant,
     /// The job's threads.
-    jobs: usize,
+    threads: Threads,
 }
 
 impl<J> Queue<J> {
     /// Adds `job` to the end of `lane` and returns its number.
     pub fn push(&mut self, job: J, lane: Lane) -> JobId {
-        let id = self.next;
-        self.next = self.next.wrapping_add(1);
+        let id = self.next.take();
         match lane {
             Lane::Fast => self.fast.push_back((id, job)),
             Lane::Normal => self.normal.push_back((id, job)),
@@ -231,13 +229,19 @@ impl<J> Queue<J> {
 
     /// Adds `job` as a job that already runs since `at`, placed among the
     /// running jobs in start order, and returns its number. The job counts
-    /// at most the threads of one grant in `lane`, whatever `jobs` claims,
+    /// at most the threads of one grant in `lane`, whatever `threads` claims,
     /// and it runs even past `max_jobs`, because it has already started.
-    pub fn seat(&mut self, job: J, lane: Lane, jobs: usize, at: Instant, limits: &Limits) -> JobId {
-        let id = self.next;
-        self.next = self.next.wrapping_add(1);
+    pub fn seat(
+        &mut self,
+        job: J,
+        lane: Lane,
+        threads: Threads,
+        at: Instant,
+        limits: &Limits,
+    ) -> JobId {
+        let id = self.next.take();
         let place = self.running.partition_point(|each| each.at <= at);
-        let jobs = jobs.min(limits.parallelism(lane));
+        let threads = threads.min(limits.parallelism(lane));
         self.running.insert(
             place,
             Started {
@@ -245,7 +249,7 @@ impl<J> Queue<J> {
                 job,
                 lane,
                 at,
-                jobs,
+                threads,
             },
         );
         id
@@ -260,7 +264,7 @@ impl<J> Queue<J> {
         reading: Option<&Reading>,
         limits: &Limits,
         now: Instant,
-    ) -> Vec<(JobId, usize)> {
+    ) -> Vec<(JobId, Threads)> {
         self.held = None;
         let mut started = Vec::new();
         while let Some((lane, hold)) = self.next_lane(reading, limits, now) {
@@ -273,15 +277,15 @@ impl<J> Queue<J> {
                 Lane::Normal => &mut self.normal,
             };
             if let Some((id, job)) = waiting.pop_front() {
-                let jobs = limits.parallelism(lane);
+                let threads = limits.parallelism(lane);
                 self.running.push(Started {
                     id,
                     job,
                     lane,
                     at: now,
-                    jobs,
+                    threads,
                 });
-                started.push((id, jobs));
+                started.push((id, threads));
             }
         }
         started
@@ -296,11 +300,11 @@ impl<J> Queue<J> {
         limits: &Limits,
         now: Instant,
     ) -> Option<(Lane, Option<Hold>)> {
-        let recent_jobs = self
+        let recent_threads = self
             .running
             .iter()
             .filter(|each| now.saturating_duration_since(each.at) < RECENT)
-            .map(|each| each.jobs)
+            .map(|each| each.threads.get())
             .sum();
         let mut first = None;
         for (lane, waiting) in [(Lane::Fast, &self.fast), (Lane::Normal, &self.normal)] {
@@ -310,7 +314,7 @@ impl<J> Queue<J> {
             let running = Running {
                 all: self.running.len(),
                 in_lane: self.running.iter().filter(|each| each.lane == lane).count(),
-                recent_jobs,
+                recent_threads,
             };
             match admits(reading, &running, limits) {
                 Ok(()) => return Some((lane, None)),
@@ -330,9 +334,9 @@ impl<J> Queue<J> {
     }
 
     /// Removes the job numbered `id`, whether it waits or runs, and returns
-    /// it with when it started, which is `None` for a job that still
-    /// waited. Returns `None` when the queue does not hold it.
-    pub fn remove(&mut self, id: JobId) -> Option<(J, Option<Instant>)> {
+    /// it with when it started and its threads, which are `None` for a job
+    /// that still waited. Returns `None` when the queue does not hold it.
+    pub fn remove(&mut self, id: JobId) -> Option<(J, Option<(Instant, Threads)>)> {
         for waiting in [&mut self.fast, &mut self.normal] {
             if let Some(index) = waiting.iter().position(|(each, _)| *each == id) {
                 return waiting.remove(index).map(|(_, job)| (job, None));
@@ -340,7 +344,7 @@ impl<J> Queue<J> {
         }
         let index = self.running.iter().position(|each| each.id == id)?;
         let started = self.running.remove(index);
-        Some((started.job, Some(started.at)))
+        Some((started.job, Some((started.at, started.threads))))
     }
 
     /// Returns the running job numbered `id`.
@@ -350,13 +354,6 @@ impl<J> Queue<J> {
             .iter()
             .find(|each| each.id == id)
             .map(|each| &each.job)
-    }
-
-    /// Returns the threads of the running job numbered `id`.
-    #[must_use]
-    pub fn threads_of(&self, id: JobId) -> Option<usize> {
-        let job = self.running.iter().find(|each| each.id == id)?;
-        Some(job.jobs)
     }
 
     /// Returns how many jobs start before the waiting job numbered `id`, or

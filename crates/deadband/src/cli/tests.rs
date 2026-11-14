@@ -1,7 +1,7 @@
 //! Tests of the `deadband` commands, run against fake probes and real
 //! sockets.
 
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::num::NonZeroUsize;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -13,7 +13,7 @@ use std::time::Duration;
 use crumbkit::Sink;
 
 use super::{EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_FOUND, EXIT_NOT_STARTED, Machine, run_to};
-use crate::admit::{GIB, Hold, Lane};
+use crate::admit::{GIB, Hold, Lane, Threads};
 use crate::daemon::{Log, Settings, bind, serve};
 use crate::environment::Environment;
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
@@ -143,7 +143,7 @@ fn ask(socket: &Path, label: &str) -> (UnixStream, Reply) {
         .set_read_timeout(Some(REPLY_WITHIN))
         .expect("the timeout sets");
     let job = Job {
-        label: label.to_owned(),
+        label: Label::new(label),
         pid: 5,
         command: format!("make {label}"),
         lane: Lane::Normal,
@@ -178,7 +178,12 @@ fn status_lists_the_daemons_running_and_waiting_jobs() {
     let test = Test::new(Fixed);
     test.start_daemon(1);
     let (_first, reply) = ask(&test.machine.socket, "build");
-    assert_eq!(reply, Reply::Granted { jobs: 4 });
+    assert_eq!(
+        reply,
+        Reply::Granted {
+            threads: Threads::new(4)
+        }
+    );
     let (_second, reply) = ask(&test.machine.socket, "tests");
     assert!(matches!(reply, Reply::Queued { ahead: 0, .. }), "{reply:?}");
     let (code, out, err) = test.run(&["status"]);
@@ -199,7 +204,12 @@ fn status_prints_no_reason_once_the_waiting_job_has_started() {
     let test = Test::new(Fixed);
     test.start_daemon(1);
     let (first, reply) = ask(&test.machine.socket, "build");
-    assert_eq!(reply, Reply::Granted { jobs: 4 });
+    assert_eq!(
+        reply,
+        Reply::Granted {
+            threads: Threads::new(4)
+        }
+    );
     let (second, reply) = ask(&test.machine.socket, "tests");
     assert!(matches!(reply, Reply::Queued { ahead: 0, .. }), "{reply:?}");
     let (_, out, _) = test.run(&["status"]);
@@ -207,11 +217,70 @@ fn status_prints_no_reason_once_the_waiting_job_has_started() {
     drop(first);
     let mut reader = BufReader::new(second);
     let granted = read_line::<Reply>(&mut reader).expect("the reply reads");
-    assert_eq!(granted, Some(Reply::Granted { jobs: 4 }));
+    assert_eq!(
+        granted,
+        Some(Reply::Granted {
+            threads: Threads::new(4)
+        })
+    );
     let (code, out, err) = test.run(&["status"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("running: tests"), "{out}");
     assert!(!out.contains("waits because"), "{out}");
+}
+
+#[test]
+fn a_daemon_closes_a_job_line_whose_label_holds_a_newline_and_status_shows_no_forged_row() {
+    let test = Test::new(Fixed);
+    test.start_daemon(1);
+    let mut stream = UnixStream::connect(&test.machine.socket).expect("the daemon accepts");
+    stream
+        .set_read_timeout(Some(REPLY_WITHIN))
+        .expect("the timeout sets");
+    stream
+        .write_all(
+            b"{\"ask\":{\"label\":\"x\\nrunning: forged (pid 1)\",\"pid\":5,\"command\":\"make\"}}\n",
+        )
+        .expect("the line writes");
+    let mut reader = BufReader::new(stream);
+    let reply = read_line::<Reply>(&mut reader).expect("the end reads");
+    assert_eq!(reply, None);
+    let (code, out, err) = test.run(&["status"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.ends_with("daemon: 0 running, 0 waiting, at most 1 at once\n"),
+        "{out}"
+    );
+    assert!(!out.contains("forged"), "{out}");
+}
+
+#[test]
+fn status_prints_a_command_from_an_older_daemon_with_its_control_characters_escaped() {
+    let test = Test::new(Fixed);
+    let forged = Job {
+        command: "make\nrunning: forged (pid 1)\u{1b}[31m".to_owned(),
+        ..listed("build", 11)
+    };
+    let plain = Job {
+        command: "make tests".to_owned(),
+        ..listed("tests", 22)
+    };
+    answer_status(
+        &test,
+        Jobs {
+            running: vec![forged, plain],
+            ..running_jobs()
+        },
+    );
+    let (code, out, err) = test.run(&["status"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.ends_with(
+            "running: build (pid 11): make\\nrunning: forged (pid 1)\\u{1b}[31m\n\
+             running: tests (pid 22): make tests\n"
+        ),
+        "{out}"
+    );
 }
 
 #[test]
@@ -273,7 +342,12 @@ fn run_with_a_daemon_runs_the_command_and_frees_its_place_when_it_ends() {
         listed = crate::client::jobs(&test.machine.socket, REPLY_WITHIN);
     }
     let (_next, reply) = ask(&test.machine.socket, "next");
-    assert_eq!(reply, Reply::Granted { jobs: 4 });
+    assert_eq!(
+        reply,
+        Reply::Granted {
+            threads: Threads::new(4)
+        }
+    );
 }
 
 /// A shell script that exits 0 when the job's parallelism variables all
@@ -370,7 +444,12 @@ fn run_inside_a_granted_job_runs_at_once_without_asking() {
     test.machine.environment.held = true;
     test.start_daemon(1);
     let (_busy, reply) = ask(&test.machine.socket, "busy");
-    assert_eq!(reply, Reply::Granted { jobs: 4 });
+    assert_eq!(
+        reply,
+        Reply::Granted {
+            threads: Threads::new(4)
+        }
+    );
     let (code, _, err) = test.run(&["run", "--", "true"]);
     assert_eq!(code, 0, "{err}");
     assert_eq!(test.log(), "");
@@ -382,7 +461,12 @@ fn run_with_bypass_runs_at_once_without_asking() {
     test.machine.environment.bypass = true;
     test.start_daemon(1);
     let (_busy, reply) = ask(&test.machine.socket, "busy");
-    assert_eq!(reply, Reply::Granted { jobs: 4 });
+    assert_eq!(
+        reply,
+        Reply::Granted {
+            threads: Threads::new(4)
+        }
+    );
     let (code, _, err) = test.run(&["run", "--", "true"]);
     assert_eq!(code, 0, "{err}");
     assert_eq!(test.log(), "");
@@ -393,7 +477,12 @@ fn run_says_in_one_line_why_its_job_waits() {
     let test = Test::new(Fixed);
     test.start_daemon(1);
     let (busy, reply) = ask(&test.machine.socket, "busy");
-    assert_eq!(reply, Reply::Granted { jobs: 4 });
+    assert_eq!(
+        reply,
+        Reply::Granted {
+            threads: Threads::new(4)
+        }
+    );
     thread::scope(|scope| {
         let waiting = scope.spawn(|| test.run(&["run", "--", "true"]));
         let mut listed = crate::client::jobs(&test.machine.socket, REPLY_WITHIN);
@@ -643,7 +732,7 @@ fn answer_status<P>(test: &Test<P>, jobs: Jobs) {
 
 fn listed(label: &str, pid: u32) -> Job {
     Job {
-        label: label.to_owned(),
+        label: Label::new(label),
         pid,
         command: format!("make {label}"),
         lane: Lane::Normal,
@@ -711,9 +800,9 @@ fn status_names_a_stuck_job_as_its_running_line_does() {
         &test,
         Jobs {
             stuck: vec![StuckJob {
-                label: "api-tests".to_owned(),
+                label: Label::new("api-tests"),
                 pid: 22,
-                quiet_seconds: 120,
+                quiet: Duration::from_secs(120),
             }],
             ..shown_jobs()
         },
@@ -783,9 +872,9 @@ fn status_lists_a_stuck_job_first_and_exits_1() {
         &test,
         Jobs {
             stuck: vec![StuckJob {
-                label: "second".to_owned(),
+                label: Label::new("second"),
                 pid: 22,
-                quiet_seconds: 46 * 60,
+                quiet: Duration::from_secs(46 * 60),
             }],
             busiest: Some(OutsideJobs::Busy {
                 name: "syspolicyd".to_owned(),
@@ -876,9 +965,9 @@ fn status_says_when_no_process_outside_the_jobs_is_busy() {
         &test,
         Jobs {
             stuck: vec![StuckJob {
-                label: "first".to_owned(),
+                label: Label::new("first"),
                 pid: 11,
-                quiet_seconds: 6 * 60,
+                quiet: Duration::from_secs(6 * 60),
             }],
             busiest: Some(OutsideJobs::Quiet),
             ..running_jobs()
@@ -918,9 +1007,9 @@ fn status_as_json_lists_the_stuck_job_and_its_failure_code() {
         &test,
         Jobs {
             stuck: vec![StuckJob {
-                label: "second".to_owned(),
+                label: Label::new("second"),
                 pid: 22,
-                quiet_seconds: 120,
+                quiet: Duration::from_secs(120),
             }],
             ..running_jobs()
         },

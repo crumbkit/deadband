@@ -4,7 +4,7 @@
 use std::time::{Instant, SystemTime};
 
 use super::{State, Waiter};
-use crate::admit::{JobId, Lane};
+use crate::admit::{JobId, Lane, Threads};
 use crate::history::{Departure, JobLine, Line, MachineLine, Tally, VERSION, now_ms};
 use crate::probe::ChildUsage;
 use crate::protocol::{Ago, Exit, JobRecord, JobState, Jobs, Label, Short, StuckPeriod, Timeline};
@@ -83,7 +83,7 @@ impl Waiter {
     /// Returns the row at `now` of the job while it waits or runs.
     fn row(&self, now: Instant, state: JobState) -> JobRecord {
         JobRecord {
-            label: self.label.clone(),
+            label: self.job.label.clone(),
             workspace: self.job.workspace.clone(),
             short: self.job.short.clone(),
             lane: self.job.lane,
@@ -119,19 +119,19 @@ impl State {
     /// when the job's client could not take its grant. A job that the queue
     /// no longer holds is recorded already, so nothing happens.
     pub(super) fn record(&mut self, id: JobId, exit: Option<Exit>, usage: Option<ChildUsage>) {
-        let threads = self.queue.threads_of(id);
         let Some((waiter, started)) = self.queue.remove(id) else {
             return;
         };
         let tally = self.tallies.remove(&id);
         let ended = Instant::now();
-        let run = started.zip(exit);
+        let threads = started.map(|(_, threads)| threads);
+        let run = started.map(|(at, _)| at).zip(exit);
         if let (Some(recorder), Some(arrival)) = (&self.recorder, waiter.arrival) {
             let departure = Departure {
-                label: waiter.label.clone(),
+                label: waiter.job.label.clone(),
                 lane: waiter.job.lane,
                 ahead: waiter.ahead,
-                threads: run.and(threads),
+                threads: run.and(threads).map(Threads::get),
                 ran: run.map(|(at, _)| ended.saturating_duration_since(at)),
                 exit: run.map(|(_, exit)| exit),
                 usage,
@@ -146,7 +146,7 @@ impl State {
         self.ended.push_back(Ended {
             lane: waiter.job.lane,
             stuck: self.stuck.end(waiter.job.pid),
-            label: waiter.label,
+            label: waiter.job.label,
             workspace: waiter.job.workspace,
             short: waiter.job.short,
             queued: waiter.queued,

@@ -365,7 +365,7 @@ fn try_ask(
     write_line(&mut stream, &Request::Ask(job.clone())).map_err(|_| Unasked::Closed)?;
     let mut reader = BufReader::new(stream.try_clone().map_err(garbled)?);
     match reply(&mut reader, answer_within)? {
-        Reply::Granted { jobs } => return Ok(Lease::watched(stream, jobs, path, job, notices)),
+        Reply::Granted { threads: n } => return Ok(Lease::watched(stream, n, path, job, notices)),
         Reply::Queued { ahead, held } => {
             *was_queued = true;
             if let Some(queued) = queued.take() {
@@ -380,7 +380,7 @@ fn try_ask(
     // that follows always waits without a deadline.
     let _ = stream.set_read_timeout(None);
     match reply(&mut reader, answer_within)? {
-        Reply::Granted { jobs } => Ok(Lease::watched(stream, jobs, path, job, notices)),
+        Reply::Granted { threads } => Ok(Lease::watched(stream, threads, path, job, notices)),
         _ => Err(wrong_reply()),
     }
 }

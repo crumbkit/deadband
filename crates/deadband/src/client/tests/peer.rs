@@ -11,6 +11,7 @@ use std::thread::{self, JoinHandle};
 use rustix::process::getuid;
 
 use super::{ANSWER_WITHIN, job, scripted};
+use crate::admit::Threads;
 use crate::client::{
     Admission, Unasked, ask_checked, check_directory, connect_checked, jobs_checked, peer_uid,
 };
@@ -66,7 +67,9 @@ fn a_daemon_of_another_user_is_not_sent_the_command_line_and_the_job_starts() {
 
 #[test]
 fn a_daemon_of_the_same_user_is_sent_the_command_line_and_grants_the_job() {
-    let (path, received) = scripted(vec![Reply::Granted { jobs: 1 }]);
+    let (path, received) = scripted(vec![Reply::Granted {
+        threads: Threads::new(1),
+    }]);
     let admission = ask_checked(&path, &job(), ANSWER_WITHIN, |_, _| {}, None, same);
     assert!(matches!(admission, Admission::Granted(_)), "{admission:?}");
     assert_eq!(
