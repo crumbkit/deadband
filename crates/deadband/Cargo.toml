@@ -29,11 +29,11 @@ clap = { version = "4.6.7", default-features = false, features = ["std", "derive
 # derive feature writes each failure type's `Failure` impl from attributes,
 # and the complete feature answers a shell's completion request and gives
 # `deadband completion install`, `check` and `print`.
-crumbkit = { version = "0.3.1", features = ["derive", "complete"] }
+crumbkit = { version = "0.5.0", features = ["derive", "complete"] }
 # crumbkit-skills gives the `deadband` command `skills install`, `skills check`
 # and `skills print`, which install the agent skill that deadband embeds into
 # the agent skills directories and check the installed copies.
-crumbkit-skills = "0.3.1"
+crumbkit-skills = "0.5.0"
 # serde and schemars derive the JSON form and the JSON Schema of the sample
 # that `deadband status --json` prints. crumbkit already depends on both.
 serde = { version = "1.0.229", default-features = false, features = ["std", "derive"] }
@@ -91,7 +91,7 @@ libc = "0.2.191"
 # crumbkit-test checks the command's tool record, effects, documents,
 # schemas, exit codes, failure codes and recoveries against crumbkit's
 # conventions.
-crumbkit-test = "0.3"
+crumbkit-test = "0.5.0"
 
 [lints]
 workspace = true

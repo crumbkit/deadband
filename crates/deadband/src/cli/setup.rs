@@ -11,9 +11,7 @@ use crumbkit::completion::{
     CompletionInstall, CompletionPrint,
 };
 use crumbkit::{Run, Sink};
-use crumbkit_skills::{
-    SKILLS_CHECK, SKILLS_INSTALL, SKILLS_PRINT, Skill, SkillsCheck, SkillsInstall,
-};
+use crumbkit_skills::Skill;
 
 use super::Cli;
 
@@ -25,18 +23,6 @@ pub const SKILL: Skill = Skill::new(
     include_str!("../../skill/SKILL.md"),
 );
 
-/// The commands for deadband's agent skill.
-#[derive(Debug, Subcommand)]
-pub enum SkillsCommand {
-    /// Install deadband's skill into each agent skills directory that exists.
-    Install(SkillsInstall),
-    /// Check that each installed copy of deadband's skill matches this
-    /// deadband.
-    Check(SkillsCheck),
-    /// Print deadband's skill.
-    Print,
-}
-
 /// The commands for deadband's shell completion.
 #[derive(Debug, Subcommand)]
 pub enum CompletionCommand {
@@ -47,29 +33,6 @@ pub enum CompletionCommand {
     Check(CompletionCheck),
     /// Print deadband's completion registration script for a shell.
     Print(CompletionPrint),
-}
-
-/// Runs `deadband skills install|check|print` and prints the result to
-/// `sink`.
-pub(super) fn skills<O: Write, W: Write>(
-    sink: &mut Sink<O, W>,
-    output: Run,
-    command: &SkillsCommand,
-) -> u8 {
-    match command {
-        SkillsCommand::Install(args) => {
-            let result = Ok::<_, crumbkit::Error>(crumbkit_skills::install(&SKILL, args));
-            crumbkit::finish_to(sink, output, SKILLS_INSTALL, result)
-        }
-        SkillsCommand::Check(args) => {
-            let result = Ok::<_, crumbkit::Error>(crumbkit_skills::check(&SKILL, args));
-            crumbkit::finish_to(sink, output, SKILLS_CHECK, result)
-        }
-        SkillsCommand::Print => {
-            let result = Ok::<_, crumbkit::Error>(crumbkit_skills::print(&SKILL));
-            crumbkit::finish_to(sink, output, SKILLS_PRINT, result)
-        }
-    }
 }
 
 /// Runs `deadband completion install|check|print` and prints the result to

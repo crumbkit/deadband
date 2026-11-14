@@ -32,11 +32,16 @@ pub const JOB_STUCK: Code = Code::new("deadband", "job", "stuck");
 pub const JOB_UNREADABLE: Code = Code::new("deadband", "job", "unreadable");
 
 /// What makes `status` exit 1 about the daemon's jobs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Failure)]
 pub(super) enum Flagged {
     /// This many jobs show no activity.
+    #[failure(
+        code = JOB_STUCK,
+        no_next_step = "deadband leaves a stuck job running; a job that waits on purpose belongs in stuck_ignore in config.toml"
+    )]
     Stuck(usize),
     /// The daemon could not read the jobs' processes.
+    #[failure(code = JOB_UNREADABLE, recovery = Recovery::Retry)]
     Unreadable,
 }
 
@@ -65,24 +70,6 @@ impl fmt::Display for Flagged {
 
 impl std::error::Error for Flagged {}
 
-impl Failure for Flagged {
-    fn code(&self) -> &'static Code {
-        match self {
-            Self::Stuck(_) => &JOB_STUCK,
-            Self::Unreadable => &JOB_UNREADABLE,
-        }
-    }
-
-    fn recovery(&self) -> Recovery {
-        match self {
-            Self::Stuck(_) => Recovery::none(
-                "deadband leaves a stuck job running; a job that waits on purpose belongs in stuck_ignore in config.toml",
-            ),
-            Self::Unreadable => Recovery::Retry,
-        }
-    }
-}
-
 /// A command given to `run` that could not start.
 #[derive(Debug)]
 pub struct NotStarted {
@@ -106,11 +93,11 @@ impl fmt::Display for NotStarted {
 impl std::error::Error for NotStarted {}
 
 impl Failure for NotStarted {
-    fn code(&self) -> &'static Code {
+    fn code(&self) -> Code<'_> {
         if self.error.kind() == io::ErrorKind::NotFound {
-            &JOB_NOT_FOUND
+            JOB_NOT_FOUND
         } else {
-            &JOB_NOT_STARTED
+            JOB_NOT_STARTED
         }
     }
 
