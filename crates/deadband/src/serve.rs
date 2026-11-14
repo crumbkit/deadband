@@ -129,6 +129,11 @@ pub fn run_daemon<P: Probe + Clone + Send + 'static>(
 ) -> Unbound {
     let max_jobs = max_jobs.unwrap_or_else(|| daemon::default_max_jobs(machine.cores));
     daemon::raise_descriptor_limit();
+    if let Some(directory) = &machine.socket_directory
+        && let Err(unbound) = daemon::private_directory(directory)
+    {
+        return unbound;
+    }
     match daemon::bind(&machine.socket) {
         Ok(bound) => {
             note(

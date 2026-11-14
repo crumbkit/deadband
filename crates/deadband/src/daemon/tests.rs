@@ -21,6 +21,7 @@ use crate::protocol::{Job, JobState, Jobs, Reply, Request, Short, read_line, wri
 use crate::testing::{TestSocket, socket_path};
 
 mod alive;
+mod private;
 mod reply;
 mod shown;
 mod timeline;

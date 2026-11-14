@@ -144,6 +144,10 @@ pub struct Machine<P> {
     pub probe: P,
     /// The path of the daemon's socket.
     pub socket: PathBuf,
+    /// The directory that deadband owns for the socket, which the daemon
+    /// makes and checks before it listens, or `None` when a variable or the
+    /// per-user directory named the socket.
+    pub socket_directory: Option<PathBuf>,
     /// Where the daemon and `run` write their lines.
     pub log: Log,
     /// The number of logical cores, or `None` when it is unknown.
@@ -159,6 +163,7 @@ impl<P: fmt::Debug> fmt::Debug for Machine<P> {
         f.debug_struct("Machine")
             .field("probe", &self.probe)
             .field("socket", &self.socket)
+            .field("socket_directory", &self.socket_directory)
             .field("cores", &self.cores)
             .field("environment", &self.environment)
             .field("service", &self.service)

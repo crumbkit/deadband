@@ -4,13 +4,13 @@
 use std::fmt;
 use std::fs::{File, TryLockError};
 use std::io;
-use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
 use crumbkit::{Code, Failure};
-use rustix::fs::Mode;
-use rustix::process::{Resource, Rlimit, getrlimit, setrlimit, umask};
+use rustix::fs::{Mode, OFlags};
+use rustix::process::{Resource, Rlimit, getrlimit, getuid, setrlimit, umask};
 
 /// The code of a refusal to start a daemon while another one holds the
 /// same socket.
@@ -18,6 +18,9 @@ pub const DAEMON_RUNNING: Code = Code::new("deadband", "daemon", "running");
 
 /// The code of a socket that the daemon could not listen on.
 pub const SOCKET_UNUSABLE: Code = Code::new("deadband", "socket", "unusable");
+
+/// The code of a socket directory that deadband refuses to listen in.
+pub const SOCKET_DIRECTORY: Code = Code::new("deadband", "socket", "directory");
 
 /// The file mode bits that the umask clears while the daemon makes its
 /// socket and lock file: every bit for the group and for others.
@@ -46,6 +49,19 @@ pub enum Unbound {
     NotSocket {
         /// The socket's path.
         path: PathBuf,
+    },
+    /// The directory that deadband owns for the fallback socket is not one
+    /// only this user can use, so the daemon does not listen in it.
+    #[failure(
+        code = SOCKET_DIRECTORY,
+        hint = "set XDG_RUNTIME_DIR or DEADBAND_SOCKET_DIR to a directory you own; only the directory's owner or root can remove this one",
+        field(path = path.to_string_lossy())
+    )]
+    Directory {
+        /// The directory's path.
+        path: PathBuf,
+        /// What is wrong with it.
+        fault: DirectoryFault,
     },
     /// The socket or its lock could not be made.
     #[failure(
@@ -84,6 +100,11 @@ impl fmt::Display for Unbound {
                 "{} exists and is not a socket, so deadband does not replace it",
                 path.display()
             ),
+            Self::Directory { path, fault } => write!(
+                f,
+                "{} {fault}, so deadband does not listen in it",
+                path.display()
+            ),
             Self::Socket { path, error } => write!(
                 f,
                 "deadband could not listen on {}: {error}",
@@ -97,6 +118,87 @@ impl fmt::Display for Unbound {
 }
 
 impl std::error::Error for Unbound {}
+
+/// Why a directory that deadband owns for its socket is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectoryFault {
+    /// What is at the path is not a directory. A symlink counts, because it
+    /// could lead anywhere.
+    NotDirectory,
+    /// Another user owns the directory.
+    Owner {
+        /// The uid of the owner.
+        owner: u32,
+    },
+    /// Other users can enter or change the directory.
+    Mode {
+        /// The directory's permission bits.
+        mode: u32,
+    },
+}
+
+impl fmt::Display for DirectoryFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotDirectory => f.write_str("is not a directory"),
+            Self::Owner { owner } => write!(f, "belongs to uid {owner}"),
+            Self::Mode { mode } => write!(f, "has mode {mode:04o}, which lets others use it"),
+        }
+    }
+}
+
+/// The mode of the directory that deadband makes for its socket.
+const DIRECTORY_MODE: u32 = 0o700;
+
+/// Makes `directory` with mode 0700 when it does not exist, and checks that
+/// it is a directory (not a symlink) that this user owns and that no one
+/// else can enter or change. A directory that fails the check is left as
+/// it is, and the daemon does not listen in it.
+///
+/// # Errors
+///
+/// Returns [`Unbound::Directory`] when the directory is not safe, and
+/// [`Unbound::Socket`] when it cannot be made or read.
+pub(crate) fn private_directory(directory: &Path) -> Result<(), Unbound> {
+    private_directory_as(directory, getuid().as_raw())
+}
+
+/// Checks the directory as [`private_directory`] does for the user whose
+/// uid is `uid`.
+pub(crate) fn private_directory_as(directory: &Path, uid: u32) -> Result<(), Unbound> {
+    let failed = |error| Unbound::Socket {
+        path: directory.to_owned(),
+        error,
+    };
+    match std::fs::DirBuilder::new()
+        .mode(DIRECTORY_MODE)
+        .create(directory)
+    {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(failed(error)),
+    }
+    let metadata = std::fs::symlink_metadata(directory).map_err(failed)?;
+    let fault = if !metadata.is_dir() {
+        Some(DirectoryFault::NotDirectory)
+    } else if metadata.uid() != uid {
+        Some(DirectoryFault::Owner {
+            owner: metadata.uid(),
+        })
+    } else if metadata.mode() & 0o077 != 0 {
+        Some(DirectoryFault::Mode {
+            mode: metadata.mode() & 0o7777,
+        })
+    } else {
+        None
+    };
+    fault.map_or(Ok(()), |fault| {
+        Err(Unbound::Directory {
+            path: directory.to_owned(),
+            fault,
+        })
+    })
+}
 
 /// A listening socket and the lock that keeps a second daemon off it. The
 /// lock holds until the value is dropped.
@@ -121,24 +223,38 @@ pub fn lock_path(path: &Path) -> PathBuf {
 /// until the returned file is closed. The daemon's socket and the writer of
 /// the job history both lock through this function.
 ///
+/// The open does not follow a symlink at `path`, and the opened file must
+/// belong to the caller, so another user cannot plant a link or a file that
+/// makes the daemon lock or create something of theirs.
+///
 /// # Errors
 ///
 /// Returns [`TryLockError::WouldBlock`] when another open file holds the
 /// lock, and [`TryLockError::Error`] when the file cannot be opened or
-/// locked.
+/// locked, is a symlink, or belongs to another user.
 pub(crate) fn take_lock(path: &Path) -> Result<File, TryLockError> {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "crates/deadband/src/daemon/bind.rs opens a lock file, which holds no data, so it needs no atomic writer"
-    )]
-    let mut options = std::fs::OpenOptions::new();
-    let lock = options
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(path)
-        .map_err(TryLockError::Error)?;
+    take_lock_as(path, getuid().as_raw())
+}
+
+/// Takes the lock as [`take_lock`] does for the user whose uid is `uid`.
+pub(crate) fn take_lock_as(path: &Path, uid: u32) -> Result<File, TryLockError> {
+    let opened = rustix::fs::open(
+        path,
+        OFlags::WRONLY | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::RUSR | Mode::WUSR,
+    )
+    .map_err(|errno| TryLockError::Error(io::Error::from(errno)))?;
+    let lock = File::from(opened);
+    let owner = lock.metadata().map_err(TryLockError::Error)?.uid();
+    if owner != uid {
+        return Err(TryLockError::Error(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "{} belongs to uid {owner}, not to this user",
+                path.display()
+            ),
+        )));
+    }
     #[expect(
         clippy::disallowed_methods,
         reason = "crates/deadband/src/daemon/bind.rs takes each lock without waiting, so the lock needs no deadline"

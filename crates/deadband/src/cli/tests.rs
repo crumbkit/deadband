@@ -84,6 +84,7 @@ impl<P: Probe + Clone + Send + 'static> Test<P> {
         let machine = Machine {
             probe,
             socket: socket.to_path_buf(),
+            socket_directory: None,
             log: shared,
             cores: NonZeroUsize::new(4),
             environment: Environment::default(),
@@ -498,6 +499,60 @@ fn daemon_exits_4_with_socket_unusable_when_a_file_that_is_not_a_socket_holds_it
     assert_eq!(code, EXIT_DAEMON, "{err}");
     assert_eq!(out, "");
     assert!(err.contains("code:  deadband::socket::unusable"), "{err}");
+}
+
+#[test]
+fn daemon_exits_4_with_socket_directory_when_the_directory_it_owns_lets_others_in() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = crate::history::tests::Scratch::new();
+    let directory = scratch.path().join("deadband");
+    std::fs::create_dir(&directory).expect("the directory is made");
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o777))
+        .expect("the mode is set");
+    let test = Test::new(Fixed);
+    let machine = Machine {
+        probe: Fixed,
+        socket: test.machine.socket.clone(),
+        socket_directory: Some(directory),
+        log: test.machine.log.clone(),
+        cores: test.machine.cores,
+        environment: test.machine.environment.clone(),
+        service: None,
+    };
+    // A daemon that wrongly accepted the directory would serve for ever, so
+    // the command runs in a thread and the test waits for its end with a
+    // bound that turns that hang into a failure.
+    let (ended, ending) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_to(
+            &mut Sink::new(&mut out, &mut err),
+            &machine,
+            ["deadband", "daemon"],
+        );
+        let _ = ended.send((code, out, err));
+    });
+    let (code, out, err) = ending
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the daemon refused the directory and ended");
+    let err = String::from_utf8(err).expect("UTF-8");
+    assert_eq!(code, EXIT_DAEMON, "{err}");
+    assert!(out.is_empty());
+    assert!(err.contains("code:  deadband::socket::directory"), "{err}");
+}
+
+#[test]
+fn daemon_goes_on_to_the_socket_when_the_directory_it_owns_is_private() {
+    let scratch = crate::history::tests::Scratch::new();
+    let directory = scratch.path().join("deadband");
+    let mut test = Test::new(Fixed);
+    test.start_daemon(1);
+    test.machine.socket_directory = Some(directory.clone());
+    let (code, _, err) = test.run(&["daemon"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("code:  deadband::daemon::running"), "{err}");
+    assert!(directory.is_dir(), "the daemon made the directory");
 }
 
 #[cfg(feature = "tui")]

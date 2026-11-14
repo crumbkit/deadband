@@ -19,6 +19,8 @@ use crate::protocol::{
 };
 use crate::testing::{TestSocket, socket_path};
 
+mod peer;
+
 /// How long the tests let a scripted daemon take to answer.
 const ANSWER_WITHIN: Duration = Duration::from_secs(10);
 

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(target_os = "macos")]
 #[expect(
     unsafe_code,
-    reason = "crates/deadband/src/probe/macos.rs calls getloadavg, sysctlbyname, libproc and getrusage; rust-standards.toml's unsafe decision states its invariant"
+    reason = "crates/deadband/src/probe/macos.rs calls getloadavg, sysctlbyname, libproc, getrusage, confstr and getpeereid; rust-standards.toml's unsafe decision states its invariant"
 )]
 mod macos;
 // The parsing of the sysctl values runs on every platform, so the tests
@@ -134,6 +134,16 @@ pub fn child_usage() -> Option<ChildUsage> {
 #[must_use]
 pub fn user_temp_dir() -> Option<std::path::PathBuf> {
     macos::user_temp_dir()
+}
+
+/// Returns the effective uid of the process on the other end of `stream`.
+///
+/// # Errors
+///
+/// Returns the error of `getpeereid`.
+#[cfg(target_os = "macos")]
+pub(crate) fn peer_uid(stream: &std::os::unix::net::UnixStream) -> io::Result<u32> {
+    macos::peer_uid(stream)
 }
 
 /// Returns `None`, because only macOS has a per-user directory apart from

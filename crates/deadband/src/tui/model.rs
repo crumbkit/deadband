@@ -209,7 +209,11 @@ impl Model {
         let absence = match unasked {
             Unasked::NotRunning { .. } => Some(Absence::NotRunning),
             Unasked::Closed => Some(Absence::MaybeOlder),
-            Unasked::Unreachable { .. } | Unasked::Silent { .. } | Unasked::Garbled { .. } => None,
+            Unasked::Unreachable { .. }
+            | Unasked::Foreign { .. }
+            | Unasked::Directory { .. }
+            | Unasked::Silent { .. }
+            | Unasked::Garbled { .. } => None,
         };
         self.failed = Some(match absence {
             Some(absence) => {

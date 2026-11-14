@@ -8,7 +8,8 @@
 //! `mach_timebase_info`, `getrusage` and `confstr` only read, and write only
 //! into a buffer that this module owns. `confstr` is first asked for the
 //! length with a null buffer of length 0, then fills a buffer of exactly that
-//! length.
+//! length. `getpeereid` receives a socket's descriptor and pointers to one
+//! `uid_t` and one `gid_t` that this module owns, and it only reads.
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
@@ -74,6 +75,24 @@ pub(super) fn user_temp_dir() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(std::ffi::OsString::from_vec(
         buffer,
     )))
+}
+
+/// Returns the effective uid of the process on the other end of `stream`,
+/// which `getpeereid` reads from the kernel.
+pub(super) fn peer_uid(stream: &std::os::unix::net::UnixStream) -> io::Result<u32> {
+    use std::os::fd::AsRawFd as _;
+
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+    // SAFETY: `uid` and `gid` are one `uid_t` and one `gid_t`, which is what
+    // getpeereid fills, and the descriptor stays open for the call because
+    // `stream` is borrowed.
+    let status = unsafe { libc::getpeereid(stream.as_raw_fd(), &raw mut uid, &raw mut gid) };
+    if status == 0 {
+        Ok(uid)
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 /// Returns what the kernel reports of this process's waited-for children,
