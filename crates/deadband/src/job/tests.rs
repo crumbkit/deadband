@@ -347,7 +347,7 @@ mod reclaimer {
     use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 
     use crate::job::CommandLine;
-    use crate::job::reclaimer::{Ended, run, seam};
+    use crate::job::reclaimer::{Ended, delay_reading, run};
 
     fn sh(script: &str) -> CommandLine {
         CommandLine::of(&["/bin/sh", "-c", script])
@@ -387,9 +387,9 @@ mod reclaimer {
     fn a_reclaimer_that_writes_64_kib_and_exits_at_once_yields_its_whole_report_when_reading_runs_late()
      {
         let command = sh("head -c 65536 /dev/zero | tr '\\0' a");
-        seam::delay_reading(Duration::from_secs(1));
+        delay_reading(Duration::from_secs(1));
         let ended = run(&command, &[], Duration::from_secs(30), || {});
-        seam::delay_reading(Duration::ZERO);
+        delay_reading(Duration::ZERO);
         let Ended::Exited { code, stdout } = ended.expect("the reclaimer starts and is waited for")
         else {
             panic!("the reclaimer exits within its deadline");
@@ -463,16 +463,13 @@ mod reclaimer {
     }
 
     #[test]
-    fn a_reclaimer_whose_reading_thread_cannot_start_still_has_its_output_kept() {
+    fn a_reclaimer_whose_reading_thread_cannot_start_does_not_start_and_reports_the_error() {
+        let started = Background::new();
+        let script = format!("touch '{}'", started.0.display());
         crate::spawn::refuse("deadband-reclaimer-read");
-        let ended = run(&sh("echo kept"), &[], Duration::from_secs(30), || {});
+        let ended = run(&sh(&script), &[], Duration::from_secs(30), || {});
         crate::spawn::allow();
-        assert_eq!(
-            ended.expect("the reclaimer starts and is waited for"),
-            Ended::Exited {
-                code: Some(0),
-                stdout: b"kept\n".to_vec()
-            }
-        );
+        assert!(ended.is_err(), "{ended:?}");
+        assert!(!started.0.exists(), "the reclaimer started");
     }
 }

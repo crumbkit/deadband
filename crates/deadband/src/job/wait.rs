@@ -42,8 +42,9 @@ pub(super) enum Waited<T> {
 /// whether to keep waiting for the program to exit.
 ///
 /// What `streams` returns is dropped once the program has been reaped when
-/// this call has already returned, and when the waiting thread panics, so a
-/// guard that it holds is released on every path.
+/// this call has already returned, and before this call returns when the
+/// waiting thread or the program cannot start, so a guard that it holds is
+/// released on every path.
 ///
 /// # Errors
 ///
@@ -161,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn a_deadline_that_stops_waiting_returns_while_the_program_still_runs() {
+    fn a_deadline_that_stops_waiting_returns_while_the_stream_handling_still_holds_the_program() {
         let (release, released) = std::sync::mpsc::channel::<()>();
         let waited = start_and_wait(
             "deadband-test-wait",

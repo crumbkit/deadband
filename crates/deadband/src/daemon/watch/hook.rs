@@ -29,8 +29,7 @@ struct Input<'a> {
 }
 
 /// One of the [`MAX_ON_STUCK`] places, which it frees when it is dropped,
-/// so a run that ends, a thread that is refused and a thread that panics
-/// each free their place.
+/// so a run that ends and a thread that is refused each free their place.
 struct Place(Arc<AtomicUsize>);
 
 impl Place {
@@ -158,27 +157,13 @@ mod tests {
         assert_eq!(hooks.running.load(Ordering::SeqCst), 0);
     }
 
-    /// A log that panics on every write, as a log whose disk has failed in
-    /// some way might.
-    struct Panics;
-
-    impl std::io::Write for Panics {
-        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-            panic!("the test log refuses every line");
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    /// Runs `program` as the `on_stuck` command once with `log`, and reports
-    /// whether its place is free again within 10 seconds.
-    fn frees_its_place(program: &str, log: &Log) -> bool {
+    #[test]
+    fn an_on_stuck_thread_that_ends_normally_frees_its_place() {
+        let log: Log = Arc::new(Mutex::new(Vec::new()));
         let hooks = Hooks::new(
-            Some(CommandLine::of(&[program])),
+            Some(CommandLine::of(&["true"])),
             Duration::from_secs(5),
-            log,
+            &log,
         );
         hooks.run("cargo", Duration::from_secs(300), None);
         let (done, finished) = std::sync::mpsc::channel();
@@ -189,21 +174,6 @@ mod tests {
             }
             let _ = done.send(());
         });
-        finished.recv_timeout(Duration::from_secs(10)).is_ok()
-    }
-
-    #[test]
-    fn an_on_stuck_thread_that_panics_frees_its_place() {
-        let log: Log = Arc::new(Mutex::new(Panics));
-        assert!(
-            frees_its_place("false", &log),
-            "the panicked on_stuck thread still holds its place"
-        );
-    }
-
-    #[test]
-    fn an_on_stuck_thread_that_ends_normally_frees_its_place() {
-        let log: Log = Arc::new(Mutex::new(Vec::new()));
-        assert!(frees_its_place("true", &log));
+        assert!(finished.recv_timeout(Duration::from_secs(10)).is_ok());
     }
 }

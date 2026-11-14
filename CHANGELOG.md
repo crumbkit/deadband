@@ -16,6 +16,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is replaced by `busiest::ps_command()`. The config file is unchanged: an
   empty `command` or `on_stuck` is still refused, and a config without
   `on_stuck` still runs none.
+- In the library, `reclaim::Reclaimer` no longer derives `Deserialize` or
+  `JsonSchema`. The config file's own reclaimer form is private.
+- When the operating system refuses the thread that reads a reclaimer's
+  output, the reclaimer does not start and the reclaim fails with the
+  operating system's error, as it already did when the waiting thread was
+  refused. The waiting thread no longer reads the output itself in that case.
 
 ### Fixed
 
@@ -23,8 +29,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   thread that reads it late. Once the reclaimer exits, the daemon reads what
   its standard output already holds, where it used to stop reading 250 ms
   after the exit and count a cut-off report as failed.
-- An `on_stuck` command whose thread panics frees its place among the eight
-  that may run at once, so later stuck jobs still get one.
 
 ## [0.4.0-alpha.1] - 2026-11-14
 

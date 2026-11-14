@@ -108,7 +108,7 @@ impl Census {
             return Err(Failed::Running);
         }
         // The waiting thread holds the guard until it has reaped the
-        // program, and drops it on every other path, a panic included.
+        // program, and drops it on every other path.
         let running = Clears(Arc::clone(&self.running));
         let mut started = command.command();
         started

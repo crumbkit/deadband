@@ -138,10 +138,10 @@ holds no job. deadband never signals or stops a reclaimer. Past its
 timeout the daemon logs that and starts no other reclaim until the
 reclaimer exits. A reclaimer's run ends when the reclaimer process exits:
 the daemon then reads what the pipe of its standard output already holds,
-without waiting for more, so a background process that the reclaimer left holding standard output does
-not hold the reclaim. While a reclaim runs, `deadband status` shows its need
-and when it started. [running.md](running.md) gives the config and the
-JSON a reclaimer prints.
+without waiting for more, so a background process that the reclaimer left
+holding standard output does not hold the reclaim. While a reclaim runs,
+`deadband status` shows its need and when it started.
+[running.md](running.md) gives the config and the JSON a reclaimer prints.
 
 ## Detecting stuck jobs
 
