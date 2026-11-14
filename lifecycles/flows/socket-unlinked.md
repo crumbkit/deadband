@@ -16,7 +16,8 @@ crash:
   - test: crates/deadband/src/daemon/tests/alive.rs#a_daemon_that_no_client_reaches_stops_serving_when_its_socket_file_is_removed
     kind: plant
 ---
-The daemon notices within 60 samples, about a minute, or sooner through the
+In the fallback directory, which deadband makes with mode 0700, only the
+daemon's own user can remove the socket file. The daemon notices within 60 samples, about a minute, or sooner through the
 watchdog when its reading is stale. A socket file that another socket
 replaced is noticed the same way (daemon/alive.rs:198-225). The end step is
 the daemon's own stop; then the path holds no socket at all, so the next

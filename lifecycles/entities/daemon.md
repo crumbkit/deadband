@@ -72,8 +72,21 @@ transitions:
   locks: []
   effects: []
 ---
+When no variable names the socket, it is `deadband.sock` in a directory that
+deadband owns: `$XDG_RUNTIME_DIR/deadband`, or else `/tmp/deadband-<uid>`.
+`run_daemon` makes that directory with mode 0700 before `bind`, and refuses
+with `deadband::socket::directory` a directory that is a symlink, that another
+user owns, or that has any group or other permission bit (`bind.rs#private_directory`).
+A refused directory is left as it is. A client that finds nothing listening
+there starts its job at once. The check does not apply to a socket that
+`DEADBAND_SOCKET`, `DEADBAND_SOCKET_DIR` or `TMPDIR` names, or that the
+per-user temporary directory of macOS holds.
+
 The daemon takes an exclusive `flock` on `<socket>.lock` without waiting, and
-only then looks at the socket path. A socket file there is removed and bound
+only then looks at the socket path. It opens the lock file with `O_NOFOLLOW`
+and refuses a symlink there, and a lock file that another user owns, with
+`deadband::socket::unusable`, so a planted link or file never receives the
+lock or the daemon's writes. A socket file there is removed and bound
 again (`rebind`). Anything else at the path is refused with
 `deadband::socket::unusable`, and a held lock is refused with
 `deadband::daemon::running`. `deadband daemon` exits with status 0 on that
@@ -124,7 +137,9 @@ Two changes come from outside deadband:
   lock file replaced and stops it, within 60 samples. The removal itself has
   no transition, because the lock file is not a store: the socket's directory
   is `$TMPDIR` or the per-user temporary directory, which deadband does not
-  own. The `socket` lock still guards `usurp`, but on a different file from
+  own, or a directory that the person named. The fallback directory is the
+  exception: deadband makes it with mode 0700 and checks its owner, so only
+  its own user can remove the lock file there. The `socket` lock still guards `usurp`, but on a different file from
   the one the first daemon holds.
 
 The daemon names its lock file by a stat of the lock path when `serve`

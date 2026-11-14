@@ -114,6 +114,7 @@ fn start_daemon_command(test: &Test<Warn>) {
     let machine = Machine {
         probe: Warn,
         socket: test.machine.socket.clone(),
+        socket_directory: None,
         log: test.machine.log.clone(),
         cores: test.machine.cores,
         environment: test.machine.environment.clone(),

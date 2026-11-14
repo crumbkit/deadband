@@ -590,7 +590,7 @@ in `deadband status` is the calling process's pid. A program that holds the
 lease for a child process reports its own pid, not the child's.
 
 To run the daemon, build a `Machine` as the binary's `main.rs` does (the probe, the socket
-path, a log, the cores and the `Environment`), and call `run_daemon` with it
+path, the directory that deadband owns for it, a log, the cores and the `Environment`), and call `run_daemon` with it
 and the most jobs that may run at once, or `None` for the default:
 
 ```rust,ignore
@@ -618,9 +618,26 @@ set and not empty:
 | `DEADBAND_SOCKET_DIR` | `deadband.sock` in that directory |
 | the directory `getconf DARWIN_USER_TEMP_DIR` prints (macOS only, not a variable) | `deadband.sock` in that directory, whatever `TMPDIR` is |
 | `TMPDIR` | `deadband.sock` in that directory |
-| `USER` | `/tmp/deadband-<USER>.sock` |
+| `XDG_RUNTIME_DIR` | `deadband.sock` in its `deadband` subdirectory |
 
-When none is set, the socket is `/tmp/deadband.sock`. The daemon makes the
+When none is set, the socket is `/tmp/deadband-<uid>/deadband.sock`, where
+`<uid>` is your numeric user id. For the `XDG_RUNTIME_DIR` row and for this fallback the daemon makes the
+directory with mode 0700, and refuses to start with
+`deadband::socket::directory` when the directory exists as a symlink, belongs to
+another user or lets others use it; set `XDG_RUNTIME_DIR` or
+`DEADBAND_SOCKET_DIR` to a directory of your own, because only its owner or root
+can remove the directory. A client that finds no daemon there runs its job at once.
+Before `run` or `status` connects, it refuses a socket whose directory belongs
+to a user other than you or root, or that group or other users can write to
+unless it is sticky as `/tmp` is, runs the job at once, and prints one line
+saying so; the connection itself never waits for a listener with a full queue.
+The daemon checks only the directory it makes, so with `TMPDIR=/tmp` another
+user can still plant a lock file in `/tmp`, and the daemon then refuses to
+start with `deadband::socket::unusable`. Before `run` or `status` sends anything, it checks that the process listening
+on the socket belongs to the same user, whatever path names the socket. When it
+does not, the client closes the connection, prints one line saying so, and runs
+the job at once without sending the command line. The daemon opens the lock file
+without following a symlink and refuses one that another user owns. The daemon makes the
 socket readable and writable by its own user only. The daemon holds a lock
 on a file named after the socket with `.lock` added, so a second daemon on
 the same socket refuses to start. A socket file that a stopped daemon left

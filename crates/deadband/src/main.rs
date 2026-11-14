@@ -26,6 +26,12 @@ fn main() -> ExitCode {
     );
     #[expect(
         clippy::disallowed_methods,
+        reason = "the entry point reads the environment once, for the variables that deadband::socket::VARIABLES lists"
+    )]
+    let socket_directory =
+        deadband::socket::owned_directory(|name| std::env::var_os(name), &socket);
+    #[expect(
+        clippy::disallowed_methods,
         reason = "the entry point reads the environment and the working directory once, for the variables that deadband::environment::VARIABLES lists"
     )]
     let environment = deadband::environment::Environment::read(
@@ -41,6 +47,7 @@ fn main() -> ExitCode {
     deadband::cli::run(&Machine {
         probe: deadband::probe::System,
         socket,
+        socket_directory,
         log: Arc::new(Mutex::new(stderr)),
         cores: thread::available_parallelism().ok(),
         environment,

@@ -44,7 +44,7 @@ path, making it when it is missing (`make`). When a second writer on the same
 state directory took the new lock first, this writer records nothing and logs
 one line, and the second writer is the only one. A second writer is a daemon
 that records history on another socket: one started with
-`DEADBAND_SOCKET_DIR` set, or on Linux one whose `TMPDIR` or `USER` differs,
+`DEADBAND_SOCKET_DIR` set, or on Linux one whose `TMPDIR` or `XDG_RUNTIME_DIR` differs,
 with the same `XDG_STATE_HOME` or `HOME`. A daemon started with
 `DEADBAND_SOCKET` set starts no history writer (environment.rs:176-181).
 
