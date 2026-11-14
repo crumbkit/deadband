@@ -14,7 +14,7 @@ use super::{DaemonArgs, Machine, RunArgs};
 use crate::admission::{self, Asked, Notices};
 use crate::client::{self, ANSWER_WITHIN};
 use crate::daemon::{Unbound, lock_path, note};
-use crate::job;
+use crate::job::{self, CommandLine};
 use crate::probe::{Probe, child_usage};
 use crate::protocol::Jobs;
 use crate::serve;
@@ -123,7 +123,13 @@ pub(super) fn run<O: Write, W: Write, P>(
     machine: &Machine<P>,
     args: RunArgs,
 ) -> u8 {
-    let program = args.command.first().cloned().unwrap_or_default();
+    // clap requires a command, so this refusal guards only a caller that
+    // builds `RunArgs` itself.
+    let Some(line) = CommandLine::from_words(args.command) else {
+        let refused = Err(io::ErrorKind::InvalidInput.into());
+        return finish(sink, output, OsString::new(), refused);
+    };
+    let program = line.program.clone();
     let label = args.label.unwrap_or_else(|| {
         Path::new(&program)
             .file_name()
@@ -131,9 +137,8 @@ pub(super) fn run<O: Write, W: Write, P>(
             .to_string_lossy()
             .into_owned()
     });
-    let words: Vec<_> = args
-        .command
-        .iter()
+    let words: Vec<_> = std::iter::once(&line.program)
+        .chain(&line.args)
         .map(|word| word.to_string_lossy())
         .collect();
     let command = words.join(" ");
@@ -152,7 +157,7 @@ pub(super) fn run<O: Write, W: Write, P>(
     let mut notify = |line: &str| note(&machine.log, format_args!("{line}"));
     let admitted = admission::admit(&asked, &mut notify);
     admitted.lower_priority(&mut notify);
-    let ended = job::run(&args.command, admitted.variables());
+    let ended = job::run(&line, admitted.variables());
     match &ended {
         Ok(status) => admitted.end_measured(*status, child_usage()),
         Err(_) => admitted.end(None),

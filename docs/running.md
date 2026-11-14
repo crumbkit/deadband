@@ -490,10 +490,10 @@ stops a reclaimer. When one runs past its timeout, the daemon stops
 waiting for it and starts no other reclaim until it exits.
 
 The reclaimer reads nothing on standard input, and the daemon discards its
-standard error. The daemon stops reading the report 250 ms after the
-reclaimer exits, so output that a background process writes after that is
-dropped, and a report that a loaded machine delivers later than that counts
-as failed. It prints one JSON object on standard output. deadband
+standard error. Once the reclaimer exits, the daemon reads what its standard
+output already holds and stops there, so it keeps the whole report however
+loaded the machine is, and output that a background process writes after
+that is dropped. It prints one JSON object on standard output. deadband
 reads only `data`, an array of objects, and two fields of each object:
 
 | Field | Meaning |

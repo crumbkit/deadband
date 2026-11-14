@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use super::{Change, Config, MAX_PERIODS, Track, active_line, quiet_text, still_line, stuck_line};
+use crate::job::CommandLine;
 use crate::probe::ProcessUse;
 use crate::protocol::OutsideJobs;
 
@@ -283,5 +284,22 @@ fn an_invalid_stuck_ignore_is_refused() {
 fn an_empty_on_stuck_is_refused() {
     assert!(Config::parse(None, &[], Some(Vec::new())).is_err());
     let config = Config::parse(None, &[], Some(vec!["notify".to_owned()])).expect("valid");
-    assert_eq!(config.on_stuck, vec!["notify".to_owned()]);
+    assert_eq!(config.on_stuck, Some(CommandLine::of(&["notify"])));
+}
+
+#[test]
+fn an_on_stuck_left_out_names_no_command() {
+    let config = Config::parse(None, &[], None).expect("valid");
+    assert_eq!(config.on_stuck, None);
+}
+
+#[test]
+fn an_on_stuck_with_arguments_is_read_once_into_its_program_and_arguments() {
+    let words = ["/usr/local/bin/notify", "--to", "me"]
+        .map(str::to_owned)
+        .to_vec();
+    let config = Config::parse(None, &[], Some(words)).expect("valid");
+    let command = config.on_stuck.expect("on_stuck names a command");
+    assert_eq!(command.program, "/usr/local/bin/notify");
+    assert_eq!(command.args, ["--to", "me"]);
 }

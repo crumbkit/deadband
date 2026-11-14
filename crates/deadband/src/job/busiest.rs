@@ -5,7 +5,7 @@
 //!
 //! The one operation, [`Census::read`], states the five items of PROC-2:
 //!
-//! - Program: the first word of the command the daemon passes, which is
+//! - Program: the program of the command the daemon passes, which is
 //!   always `/bin/ps` outside the tests.
 //! - Arguments: the remaining words, each passed as a separate value. No
 //!   shell reads them.
@@ -22,20 +22,29 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::{self, Read};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use super::CommandLine;
+use super::wait::{self, AfterDeadline, Waited};
 use crate::protocol::{Label, OutsideJobs};
-use crate::spawn;
 use crate::stuck::BUSY_PERCENT;
 
 /// The most bytes of the program's standard output that deadband keeps.
 pub const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
 
-/// The command that lists every process with its share of one core.
-pub const PS_COMMAND: [&str; 4] = ["/bin/ps", "-Ao", "pcpu=,pid=,comm=", "-r"];
+/// Returns the command that lists every process with its share of one core.
+#[must_use]
+pub fn ps_command() -> CommandLine {
+    CommandLine {
+        program: "/bin/ps".to_owned(),
+        args: ["-Ao", "pcpu=,pid=,comm=", "-r"]
+            .map(str::to_owned)
+            .to_vec(),
+    }
+}
 
 /// Why no process could be named.
 #[derive(Debug)]
@@ -65,6 +74,15 @@ impl fmt::Display for Failed {
     }
 }
 
+/// Clears the flag it holds when it is dropped.
+struct Clears(Arc<AtomicBool>);
+
+impl Drop for Clears {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Runs the process list, at most one at a time.
 #[derive(Debug, Clone, Default)]
 pub struct Census {
@@ -82,67 +100,38 @@ impl Census {
     /// `within`.
     pub fn read(
         &self,
-        command: &[String],
+        command: &CommandLine,
         within: Duration,
         exclude: &BTreeSet<u32>,
     ) -> Result<OutsideJobs, Failed> {
-        let Some((program, args)) = command.split_first() else {
-            return Err(Failed::Start(io::ErrorKind::InvalidInput.into()));
-        };
         if self.running.swap(true, Ordering::SeqCst) {
             return Err(Failed::Running);
         }
-        // The thread that waits starts before the program, so a refused
-        // thread leaves no program unreaped, and the flag clears either way.
-        let running = Arc::clone(&self.running);
-        #[expect(
-            clippy::disallowed_types,
-            reason = "crates/deadband/src/job/busiest.rs hands the child to its own waiting thread, which reaps it"
-        )]
-        let (start, started) = mpsc::channel::<std::process::Child>();
-        let (sender, ended) = mpsc::channel();
-        let waiting = spawn::thread("deadband-ps", move || {
-            let Ok(mut child) = started.recv() else {
-                return;
-            };
-            let mut kept = Vec::new();
-            if let Some(mut stdout) = child.stdout.take() {
-                let _ = (&mut stdout).take(MAX_OUTPUT).read_to_end(&mut kept);
-                let _ = io::copy(&mut stdout, &mut io::sink());
-            }
-            let status = child.wait();
-            running.store(false, Ordering::SeqCst);
-            let _ = sender.send(status.map(|status| (status, kept)));
-        });
-        if let Err(error) = waiting {
-            self.running.store(false, Ordering::SeqCst);
-            return Err(Failed::Start(error));
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "crates/deadband/src/job/busiest.rs starts /bin/ps; the module states PROC-2's items"
-        )]
-        let spawned = Command::new(program)
-            .args(args)
+        // The waiting thread holds the guard until it has reaped the
+        // program, and drops it on every other path, a panic included.
+        let running = Clears(Arc::clone(&self.running));
+        let mut started = command.command();
+        started
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn();
-        let child = match spawned {
-            Ok(child) => child,
-            Err(error) => {
-                self.running.store(false, Ordering::SeqCst);
-                return Err(Failed::Start(error));
-            }
-        };
-        let pid = child.id();
-        // The waiting thread holds `started` until it receives, so the send
-        // reaches it.
-        let _ = start.send(child);
-        let (status, stdout) = match ended.recv_timeout(within) {
-            Ok(Ok(ended)) => ended,
-            Ok(Err(error)) => return Err(Failed::Start(error)),
-            Err(_) => return Err(Failed::TimedOut),
+            .stderr(Stdio::null());
+        let waited = wait::start_and_wait(
+            "deadband-ps",
+            started,
+            move |child| {
+                let mut kept = Vec::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    let _ = (&mut stdout).take(MAX_OUTPUT).read_to_end(&mut kept);
+                    let _ = io::copy(&mut stdout, &mut io::sink());
+                }
+                (child.id(), kept, running)
+            },
+            within,
+            || AfterDeadline::StopWaiting,
+        )
+        .map_err(Failed::Start)?;
+        let Waited::Exited(status, (pid, stdout, _)) = waited else {
+            return Err(Failed::TimedOut);
         };
         if !status.success() {
             return Err(Failed::Exit(status.code()));

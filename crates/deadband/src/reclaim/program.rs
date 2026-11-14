@@ -10,6 +10,8 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use crate::job::CommandLine;
+
 #[cfg(test)]
 mod tests;
 
@@ -53,25 +55,21 @@ impl Reason {
 /// A program that cannot start, with the path the command names.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Unusable {
-    /// The first word of the command.
+    /// The program of the command.
     pub(crate) path: PathBuf,
     /// Why the program cannot start.
     pub(crate) reason: Reason,
 }
 
-/// Checks the first word of `command`. An empty command names no program
-/// and passes.
+/// Checks the program of `command`.
 ///
 /// # Errors
 ///
 /// Returns the program's path and why it cannot start: a relative path, a
 /// path with nothing at it, something that is not a regular file, or a
 /// file with no execute bit.
-pub(crate) fn check(command: &[String]) -> Result<(), Unusable> {
-    let Some(program) = command.first() else {
-        return Ok(());
-    };
-    let path = Path::new(program);
+pub(crate) fn check(command: &CommandLine) -> Result<(), Unusable> {
+    let path = Path::new(&command.program);
     let fail = |reason| {
         Err(Unusable {
             path: path.to_path_buf(),
