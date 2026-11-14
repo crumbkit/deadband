@@ -38,27 +38,33 @@ use std::process::ExitStatus;
 use signal_hook::consts::{SIGINT, SIGTERM};
 
 pub mod busiest;
+mod command_line;
 mod forward;
 pub mod launchd;
 pub mod on_stuck;
 pub mod reclaimer;
 #[cfg(test)]
 mod tests;
+mod wait;
+
+pub use self::command_line::CommandLine;
 
 /// The exit code a shell gives a process that a signal ended is this base
 /// plus the signal's number.
 const SIGNAL_BASE: i32 = 128;
 
-/// Runs `command`, whose first word is the program, with `variables` added
-/// to its environment, waits for it while passing on to it a SIGTERM or
-/// SIGINT that this process receives, and returns its exit status.
+/// Runs `command` with `variables` added to its environment, waits for it
+/// while passing on to it a SIGTERM or SIGINT that this process receives,
+/// and returns its exit status.
 ///
 /// # Errors
 ///
-/// Returns [`io::ErrorKind::InvalidInput`] for an empty command, and the
-/// error of a program that could not start, such as
+/// Returns the error of a program that could not start, such as
 /// [`io::ErrorKind::NotFound`].
-pub fn run(command: &[OsString], variables: &[(&str, String)]) -> io::Result<ExitStatus> {
+pub fn run(
+    command: &CommandLine<OsString>,
+    variables: &[(&str, String)],
+) -> io::Result<ExitStatus> {
     forward::run_forwarding(command, variables, &[SIGTERM, SIGINT])
 }
 

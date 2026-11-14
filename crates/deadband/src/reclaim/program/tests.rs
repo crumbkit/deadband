@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{Reason, check};
+use crate::job::CommandLine;
 
 /// A directory of the test's own, removed when the test ends.
 struct Directory(PathBuf);
@@ -35,8 +36,8 @@ impl Drop for Directory {
     }
 }
 
-fn command(program: &str) -> Vec<String> {
-    vec![program.to_owned(), "reclaim".to_owned()]
+fn command(program: &str) -> CommandLine {
+    CommandLine::of(&[program, "reclaim"])
 }
 
 #[test]
@@ -76,11 +77,6 @@ fn a_bare_program_name_is_reported_as_relative() {
     let unusable = check(&command("mxv")).expect_err("a bare name has no path");
     assert_eq!(unusable.reason, Reason::Relative);
     assert_eq!(unusable.path, PathBuf::from("mxv"));
-}
-
-#[test]
-fn an_empty_command_names_no_program_to_check() {
-    assert_eq!(check(&[]), Ok(()));
 }
 
 #[test]

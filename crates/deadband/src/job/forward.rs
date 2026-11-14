@@ -13,12 +13,14 @@
 
 use std::ffi::{OsString, c_int};
 use std::io;
-use std::process::{Command, ExitStatus};
+use std::process::ExitStatus;
 use std::sync::{Arc, Mutex};
 
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process, waitid};
 use signal_hook::iterator::Signals;
+
+use super::CommandLine;
 
 /// Runs `command` with `variables` added to its environment, passes each of
 /// `forwarded` that this process receives on to it, and returns how it
@@ -26,30 +28,25 @@ use signal_hook::iterator::Signals;
 ///
 /// # Errors
 ///
-/// Returns [`io::ErrorKind::InvalidInput`] for an empty command, and the
-/// error of a program that could not start. A signal that cannot be
-/// registered is not an error: the job runs and the signals are not passed
-/// on. A thread that the operating system refuses is not an error either,
-/// but the registered signals then stay registered until the job ends, so
-/// the wrapper ignores them and does not pass them on.
+/// Returns the error of a program that could not start. A signal that
+/// cannot be registered is not an error: the job runs and the signals are
+/// not passed on. A thread that the operating system refuses is not an
+/// error either, but the registered signals then stay registered until the
+/// job ends, so the wrapper ignores them and does not pass them on.
 pub(super) fn run_forwarding(
-    command: &[OsString],
+    command: &CommandLine<OsString>,
     variables: &[(&str, String)],
     forwarded: &[c_int],
 ) -> io::Result<ExitStatus> {
-    let Some((program, args)) = command.split_first() else {
-        return Err(io::ErrorKind::InvalidInput.into());
-    };
     let signals = Signals::new(forwarded).ok();
     let handle = signals.as_ref().map(Signals::handle);
+    let mut started = command.command();
+    started.envs(variables.iter().map(|(name, value)| (name, value)));
     #[expect(
         clippy::disallowed_methods,
         reason = "crates/deadband/src/job/forward.rs starts the job, as job.rs does"
     )]
-    let spawned = Command::new(program)
-        .args(args)
-        .envs(variables.iter().map(|(name, value)| (name, value)))
-        .spawn();
+    let spawned = started.spawn();
     let mut child = spawned?;
     let pid = Pid::from_child(&child);
     let live = Arc::new(Mutex::new(true));

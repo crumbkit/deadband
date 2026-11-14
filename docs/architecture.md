@@ -49,7 +49,7 @@ status.
 | name | The rule that names a job in `status` and `top` from its workspace, its label and its short command, and leaves the label out when it repeats the workspace or the command's first word. |
 | socket | Finds the socket's path from the environment, and lists the variables deadband reads. On macOS the default socket is in the directory that `getconf DARWIN_USER_TEMP_DIR` names, so `run`, `status` and the launchd daemon find the same socket whatever `TMPDIR` each caller has. Without a variable, the socket is in a directory with mode 0700 that the daemon makes and checks, `$XDG_RUNTIME_DIR/deadband` or `/tmp/deadband-<uid>`. |
 | spawn | Starts every thread of the daemon and hands back the operating system's refusal of a thread as an error, so the caller decides what a missing thread means. Its tests can refuse a named thread. |
-| job | The only module that starts a process: the job that `deadband run` was given, the reclaimers and the `on_stuck` command that the daemon's config file names, `/bin/ps`, which names the busiest process outside the jobs, and `launchctl`, behind a trait so tests use a fake launchd. |
+| job | The only module that starts a process: the job that `deadband run` was given, the reclaimers and the `on_stuck` command that the daemon's config file names, `/bin/ps`, which names the busiest process outside the jobs, and `launchctl`, behind a trait so tests use a fake launchd. A `CommandLine` holds a program and its arguments, so a command is checked for a program once, where it is read. The reclaimers, `on_stuck` and `/bin/ps` share one start-and-wait body in `job/wait.rs`, which starts the waiting thread before the program. |
 | reclaim | Reads the daemon's config file, decides when to reclaim memory or disk, runs the reclaimers on a thread of their own, holds the per-user `reclaim.lock` while a reclaim runs, and keeps the running and the last reclaim for `deadband status`. |
 | environment | Reads the variables that `deadband run` uses, and gives a granted job its parallelism variables. |
 | priority | Chooses a job's lane from the priority file. |
@@ -137,11 +137,11 @@ reclaimer that fails or runs past its timeout is logged in one line and
 holds no job. deadband never signals or stops a reclaimer. Past its
 timeout the daemon logs that and starts no other reclaim until the
 reclaimer exits. A reclaimer's run ends when the reclaimer process exits:
-the daemon then waits at most 250 ms for the rest of its standard output, so
-a background process that the reclaimer left holding standard output does
-not hold the reclaim. While a reclaim runs, `deadband status` shows its need
-and when it started. [running.md](running.md) gives the config and the
-JSON a reclaimer prints.
+the daemon then reads what the pipe of its standard output already holds,
+without waiting for more, so a background process that the reclaimer left
+holding standard output does not hold the reclaim. While a reclaim runs,
+`deadband status` shows its need and when it started.
+[running.md](running.md) gives the config and the JSON a reclaimer prints.
 
 ## Detecting stuck jobs
 
@@ -399,7 +399,7 @@ in `src/cli/tests/reclaim.rs`.
 | A client never reads its reply | The daemon writes the reply after it releases the queue lock, so the client never holds the lock. The write fails after 1 second. A grant that fails frees the job's place and is recorded once as Left, and the daemon shuts that connection down | `a_client_that_never_reads_its_grant_does_not_delay_the_next_grant`, `a_grant_that_cannot_be_written_frees_its_place_once_and_closes_the_connection` and `a_queued_reply_that_waits_on_its_client_leaves_the_queue_lock_free` in `src/daemon/tests/reply.rs` |
 | The daemon stops or is killed | Waiting clients ask again for 5 seconds, so a restarted daemon queues them again, and start only if no daemon answers. Running jobs keep running, and each lease seats its job on the next daemon | `a_queued_client_asks_a_restarted_daemon_again_before_it_starts_the_job` in `src/client/tests.rs`; `a_job_that_runs_when_its_daemon_is_killed_counts_on_the_next_daemon` in `tests/run.rs` |
 | A reclaimer hangs | The daemon logs that it ran past its timeout, keeps waiting for it, and starts no other reclaim until it exits; admission continues, and `deadband status` shows the reclaim in progress | `a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues` in `src/cli/tests/reclaim.rs`; `status_prints_a_reclaim_in_progress_after_the_jobs` in `src/cli/tests.rs` |
-| A reclaimer exits and leaves a background process holding its standard output | The run ends when the reclaimer exits, after at most 250 ms for its output | `a_background_child_that_holds_stdout_does_not_hold_the_reclaim_after_the_reclaimer_exits` in `src/job/reclaimer.rs` |
+| A reclaimer exits and leaves a background process holding its standard output | The run ends when the reclaimer exits, once the daemon has read what the pipe already holds, so the report is whole even when the reading thread runs late | `a_background_child_that_holds_stdout_does_not_hold_the_reclaim_after_the_reclaimer_exits` and `a_reclaimer_that_writes_64_kib_and_exits_at_once_yields_its_whole_report_when_reading_runs_late` in `src/job/tests.rs` |
 | A reclaimer names a program that is missing | The daemon logs the program at start, the reclaim records the failure, and `deadband status` names the program | `the_daemon_says_at_start_that_a_reclaimer_names_a_program_that_does_not_exist` and `a_reclaimer_whose_program_is_missing_fails_and_status_names_the_program` in `src/cli/tests/reclaim.rs` |
 | The socket file is deleted or replaced | The daemon stops serving within 60 samples, and under launchd a new daemon binds a new socket | `a_daemon_stops_serving_when_its_socket_file_is_removed` and `a_daemon_stops_serving_when_another_socket_replaces_its_file` in `src/daemon/tests/alive.rs` |
 | The lock file is deleted or replaced | The daemon stops serving within 60 samples, because a second daemon could take a new lock, remove its socket and bind its own | `a_daemon_stops_serving_when_its_lock_file_is_removed` and `a_daemon_stops_serving_when_another_file_replaces_its_lock_file` in `src/daemon/tests/alive.rs` |

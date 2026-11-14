@@ -4,7 +4,7 @@
 //!
 //! The one operation, [`run`], states the five items of PROC-2:
 //!
-//! - Program: the first word of `on_stuck` in the config file, which the
+//! - Program: the program of `on_stuck` in the config file, which the
 //!   operating system finds on the daemon's `PATH`. The person who runs the
 //!   daemon writes the config file, so deadband trusts the program as much
 //!   as that person.
@@ -20,11 +20,11 @@
 //!   or signals it, even past its deadline.
 
 use std::io::{self, Write};
-use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::process::Stdio;
 use std::time::Duration;
 
-use crate::spawn;
+use super::CommandLine;
+use super::wait::{self, AfterDeadline, Waited};
 
 /// How the command ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,65 +37,41 @@ pub enum Ended {
     TimedOut,
 }
 
-/// Runs `command`, whose first word is the program, with `input` on its
-/// standard input, and waits for it. When `timeout` passes first, it calls
-/// `on_timeout`, waits until the command exits, and returns
-/// [`Ended::TimedOut`].
+/// Runs `command` with `input` on its standard input, and waits for it.
+/// When `timeout` passes first, it calls `on_timeout`, waits until the
+/// command exits, and returns [`Ended::TimedOut`].
 ///
 /// # Errors
 ///
-/// Returns [`io::ErrorKind::InvalidInput`] for an empty command, and the
-/// error of a program that could not start or be waited for.
+/// Returns the error of a program that could not start or be waited for.
 pub fn run(
-    command: &[String],
+    command: &CommandLine,
     input: Vec<u8>,
     timeout: Duration,
     on_timeout: impl FnOnce(),
 ) -> io::Result<Ended> {
-    let Some((program, args)) = command.split_first() else {
-        return Err(io::ErrorKind::InvalidInput.into());
-    };
-    // The thread that waits starts before the command, so a refused thread
-    // leaves no command unreaped.
-    #[expect(
-        clippy::disallowed_types,
-        reason = "crates/deadband/src/job/on_stuck.rs hands the child to its own waiting thread, which reaps it"
-    )]
-    let (start, started) = mpsc::channel::<std::process::Child>();
-    let (sender, ended) = mpsc::channel();
-    spawn::thread("deadband-on-stuck-wait", move || {
-        let Ok(mut child) = started.recv() else {
-            return;
-        };
-        if let Some(mut stdin) = child.stdin.take() {
-            // A command that closes its input early loses the rest of it.
-            let _ = stdin.write_all(&input);
-        }
-        let status = child.wait();
-        let _ = sender.send(status.map(|status| Ended::Exited(status.code())));
-    })?;
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "crates/deadband/src/job/on_stuck.rs starts the on_stuck command that the daemon's config file names; the module states PROC-2's items"
-    )]
-    let spawned = Command::new(program)
-        .args(args)
+    let mut started = command.command();
+    started
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    let _ = start.send(spawned?);
-    match ended.recv_timeout(timeout) {
-        Ok(ended) => ended,
-        Err(RecvTimeoutError::Timeout) => {
+        .stderr(Stdio::null());
+    let waited = wait::start_and_wait(
+        "deadband-on-stuck-wait",
+        started,
+        move |child| {
+            if let Some(mut stdin) = child.stdin.take() {
+                // A command that closes its input early loses the rest of it.
+                let _ = stdin.write_all(&input);
+            }
+        },
+        timeout,
+        || {
             on_timeout();
-            ended
-                .recv()
-                .map_err(io::Error::other)?
-                .map(|_| Ended::TimedOut)
-        }
-        Err(RecvTimeoutError::Disconnected) => Err(io::Error::other(
-            "the thread that waits for the on_stuck command stopped",
-        )),
-    }
+            AfterDeadline::KeepWaiting
+        },
+    )?;
+    Ok(match waited {
+        Waited::Exited(status, ()) => Ended::Exited(status.code()),
+        Waited::Late => Ended::TimedOut,
+    })
 }

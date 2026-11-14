@@ -691,7 +691,7 @@ fn start_watching(test: &Test<QuietTree>) {
         let mut settings = Settings::new(NonZeroUsize::MIN, NonZeroUsize::new(4), None, None);
         settings.reclaim.stuck.after = Some(Duration::from_millis(30));
         settings.watching.every = Duration::from_millis(5);
-        settings.watching.census = vec!["/bin/sh".to_owned(), "-c".to_owned(), "exit 1".to_owned()];
+        settings.watching.census = crate::job::CommandLine::of(&["/bin/sh", "-c", "exit 1"]);
         serve(&bound.listener, probe, settings, &log)
     });
     while !test.machine.socket.exists() {

@@ -82,7 +82,9 @@ fn warn_of_unusable_programs(log: &Log, config: &reclaim::Config) {
             );
         }
     }
-    if let Err(unusable) = program::check(&config.stuck.on_stuck) {
+    if let Some(on_stuck) = &config.stuck.on_stuck
+        && let Err(unusable) = program::check(on_stuck)
+    {
         note(
             log,
             format_args!(

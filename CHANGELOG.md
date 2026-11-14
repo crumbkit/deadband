@@ -6,6 +6,30 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- In the library, a command is a `job::CommandLine` with a `program` and
+  `args`. `Reclaimer::command` and `Watching::census` are `CommandLine`,
+  `stuck::Config::on_stuck` is `Option<CommandLine>`, and `job::run`,
+  `reclaimer::run`, `on_stuck::run` and `Census::read` take one, so they no
+  longer return `InvalidInput` for an empty command. `busiest::PS_COMMAND`
+  is replaced by `busiest::ps_command()`. The config file is unchanged: an
+  empty `command` or `on_stuck` is still refused, and a config without
+  `on_stuck` still runs none.
+- In the library, `reclaim::Reclaimer` no longer derives `Deserialize` or
+  `JsonSchema`. The config file's own reclaimer form is private.
+- When the operating system refuses the thread that reads a reclaimer's
+  output, the reclaimer does not start and the reclaim fails with the
+  operating system's error, as it already did when the waiting thread was
+  refused. The waiting thread no longer reads the output itself in that case.
+
+### Fixed
+
+- The daemon keeps a reclaimer's whole report when the machine runs the
+  thread that reads it late. Once the reclaimer exits, the daemon reads what
+  its standard output already holds, where it used to stop reading 250 ms
+  after the exit and count a cut-off report as failed.
+
 ## [0.4.0-alpha.1] - 2026-11-14
 
 ### Security

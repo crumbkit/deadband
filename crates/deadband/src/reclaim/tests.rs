@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use super::{Config, Reclaimed, Reclaimer, Report, Resource, Watch, reclaim, size_bytes};
 use crate::admit::GIB;
 use crate::daemon::Log;
+use crate::job::CommandLine;
 
 const AFTER: Duration = Duration::from_secs(60);
 
@@ -16,7 +17,7 @@ fn one_reclaimer() -> Config {
     Config {
         reclaimers: vec![Reclaimer {
             name: "workspaces".to_owned(),
-            command: vec!["tool".to_owned(), "reclaim".to_owned()],
+            command: CommandLine::of(&["tool", "reclaim"]),
         }],
         ..Config::default()
     }
@@ -53,7 +54,7 @@ command = ["tool", "reclaim", "--json"]
         Config {
             reclaimers: vec![Reclaimer {
                 name: "workspaces".to_owned(),
-                command: vec!["tool".to_owned(), "reclaim".to_owned(), "--json".to_owned()],
+                command: CommandLine::of(&["tool", "reclaim", "--json"]),
             }],
             after: Duration::from_secs(120),
             timeout: Duration::from_secs(30),
@@ -383,7 +384,7 @@ impl Scripts {
         std::fs::write(&script, body).expect("the script writes");
         Reclaimer {
             name: name.to_owned(),
-            command: vec!["/bin/sh".to_owned(), script.display().to_string()],
+            command: CommandLine::of(&["/bin/sh", &script.display().to_string()]),
         }
     }
 
@@ -469,7 +470,7 @@ fn the_config_file_reads_the_stuck_keys() {
     assert!(config.stuck.ignores("docker compose up"));
     assert_eq!(
         config.stuck.on_stuck,
-        vec!["tell".to_owned(), "me".to_owned()]
+        Some(CommandLine::of(&["tell", "me"]))
     );
 }
 
@@ -477,7 +478,7 @@ fn the_config_file_reads_the_stuck_keys() {
 fn a_config_with_no_stuck_keys_detects_after_five_minutes() {
     let config = Config::parse("").expect("an empty file parses");
     assert_eq!(config.stuck.after, Some(Duration::from_secs(300)));
-    assert!(config.stuck.on_stuck.is_empty());
+    assert_eq!(config.stuck.on_stuck, None);
 }
 
 #[test]

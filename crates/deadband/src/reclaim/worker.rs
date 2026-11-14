@@ -146,7 +146,7 @@ fn run_once(config: &Config, reclaimer: &Reclaimer, need: &str, dry: bool, log: 
             report: None,
             failed: Some(format!(
                 "it could not start {}: {error}",
-                reclaimer.command.first().map_or("", String::as_str)
+                reclaimer.command.program
             )),
             logged: false,
         },

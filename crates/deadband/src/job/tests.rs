@@ -3,10 +3,10 @@
 use std::ffi::OsString;
 use std::io::ErrorKind;
 
-use super::{exit_code, run};
+use super::{CommandLine, exit_code, run};
 
-fn words(command: &[&str]) -> Vec<OsString> {
-    command.iter().map(OsString::from).collect()
+fn words(command: &[&str]) -> CommandLine<OsString> {
+    CommandLine::from_words(command.iter().map(OsString::from)).expect("a test job has a program")
 }
 
 #[test]
@@ -34,12 +34,6 @@ fn run_fails_with_not_found_for_a_program_that_does_not_exist() {
 }
 
 #[test]
-fn run_refuses_an_empty_command() {
-    let error = run(&[], &[]).expect_err("nothing starts");
-    assert_eq!(error.kind(), ErrorKind::InvalidInput);
-}
-
-#[test]
 fn run_adds_the_variables_it_is_given_to_the_jobs_environment() {
     let variables = [("DEADBAND_TEST_VARIABLE", "7".to_owned())];
     let status = run(
@@ -61,13 +55,14 @@ mod forwarding {
 
     use rustix::process::{Signal, getpid, kill_process};
 
-    use crate::job::exit_code;
     use crate::job::forward::run_forwarding;
+    use crate::job::{CommandLine, exit_code};
 
     use signal_hook::consts::{SIGUSR1 as USR1, SIGUSR2 as USR2, SIGWINCH as WINCH};
 
-    fn words(command: &[&str]) -> Vec<OsString> {
-        command.iter().map(OsString::from).collect()
+    fn words(command: &[&str]) -> CommandLine<OsString> {
+        CommandLine::from_words(command.iter().map(OsString::from))
+            .expect("a test job has a program")
     }
 
     /// Sends `signal` to this process once `ready` exists, from a thread.
@@ -139,13 +134,14 @@ mod busiest {
     use std::collections::BTreeSet;
     use std::time::Duration;
 
+    use crate::job::CommandLine;
     use crate::job::busiest::{Census, Failed, parse};
     use crate::protocol::OutsideJobs;
 
     const LIST: &[u8] = b"470.0   123 /usr/libexec/syspolicyd\n 90.5  4567 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n  0.0     1 /sbin/launchd\n";
 
-    fn sh(script: &str) -> Vec<String> {
-        vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()]
+    fn sh(script: &str) -> CommandLine {
+        CommandLine::of(&["/bin/sh", "-c", script])
     }
 
     #[test]
@@ -243,7 +239,7 @@ mod busiest {
     #[test]
     fn a_command_that_cannot_start_names_no_process() {
         let read = Census::default().read(
-            &["/nonexistent/ps".to_owned()],
+            &CommandLine::of(&["/nonexistent/ps"]),
             Duration::from_secs(10),
             &BTreeSet::new(),
         );
@@ -286,10 +282,11 @@ mod busiest {
 mod on_stuck {
     use std::time::Duration;
 
+    use crate::job::CommandLine;
     use crate::job::on_stuck::{Ended, run};
 
-    fn sh(script: &str) -> Vec<String> {
-        vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()]
+    fn sh(script: &str) -> CommandLine {
+        CommandLine::of(&["/bin/sh", "-c", script])
     }
 
     #[test]
@@ -312,15 +309,15 @@ mod on_stuck {
     }
 
     #[test]
-    fn a_command_past_its_deadline_is_waited_for_and_never_signalled() {
-        let mut timed_out = false;
+    fn a_command_past_its_deadline_calls_on_timeout_once_and_is_waited_for_and_never_signalled() {
+        let mut calls = 0;
         let ended = run(
             &sh("sleep 0.3; exit 5"),
             Vec::new(),
             Duration::from_millis(20),
-            || timed_out = true,
+            || calls += 1,
         );
-        assert!(timed_out);
+        assert_eq!(calls, 1);
         assert_eq!(ended.expect("sh starts"), Ended::TimedOut);
     }
 
@@ -333,11 +330,146 @@ mod on_stuck {
     }
 
     #[test]
-    fn an_empty_command_is_refused() {
-        let ended = run(&[], Vec::new(), Duration::from_secs(1), || {});
+    fn a_command_with_a_program_and_arguments_runs_with_each_argument_separate() {
+        let command = CommandLine::of(&["test", "a b", "=", "a b"]);
+        let ended = run(&command, Vec::new(), Duration::from_secs(10), || {
+            panic!("the command runs within its deadline")
+        });
+        assert_eq!(ended.expect("test starts"), Ended::Exited(Some(0)));
+    }
+}
+
+mod reclaimer {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use rustix::process::{Pid, Signal, kill_process, test_kill_process};
+
+    use crate::job::CommandLine;
+    use crate::job::reclaimer::{Ended, delay_reading, run};
+
+    fn sh(script: &str) -> CommandLine {
+        CommandLine::of(&["/bin/sh", "-c", script])
+    }
+
+    /// The file where a test's background process writes its process ID,
+    /// whose drop ends that process, so it never outlives the test.
+    struct Background(PathBuf);
+
+    impl Background {
+        fn new() -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let n = NEXT.fetch_add(1, Ordering::SeqCst);
+            Self(std::env::temp_dir().join(format!("db-bg-{}-{n}", std::process::id())))
+        }
+
+        fn pid(&self) -> Option<Pid> {
+            let text = std::fs::read_to_string(&self.0).ok()?;
+            Pid::from_raw(text.trim().parse().ok()?)
+        }
+    }
+
+    impl Drop for Background {
+        fn drop(&mut self) {
+            if let Some(pid) = self.pid() {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "the test ends the background sleep that its own script started"
+                )]
+                let _ = kill_process(pid, Signal::KILL);
+            }
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_reclaimer_that_writes_64_kib_and_exits_at_once_yields_its_whole_report_when_reading_runs_late()
+     {
+        let command = sh("head -c 65536 /dev/zero | tr '\\0' a");
+        delay_reading(Duration::from_secs(1));
+        let ended = run(&command, &[], Duration::from_secs(30), || {});
+        delay_reading(Duration::ZERO);
+        let Ended::Exited { code, stdout } = ended.expect("the reclaimer starts and is waited for")
+        else {
+            panic!("the reclaimer exits within its deadline");
+        };
+        assert_eq!(code, Some(0));
+        assert_eq!(stdout.len(), 65536);
+        assert!(stdout.iter().all(|byte| *byte == b'a'));
+    }
+
+    #[test]
+    fn a_reclaimer_whose_output_is_read_on_time_yields_its_whole_report() {
+        let ended = run(&sh("echo kept"), &[], Duration::from_secs(30), || {});
         assert_eq!(
-            ended.expect_err("nothing can start").kind(),
-            std::io::ErrorKind::InvalidInput
+            ended.expect("the reclaimer starts and is waited for"),
+            Ended::Exited {
+                code: Some(0),
+                stdout: b"kept\n".to_vec()
+            }
         );
+    }
+
+    #[test]
+    fn a_background_child_that_holds_stdout_does_not_hold_the_reclaim_after_the_reclaimer_exits() {
+        let background = Background::new();
+        let script = format!(
+            "sleep 60 & echo $! > '{}'; echo kept",
+            background.0.display()
+        );
+        let ended = run(&sh(&script), &[], Duration::from_secs(120), || {})
+            .expect("the reclaimer starts and is waited for");
+        let pid = background
+            .pid()
+            .expect("the script wrote the background ID");
+        assert!(
+            test_kill_process(pid).is_ok(),
+            "the reclaim returned only after the background child ended"
+        );
+        assert_eq!(
+            ended,
+            Ended::Exited {
+                code: Some(0),
+                stdout: b"kept\n".to_vec()
+            }
+        );
+    }
+
+    #[test]
+    fn a_reclaimer_past_its_deadline_calls_on_timeout_once_and_is_waited_for() {
+        let mut calls = 0;
+        let ended = run(&sh("sleep 0.3"), &[], Duration::from_millis(20), || {
+            calls += 1;
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(
+            ended.expect("the reclaimer starts and is waited for"),
+            Ended::TimedOut
+        );
+    }
+
+    #[test]
+    fn a_reclaimer_whose_waiting_thread_cannot_start_reports_the_error() {
+        crate::spawn::refuse("deadband-reclaimer-wait");
+        let ended = run(
+            &CommandLine::of(&["true"]),
+            &[],
+            Duration::from_secs(30),
+            || {},
+        );
+        crate::spawn::allow();
+        assert!(ended.is_err(), "{ended:?}");
+    }
+
+    #[test]
+    fn a_reclaimer_whose_reading_thread_cannot_start_does_not_start_and_reports_the_error() {
+        let started = Background::new();
+        let script = format!("touch '{}'", started.0.display());
+        crate::spawn::refuse("deadband-reclaimer-read");
+        let ended = run(&sh(&script), &[], Duration::from_secs(30), || {});
+        crate::spawn::allow();
+        assert!(ended.is_err(), "{ended:?}");
+        assert!(!started.0.exists(), "the reclaimer started");
     }
 }

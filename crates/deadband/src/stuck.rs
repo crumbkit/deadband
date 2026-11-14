@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use regex_lite::Regex;
 
+use crate::job::CommandLine;
 use crate::probe::ProcessUse;
 use crate::protocol::OutsideJobs;
 
@@ -241,8 +242,8 @@ pub struct Config {
     /// The expressions of `stuck_ignore`. A job whose command line matches
     /// any of them is not watched.
     pub ignore: Vec<Regex>,
-    /// The command of `on_stuck`, which is empty when the config names none.
-    pub on_stuck: Vec<String>,
+    /// The command of `on_stuck`, or `None` when the config names none.
+    pub on_stuck: Option<CommandLine>,
 }
 
 impl Default for Config {
@@ -250,7 +251,7 @@ impl Default for Config {
         Self {
             after: Some(DEFAULT_AFTER),
             ignore: Vec::new(),
-            on_stuck: Vec::new(),
+            on_stuck: None,
         }
     }
 }
@@ -307,13 +308,16 @@ impl Config {
                     .map_err(|error| format!("stuck_ignore {pattern:?} does not parse: {error}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if on_stuck.as_ref().is_some_and(Vec::is_empty) {
-            return Err("on_stuck is an empty command".to_owned());
-        }
+        let on_stuck = on_stuck
+            .map(|words| {
+                CommandLine::from_words(words)
+                    .ok_or_else(|| "on_stuck is an empty command".to_owned())
+            })
+            .transpose()?;
         Ok(Self {
             after,
             ignore,
-            on_stuck: on_stuck.unwrap_or_default(),
+            on_stuck,
         })
     }
 

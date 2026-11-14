@@ -13,6 +13,7 @@ use super::super::{Log, Settings, Watching, bind, serve};
 use super::timeline::{ended, row, timeline_until};
 use super::{Client, REPLY_WITHIN, SAMPLE_EVERY, job, jobs};
 use crate::admit::{GIB, Threads};
+use crate::job::CommandLine;
 use crate::probe::{Disk, Pressure, Probe, ProcessUse, Sample, TreeUnreadable, Unreadable};
 use crate::protocol::{Ago, Exit, Job, JobState, Jobs, OutsideJobs, Reply, Request};
 use crate::reclaim::Config;
@@ -100,7 +101,7 @@ impl Probe for Trees {
 /// What a test daemon uses.
 struct Options {
     stuck: stuck::Config,
-    census: Vec<String>,
+    census: CommandLine,
 }
 
 impl Default for Options {
@@ -115,8 +116,8 @@ impl Default for Options {
     }
 }
 
-fn sh(script: &str) -> Vec<String> {
-    vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()]
+fn sh(script: &str) -> CommandLine {
+    CommandLine::of(&["/bin/sh", "-c", script])
 }
 
 fn start(probe: &Trees, options: Options) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
@@ -424,11 +425,11 @@ fn on_stuck_reads_the_job_as_json_and_runs_once() {
     let file = directory.join("input");
     let probe = Trees::new(QUIET);
     let mut options = Options::default();
-    options.stuck.on_stuck = sh(&format!(
+    options.stuck.on_stuck = Some(sh(&format!(
         "cat >> '{}'; echo >> '{}'",
         file.display(),
         file.display()
-    ));
+    )));
     let (path, _log) = start(&probe, options);
     let _client = ask(&path, watched("hooked", ROOT));
     let begun = Instant::now();
@@ -455,7 +456,7 @@ fn on_stuck_reads_the_job_as_json_and_runs_once() {
 fn a_failing_on_stuck_is_one_log_line_and_detection_goes_on() {
     let probe = Trees::new(QUIET);
     let mut options = Options::default();
-    options.stuck.on_stuck = sh("exit 9");
+    options.stuck.on_stuck = Some(sh("exit 9"));
     let (path, log) = start(&probe, options);
     let _client = ask(&path, watched("hook-fails", ROOT));
     let begun = Instant::now();
@@ -479,7 +480,7 @@ fn a_job_with_no_on_stuck_logs_nothing_when_it_becomes_stuck() {
 fn an_on_stuck_command_that_cannot_start_is_named_in_the_log_when_a_job_becomes_stuck() {
     let probe = Trees::new(QUIET);
     let mut options = Options::default();
-    options.stuck.on_stuck = vec!["/nonexistent/notify".to_owned()];
+    options.stuck.on_stuck = Some(CommandLine::of(&["/nonexistent/notify"]));
     let (path, log) = start(&probe, options);
     let _client = ask(&path, watched("hook-missing", ROOT));
     let begun = Instant::now();
