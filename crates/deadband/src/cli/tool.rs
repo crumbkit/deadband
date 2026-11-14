@@ -6,7 +6,7 @@ use crumbkit::completion::{COMPLETION_CHECK, COMPLETION_INSTALL, COMPLETION_PRIN
 use crumbkit::help::{Effects, Example, FileFormat, Goal, Group, Help, Leaf};
 use crumbkit::schemas::{SCHEMAS_LIST, SCHEMAS_SHOW};
 use crumbkit::tool::{Exit, Failures};
-use crumbkit_skills::{SKILLS_CHECK, SKILLS_INSTALL, SKILLS_PRINT};
+use crumbkit_skills::{check_leaf, install_leaf, print_leaf};
 
 use super::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED};
 use super::service::{
@@ -129,30 +129,9 @@ pub const TOOL: Tool = Tool::new()
                     )])
                     .document(SCHEMAS_SHOW)
                     .effects(Effects::read_only()),
-                Leaf::new(&["skills", "install"])
-                    .examples(&[
-                        Example::new(
-                            &[],
-                            "Install deadband's skill into each agent skills directory that exists",
-                        ),
-                        Example::new(
-                            &["--force"],
-                            "Install it, replacing a file or a link that install did not write",
-                        ),
-                    ])
-                    .effects(Effects::additive().idempotent())
-                    .document(SKILLS_INSTALL),
-                Leaf::new(&["skills", "check"])
-                    .examples(&[Example::new(
-                        &[],
-                        "Report each agent skills directory whose copy is missing or differs",
-                    )])
-                    .effects(Effects::read_only())
-                    .document(SKILLS_CHECK),
-                Leaf::new(&["skills", "print"])
-                    .examples(&[Example::new(&[], "Print deadband's skill")])
-                    .effects(Effects::read_only())
-                    .document(SKILLS_PRINT),
+                install_leaf(&["skills", "install"]),
+                check_leaf(&["skills", "check"]),
+                print_leaf(&["skills", "print"]),
                 Leaf::new(&["completion", "install"])
                     .examples(&[
                         Example::new(&["--shell", "fish"], "Install deadband's completion for fish"),
@@ -183,39 +162,39 @@ pub const TOOL: Tool = Tool::new()
     .failures(
         Failures::new().exits(&[
             Exit::new(EXIT_MACHINE, "deadband could not read the machine.")
-                .failures(&[&MACHINE_UNREADABLE, &MACHINE_UNSUPPORTED]),
+                .failures(&[MACHINE_UNREADABLE, MACHINE_UNSUPPORTED]),
             Exit::new(
                 EXIT_DAEMON,
                 "the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.",
             )
             .commands(&[&["daemon"]])
-            .failures(&[&SOCKET_UNUSABLE, &SOCKET_DIRECTORY]),
+            .failures(&[SOCKET_UNUSABLE, SOCKET_DIRECTORY]),
             Exit::new(
                 EXIT_SERVICE,
                 "deadband could not install or uninstall its launchd agent.",
             )
             .commands(&[&["service", "install"], &["service", "uninstall"]])
             .failures(&[
-                &SERVICE_UNSUPPORTED,
-                &SERVICE_UNLOCATED,
-                &SERVICE_PLIST_UNREADABLE,
-                &SERVICE_WRITE_FAILED,
-                &SERVICE_LAUNCHCTL_FAILED,
-                &SERVICE_LOCKED,
+                SERVICE_UNSUPPORTED,
+                SERVICE_UNLOCATED,
+                SERVICE_PLIST_UNREADABLE,
+                SERVICE_WRITE_FAILED,
+                SERVICE_LAUNCHCTL_FAILED,
+                SERVICE_LOCKED,
             ]),
             Exit::new(
                 EXIT_NOT_STARTED,
                 "the program given to `run` was found but could not start.",
             )
             .commands(&[&["run"]])
-            .failures(&[&JOB_NOT_STARTED]),
+            .failures(&[JOB_NOT_STARTED]),
             Exit::new(EXIT_NOT_FOUND, "the program given to `run` was not found.")
                 .commands(&[&["run"]])
-                .failures(&[&JOB_NOT_FOUND]),
+                .failures(&[JOB_NOT_FOUND]),
             #[cfg(feature = "tui")]
             Exit::new(EXIT_TOP, "`top` has no terminal to draw on, or lost it.")
                 .commands(&[&["top"]])
-                .failures(&[&TOP_NOT_A_TERMINAL, &TOP_TERMINAL_FAILED]),
+                .failures(&[TOP_NOT_A_TERMINAL, TOP_TERMINAL_FAILED]),
             #[cfg(feature = "tui")]
             Exit::new(EXIT_INTERRUPTED, "the person pressed Ctrl-C in `top`.")
                 .commands(&[&["top"]]),

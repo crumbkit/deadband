@@ -39,6 +39,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- deadband depends on crumbkit, crumbkit-skills and crumbkit-test 0.5.0, and
+  CI installs cargo-crumbkit 0.5.0 and runs `tool-skill check` and
+  `tool-skill draft --check`. The `skills install`, `skills check` and
+  `skills print` commands come from crumbkit-skills, so their help text is
+  crumbkit-skills' generic wording, and the rows of `skills install --json`
+  and `skills check --json` gain a `skill` field. Their flags, effects and
+  exit codes are unchanged. In the library, `deadband::cli::SkillsCommand` is
+  crumbkit-skills' type, and its `Print` variant takes `SkillsPrint`.
+
 - In the library, `Job::label` and `StuckJob::label` are `Label`,
   `StuckJob::quiet` is a `Duration`, `Reply::Granted`, `Request::Seat`,
   `Limits::parallelism` and `Lease::threads` (which was `Lease::jobs`) use

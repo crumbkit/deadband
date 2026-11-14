@@ -1,4 +1,4 @@
-Install deadband's skill into each agent skills directory that exists
+Install this tool's skills into each agent skills directory that exists
 
 Usage: deadband skills install [OPTIONS]
 
@@ -29,17 +29,18 @@ Options:
 
 Examples:
   deadband skills install
-          Install deadband's skill into each agent skills directory that exists
+          Install the skills into each agent skills directory that exists
 
   deadband skills install --force
-          Install it, replacing a file or a link that install did not write
+          Install them, replacing a file or a link that install did not write
 
 Columns:
   state   What install did: failed, skipped, written or unchanged.
+  skill   The skill's name, which names its folder in each skills directory, such as `shelf`.
   dirs    The skills directories that share this copy, as named. Directories that resolve to one place through a symbolic link share one copy.
   reason  Why install skipped or failed, or what it replaced under --force, such as `linked to /src/shelf/skill`, or null.
 
 Columns that --long adds:
-  path  The SKILL.md file that install wrote or left, at its real path.
+  path  The SKILL.md file that install wrote or left, or the skill's other file whose write failed, at its real path.
 
 Effects: additive, idempotent, closed-world.

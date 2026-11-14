@@ -29,13 +29,14 @@ use self::commands::Flagged;
 pub use self::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED, JOB_STUCK, JOB_UNREADABLE, NotStarted};
 pub use self::explore::{CommandsCommand, SchemasCommand};
 pub use self::service::{LaunchAgent, ServiceCommand};
-pub use self::setup::{CompletionCommand, SKILL, SkillsCommand};
+pub use self::setup::{CompletionCommand, SKILL};
 pub use self::status::{STATUS, ShownJob, Status};
 #[cfg(feature = "tui")]
 pub use self::tool::EXIT_TOP;
 pub use self::tool::{
     EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_FOUND, EXIT_NOT_STARTED, EXIT_SERVICE, TOOL,
 };
+pub use crumbkit_skills::SkillsCommand;
 
 /// Keep a busy machine usable while many heavy jobs compete for it.
 #[derive(Debug, Parser)]
@@ -191,7 +192,9 @@ pub fn run<P: Probe + Clone + Send + 'static>(machine: &Machine<P>) -> ExitCode 
         Command::Top => commands::top(&mut Sink::standard(), &mut output, machine),
         Command::Commands { command } => explore::commands(&mut Sink::standard(), output, &command),
         Command::Schemas { command } => explore::schemas(&mut Sink::standard(), output, &command),
-        Command::Skills { command } => setup::skills(&mut Sink::standard(), output, &command),
+        Command::Skills { command } => {
+            crumbkit_skills::run_to(&mut Sink::standard(), output, &[SKILL], &command)
+        }
         Command::Completion { command } => {
             setup::completion(&mut Sink::standard(), output, &command)
         }
@@ -220,7 +223,7 @@ pub fn run_to<O: Write, W: Write, T: Into<OsString>, P: Probe + Clone + Send + '
         Command::Top => commands::top(sink, &mut output, machine),
         Command::Commands { command } => explore::commands(sink, output, &command),
         Command::Schemas { command } => explore::schemas(sink, output, &command),
-        Command::Skills { command } => setup::skills(sink, output, &command),
+        Command::Skills { command } => crumbkit_skills::run_to(sink, output, &[SKILL], &command),
         Command::Completion { command } => setup::completion(sink, output, &command),
     }
 }
