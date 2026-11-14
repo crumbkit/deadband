@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0-alpha.1] - 2026-11-14
+
 ### Security
 
 - Without `DEADBAND_SOCKET`, `DEADBAND_SOCKET_DIR` or `TMPDIR`, the socket
