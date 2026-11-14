@@ -18,24 +18,25 @@
 //!   output and error, deadband captures nothing, and there is no deadline.
 //! - End: deadband waits for the job and reaps it, and reads its exit
 //!   status from the wait. deadband never stops or signals the job of its
-//!   own choosing. The one signal it sends is a SIGTERM or SIGINT that its
+//!   own choosing. The one signal it sends is one of [`FORWARDED`] that its
 //!   own caller sent to `deadband run`, which the `forward` module passes on
 //!   to the job unchanged while it keeps waiting, so a `kill` of the wrapper
 //!   ends the job and the daemon sees the job end, not the connection close.
-//!   A Ctrl-C at the terminal reaches both deadband and the job, because
-//!   they share a process group, so the job receives that SIGINT twice, once
-//!   from the terminal and once from deadband. Registering SIGINT and
-//!   SIGTERM replaces an ignored disposition that the caller passed down, so
-//!   a job that would have inherited an ignored SIGINT, as a background job
-//!   of a non-interactive shell does, now ends on the signal. A refused
-//!   thread or a failed registration runs the job without forwarding.
+//!   A Ctrl-C, Ctrl-\ or hangup at the terminal reaches both deadband and the
+//!   job, because they share a process group, so the job receives that
+//!   signal twice, once from the terminal and once from deadband.
+//!   Registering a signal replaces an ignored disposition that the caller
+//!   passed down, so a job that would have inherited an ignored SIGINT, as a
+//!   background job of a non-interactive shell does, now ends on the signal.
+//!   A refused thread or a failed registration runs the job without
+//!   forwarding.
 
-use std::ffi::OsString;
+use std::ffi::{OsString, c_int};
 use std::io;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 
-use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2};
 
 pub mod busiest;
 mod command_line;
@@ -53,8 +54,13 @@ pub use self::command_line::CommandLine;
 /// plus the signal's number.
 const SIGNAL_BASE: i32 = 128;
 
+/// The signals that `deadband run` passes on to its job when its caller
+/// sends them. SIGKILL and SIGSTOP cannot be caught, so they are not among
+/// them.
+pub const FORWARDED: [c_int; 6] = [SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2];
+
 /// Runs `command` with `variables` added to its environment, waits for it
-/// while passing on to it a SIGTERM or SIGINT that this process receives,
+/// while passing on to it each of [`FORWARDED`] that this process receives,
 /// and returns its exit status.
 ///
 /// # Errors
@@ -65,7 +71,7 @@ pub fn run(
     command: &CommandLine<OsString>,
     variables: &[(&str, String)],
 ) -> io::Result<ExitStatus> {
-    forward::run_forwarding(command, variables, &[SIGTERM, SIGINT])
+    forward::run_forwarding(command, variables, &FORWARDED)
 }
 
 /// Returns the exit code that `deadband run` ends with for a job that

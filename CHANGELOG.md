@@ -29,6 +29,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   thread that reads it late. Once the reclaimer exits, the daemon reads what
   its standard output already holds, where it used to stop reading 250 ms
   after the exit and count a cut-off report as failed.
+- `deadband run` passes a SIGHUP, SIGQUIT, SIGUSR1 or SIGUSR2 that it
+  receives on to its job, as it already did for SIGTERM and SIGINT, and exits
+  with the job. A SIGHUP from a harness or a closed terminal used to end
+  `deadband run` alone, so the daemon freed the job's place while the job
+  kept running uncounted. The library names the six signals in
+  `job::FORWARDED`.
 
 ## [0.4.0-alpha.1] - 2026-11-14
 
