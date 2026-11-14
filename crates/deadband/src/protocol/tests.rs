@@ -11,7 +11,7 @@ use super::{
     Reply, Request, SHORT_BYTES, Short, StuckJob, StuckPeriod, Timeline, job_cwd, read_line,
     write_line,
 };
-use crate::admit::{Hold, Lane, Threads};
+use crate::admit::{Hold, JobId, Lane, Threads};
 use crate::probe::ChildUsage;
 
 /// A job that the tests send.
@@ -25,6 +25,7 @@ fn job() -> Job {
         cwd: None,
         workspace: None,
         short: None,
+        id: None,
     }
 }
 
@@ -211,15 +212,17 @@ fn a_job_line_whose_label_holds_a_space_and_a_dash_is_read() {
 }
 
 #[test]
-fn a_jobs_reply_writes_its_threads_and_quiet_seconds_as_the_same_json_numbers() {
+fn a_jobs_reply_writes_its_ids_threads_and_quiet_seconds_as_the_same_json_numbers() {
+    let id = Some(JobId::default());
     let jobs = Reply::Jobs(Jobs {
         max_jobs: 2,
-        running: vec![job()],
+        running: vec![Job { id, ..job() }],
         waiting: Vec::new(),
         held: None,
         reclaim: None,
         reclaiming: None,
         stuck: vec![StuckJob {
+            id,
             label: Label::new("tests"),
             pid: 42,
             quiet: Duration::from_secs(120),
@@ -229,7 +232,7 @@ fn a_jobs_reply_writes_its_threads_and_quiet_seconds_as_the_same_json_numbers() 
     });
     assert_eq!(
         line(&jobs),
-        "{\"jobs\":{\"max_jobs\":2,\"running\":[{\"label\":\"tests\",\"pid\":42,\"command\":\"cargo nextest run\",\"lane\":\"fast\"}],\"waiting\":[],\"held\":null,\"reclaim\":null,\"reclaiming\":null,\"stuck\":[{\"label\":\"tests\",\"pid\":42,\"quiet_seconds\":120}],\"busiest\":null,\"unreadable\":false}}\n"
+        "{\"jobs\":{\"max_jobs\":2,\"running\":[{\"label\":\"tests\",\"pid\":42,\"command\":\"cargo nextest run\",\"lane\":\"fast\",\"id\":0}],\"waiting\":[],\"held\":null,\"reclaim\":null,\"reclaiming\":null,\"stuck\":[{\"id\":0,\"label\":\"tests\",\"pid\":42,\"quiet_seconds\":120}],\"busiest\":null,\"unreadable\":false}}\n"
     );
 }
 

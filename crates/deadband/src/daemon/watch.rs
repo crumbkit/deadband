@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 
 use self::hook::Hooks;
 use super::{Log, Shared, State, Watching, lock, note};
+use crate::admit::JobId;
 use crate::job::busiest::{Census, Failed};
 use crate::probe::{Probe, ProcessUse, TreeUnreadable};
 use crate::protocol::{Ago, Label, OutsideJobs, Reply, StuckJob, write_line};
@@ -32,9 +33,11 @@ mod hook;
 /// What the daemon knows of the watched jobs.
 #[derive(Debug, Default)]
 pub(super) struct Watched {
-    /// What the rule remembers of each watched job, by its root's process
-    /// ID, which cannot be reused while the job's connection is open.
-    tracks: HashMap<u32, Track>,
+    /// What the rule remembers of each running watched job, by the job's
+    /// number. A program that embeds deadband reports its own process ID
+    /// for every job, so two of its jobs have one process ID and two
+    /// numbers. A track ends when its job leaves the queue.
+    tracks: HashMap<JobId, Track>,
     /// The processes outside the jobs while a job is stuck.
     busiest: Option<OutsideJobs>,
     /// Whether the latest read of a job's processes failed.
@@ -52,19 +55,16 @@ impl Watched {
         self.unreadable
     }
 
-    /// Returns the stuck periods of the job whose root is `pid`.
-    pub(super) fn periods(&self, pid: u32) -> Vec<Period> {
-        self.tracks
-            .get(&pid)
-            .map(Track::periods)
-            .unwrap_or_default()
+    /// Returns the stuck periods of the job numbered `id`.
+    pub(super) fn periods(&self, id: JobId) -> Vec<Period> {
+        self.tracks.get(&id).map(Track::periods).unwrap_or_default()
     }
 
-    /// Ends the record of the job whose root is `pid`, and returns its stuck
-    /// periods.
-    pub(super) fn end(&mut self, pid: u32) -> Vec<Period> {
+    /// Ends the record of the job numbered `id`, and returns its stuck
+    /// periods. A job that never ran has no record, and gets none.
+    pub(super) fn end(&mut self, id: JobId) -> Vec<Period> {
         self.tracks
-            .remove(&pid)
+            .remove(&id)
             .map(|track| track.periods())
             .unwrap_or_default()
     }
@@ -72,8 +72,8 @@ impl Watched {
 
 /// The job a change belongs to.
 struct Noticed {
-    /// The process ID of the job's root.
-    pid: u32,
+    /// The job's number.
+    id: JobId,
     /// The job's label.
     label: Label,
     /// What changed.
@@ -84,10 +84,11 @@ impl State {
     /// Returns the stuck jobs at `now`, in the order they started.
     pub(super) fn stuck_jobs(&self, now: Instant) -> Vec<StuckJob> {
         self.queue
-            .running()
-            .filter_map(|waiter| {
-                let quiet = self.stuck.tracks.get(&waiter.job.pid)?.quiet(now)?;
+            .running_since()
+            .filter_map(|(id, waiter, _)| {
+                let quiet = self.stuck.tracks.get(&id)?.quiet(now)?;
                 Some(StuckJob {
+                    id: Some(id),
                     label: waiter.job.label.clone(),
                     pid: waiter.job.pid,
                     quiet,
@@ -96,12 +97,13 @@ impl State {
             .collect()
     }
 
-    /// Returns the process ID and command of each running watched job.
-    fn watched_jobs(&self) -> Vec<(u32, String)> {
+    /// Returns the number, root process ID and command of each running
+    /// watched job.
+    fn watched_jobs(&self) -> Vec<(JobId, u32, String)> {
         self.queue
-            .running()
-            .filter(|waiter| waiter.job.watched)
-            .map(|waiter| (waiter.job.pid, waiter.job.command.clone()))
+            .running_since()
+            .filter(|(_, waiter, _)| waiter.job.watched)
+            .map(|(id, waiter, _)| (id, waiter.job.pid, waiter.job.command.clone()))
             .collect()
     }
 
@@ -109,28 +111,28 @@ impl State {
     /// ended while its tree was read has no record any more, and gets none.
     fn apply(
         &mut self,
-        readings: &[(u32, Vec<ProcessUse>)],
+        readings: &[(JobId, Vec<ProcessUse>)],
         after: Duration,
         now: Instant,
     ) -> Vec<Noticed> {
-        let running: HashMap<u32, Label> = self
+        let running: HashMap<JobId, Label> = self
             .queue
-            .running()
-            .map(|waiter| (waiter.job.pid, waiter.job.label.clone()))
+            .running_since()
+            .map(|(id, waiter, _)| (id, waiter.job.label.clone()))
             .collect();
         let mut noticed = Vec::new();
-        for (pid, tree) in readings {
-            let Some(label) = running.get(pid) else {
+        for (id, tree) in readings {
+            let Some(label) = running.get(id) else {
                 continue;
             };
             let track = self
                 .stuck
                 .tracks
-                .entry(*pid)
+                .entry(*id)
                 .or_insert_with(|| Track::new(now));
             if let Some(change) = track.observe(tree, after, now) {
                 noticed.push(Noticed {
-                    pid: *pid,
+                    id: *id,
                     label: label.clone(),
                     change,
                 });
@@ -139,10 +141,10 @@ impl State {
         noticed
     }
 
-    /// Returns the connection of the running job whose root is `pid`, which
-    /// the caller writes to after it releases the lock.
-    fn notice_stream(&self, pid: u32) -> Option<Arc<UnixStream>> {
-        let waiter = self.queue.running().find(|waiter| waiter.job.pid == pid)?;
+    /// Returns the connection of the running job numbered `id`, which the
+    /// caller writes to after it releases the lock.
+    fn notice_stream(&self, id: JobId) -> Option<Arc<UnixStream>> {
+        let waiter = self.queue.running_job(id)?;
         Some(Arc::clone(&waiter.stream))
     }
 }
@@ -224,7 +226,7 @@ impl<P: Probe> Watcher<P> {
     /// Takes one sample of every watched job.
     fn tick(&mut self) {
         let mut roots = lock(&self.shared).watched_jobs();
-        roots.retain(|(_, command)| !self.config.ignores(command));
+        roots.retain(|(_, _, command)| !self.config.ignores(command));
         if roots.is_empty() {
             let mut state = lock(&self.shared);
             state.stuck.unreadable = false;
@@ -258,13 +260,13 @@ impl<P: Probe> Watcher<P> {
     /// no reader gives no reading and no failure.
     fn read_trees(
         &self,
-        roots: &[(u32, String)],
-    ) -> (Vec<(u32, Vec<ProcessUse>)>, Option<std::io::Error>) {
+        roots: &[(JobId, u32, String)],
+    ) -> (Vec<(JobId, Vec<ProcessUse>)>, Option<std::io::Error>) {
         let mut readings = Vec::new();
         let mut failure = None;
-        for (pid, _) in roots {
+        for (id, pid, _) in roots {
             match self.probe.tree(*pid) {
-                Ok(tree) => readings.push((*pid, tree)),
+                Ok(tree) => readings.push((*id, tree)),
                 Err(TreeUnreadable::Unsupported) => {}
                 Err(TreeUnreadable::Failed(error)) => failure = Some(error),
             }
@@ -297,7 +299,7 @@ impl<P: Probe> Watcher<P> {
 
     /// Runs the process list when a job has just `became` stuck, or at most
     /// once per `census_every` while one stays stuck. It holds no lock.
-    fn name_busiest(&mut self, became: bool, readings: &[(u32, Vec<ProcessUse>)], now: Instant) {
+    fn name_busiest(&mut self, became: bool, readings: &[(JobId, Vec<ProcessUse>)], now: Instant) {
         let due = self
             .census_at
             .is_none_or(|at| now.saturating_duration_since(at) >= self.watching.census_every);
@@ -351,7 +353,7 @@ impl<P: Probe> Watcher<P> {
             },
             Change::Active { quiet: q } => Reply::Active { quiet: quiet(q) },
         };
-        let stream = lock(&self.shared).notice_stream(noticed.pid);
+        let stream = lock(&self.shared).notice_stream(noticed.id);
         if let Some(stream) = stream {
             let _ = write_line(&mut &*stream, &reply);
         }

@@ -830,6 +830,15 @@
             "null"
           ]
         },
+        "id": {
+          "description": "The job's number in the daemon's queue, or absent from an older\ndaemon. A stuck row with the same number belongs to this job.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "label": {
           "description": "The label that `--label` gave, or the program's name.",
           "type": "string"
@@ -937,6 +946,15 @@
       "description": "A job that has shown no activity for the configured time.",
       "type": "object",
       "properties": {
+        "id": {
+          "description": "The number of the running job that is stuck, which that job's row\nalso carries. An older daemon sends none.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "label": {
           "description": "The job's label.",
           "type": "string"

@@ -68,6 +68,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Two watched jobs that report one process ID each get their own stuck
+  notice and stuck periods, where the first job's connection received both
+  notices. A waiting job that leaves no longer ends the stuck record of a
+  running job with the same process ID. `deadband status` names each stuck
+  job by its own running line. The daemon's list of jobs, and the running,
+  waiting and stuck rows of `status --json`, gain an `id` field with the
+  job's number in the daemon's queue. `status` matches a stuck row to its job
+  by that number, and by process ID for an older daemon that sends none.
 - Exit 4 is listed only for `deadband daemon` in `deadband help exit-codes`
   and `docs/commands.md`, where it repeated in every command's section.
 - `deadband status` says, when launchd has loaded the agent and no daemon

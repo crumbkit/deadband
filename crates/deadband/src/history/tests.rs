@@ -121,6 +121,7 @@ fn job_in(command: &str, cwd: Option<&Path>) -> Job {
         cwd: cwd.map(|cwd| cwd.display().to_string()),
         workspace: None,
         short: None,
+        id: None,
     }
 }
 

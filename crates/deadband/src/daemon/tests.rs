@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use super::{Log, Settings, Unbound, bind, default_max_jobs, lock_path, serve};
-use crate::admit::{GIB, Hold, Lane, Threads};
+use crate::admit::{GIB, Hold, JobId, Lane, Threads};
 use crate::history::FILE;
 use crate::history::tests::{Scratch, handled, lines_of, write_file};
 use crate::probe::{ChildUsage, Disk, Pressure, Probe, Sample, Unreadable};
@@ -200,14 +200,16 @@ fn job(label: &str) -> Job {
         cwd: None,
         workspace: None,
         short: None,
+        id: None,
     }
 }
 
 /// Returns `job(label)` as the daemon lists it, with the short command that
-/// it computes from `make <label>`.
-fn shown_job(label: &str) -> Job {
+/// it computes from `make <label>` and the number `id` that its queue gave.
+fn shown_job(label: &str, id: u64) -> Job {
     Job {
         short: Some(Short::new("make")),
+        id: Some(JobId::new(id)),
         ..job(label)
     }
 }
@@ -286,7 +288,7 @@ fn a_seated_job_shows_in_status_and_a_new_job_waits_behind_it() {
     let (path, _) = start(1, &Dial::new(Pressure::Normal));
     let _seated = seat(&path, "a", 16, 0);
     let listed = until_running(&path, 1);
-    assert_eq!(listed.running, [shown_job("a")]);
+    assert_eq!(listed.running, [shown_job("a", 0)]);
     assert_eq!(Client::ask(&path, "b").reply(), queued(0, 1));
 }
 
@@ -383,8 +385,8 @@ fn status_lists_the_running_and_the_waiting_jobs() {
         jobs(&path),
         Jobs {
             max_jobs: 1,
-            running: vec![shown_job("a")],
-            waiting: vec![shown_job("b")],
+            running: vec![shown_job("a", 0)],
+            waiting: vec![shown_job("b", 1)],
             held: Some(Hold::Full { max_jobs: 1 }),
             reclaim: None,
             reclaiming: None,
@@ -638,7 +640,7 @@ fn a_waiting_client_that_disconnects_leaves_the_queue_and_the_next_moves_up() {
         // observable round trip.
         listed = jobs(&path);
     }
-    assert_eq!(listed.waiting, vec![shown_job("c")]);
+    assert_eq!(listed.waiting, vec![shown_job("c", 2)]);
     first.send(&Request::Done {
         exit_code: Some(0),
         signal: None,

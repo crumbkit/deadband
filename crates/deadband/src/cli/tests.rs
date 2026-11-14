@@ -13,7 +13,7 @@ use std::time::Duration;
 use crumbkit::Sink;
 
 use super::{EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_FOUND, EXIT_NOT_STARTED, Machine, run_to};
-use crate::admit::{GIB, Hold, Lane, Threads};
+use crate::admit::{GIB, Hold, JobId, Lane, Threads};
 use crate::daemon::{Log, Settings, bind, serve};
 use crate::environment::Environment;
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
@@ -151,6 +151,7 @@ fn ask(socket: &Path, label: &str) -> (UnixStream, Reply) {
         cwd: None,
         workspace: None,
         short: None,
+        id: None,
     };
     write_line(&mut stream, &Request::Ask(job)).expect("the request writes");
     let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
@@ -740,6 +741,7 @@ fn listed(label: &str, pid: u32) -> Job {
         cwd: None,
         workspace: None,
         short: None,
+        id: None,
     }
 }
 
@@ -800,6 +802,7 @@ fn status_names_a_stuck_job_as_its_running_line_does() {
         &test,
         Jobs {
             stuck: vec![StuckJob {
+                id: None,
                 label: Label::new("api-tests"),
                 pid: 22,
                 quiet: Duration::from_secs(120),
@@ -810,6 +813,45 @@ fn status_names_a_stuck_job_as_its_running_line_does() {
     let (_, out, _) = test.run(&["status"]);
     assert!(
         out.contains("\nstuck: triage · api-tests (pid 22): no CPU"),
+        "{out}"
+    );
+}
+
+#[test]
+fn status_shows_a_stuck_job_against_its_own_running_line_when_two_jobs_share_a_pid() {
+    let mut next = JobId::default();
+    let (first, second) = (next.take(), next.take());
+    let test = Test::new(Fixed);
+    answer_status(
+        &test,
+        Jobs {
+            running: vec![
+                Job {
+                    id: Some(first),
+                    ..shown("first", 7, Some("triage"), "cargo build")
+                },
+                Job {
+                    id: Some(second),
+                    ..shown("second", 7, Some("docs"), "cargo doc")
+                },
+            ],
+            waiting: Vec::new(),
+            stuck: vec![StuckJob {
+                id: Some(second),
+                label: Label::new("second"),
+                pid: 7,
+                quiet: Duration::from_secs(120),
+            }],
+            ..shown_jobs()
+        },
+    );
+    let (_, out, _) = test.run(&["status"]);
+    assert!(
+        out.contains(
+            "\nstuck: docs · second (pid 7): no CPU, new process or disk use for 2m\n\
+             running: docs · second (pid 7): cargo doc\n\
+             running: triage · first (pid 7): cargo build"
+        ),
         "{out}"
     );
 }
@@ -872,6 +914,7 @@ fn status_lists_a_stuck_job_first_and_exits_1() {
         &test,
         Jobs {
             stuck: vec![StuckJob {
+                id: None,
                 label: Label::new("second"),
                 pid: 22,
                 quiet: Duration::from_secs(46 * 60),
@@ -965,6 +1008,7 @@ fn status_says_when_no_process_outside_the_jobs_is_busy() {
         &test,
         Jobs {
             stuck: vec![StuckJob {
+                id: None,
                 label: Label::new("first"),
                 pid: 11,
                 quiet: Duration::from_secs(6 * 60),
@@ -1007,6 +1051,7 @@ fn status_as_json_lists_the_stuck_job_and_its_failure_code() {
         &test,
         Jobs {
             stuck: vec![StuckJob {
+                id: None,
                 label: Label::new("second"),
                 pid: 22,
                 quiet: Duration::from_secs(120),
