@@ -510,11 +510,35 @@ fn daemon_exits_4_with_socket_directory_when_the_directory_it_owns_lets_others_i
     std::fs::create_dir(&directory).expect("the directory is made");
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o777))
         .expect("the mode is set");
-    let mut test = Test::new(Fixed);
-    test.machine.socket_directory = Some(directory);
-    let (code, out, err) = test.run(&["daemon"]);
+    let test = Test::new(Fixed);
+    let machine = Machine {
+        probe: Fixed,
+        socket: test.machine.socket.clone(),
+        socket_directory: Some(directory),
+        log: test.machine.log.clone(),
+        cores: test.machine.cores,
+        environment: test.machine.environment.clone(),
+        service: None,
+    };
+    // A daemon that wrongly accepted the directory would serve for ever, so
+    // the command runs in a thread and the test waits for its end with a
+    // bound that turns that hang into a failure.
+    let (ended, ending) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run_to(
+            &mut Sink::new(&mut out, &mut err),
+            &machine,
+            ["deadband", "daemon"],
+        );
+        let _ = ended.send((code, out, err));
+    });
+    let (code, out, err) = ending
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the daemon refused the directory and ended");
+    let err = String::from_utf8(err).expect("UTF-8");
     assert_eq!(code, EXIT_DAEMON, "{err}");
-    assert_eq!(out, "");
+    assert!(out.is_empty());
     assert!(err.contains("code:  deadband::socket::directory"), "{err}");
 }
 

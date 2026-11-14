@@ -624,9 +624,16 @@ When none is set, the socket is `/tmp/deadband-<uid>/deadband.sock`, where
 `<uid>` is your numeric user id. For the `XDG_RUNTIME_DIR` row and for this fallback the daemon makes the
 directory with mode 0700, and refuses to start with
 `deadband::socket::directory` when the directory exists as a symlink, belongs to
-another user or lets others use it; remove it or name a directory of your own
-with `DEADBAND_SOCKET_DIR`. A client that finds no daemon there runs its job at once.
-Before `run` or `status` sends anything, it checks that the process listening
+another user or lets others use it; set `XDG_RUNTIME_DIR` or
+`DEADBAND_SOCKET_DIR` to a directory of your own, because only its owner or root
+can remove the directory. A client that finds no daemon there runs its job at once.
+Before `run` or `status` connects, it refuses a socket whose directory belongs
+to a user other than you or root, or that group or other users can write to
+unless it is sticky as `/tmp` is, runs the job at once, and prints one line
+saying so; the connection itself never waits for a listener with a full queue.
+The daemon checks only the directory it makes, so with `TMPDIR=/tmp` another
+user can still plant a lock file in `/tmp`, and the daemon then refuses to
+start with `deadband::socket::unusable`. Before `run` or `status` sends anything, it checks that the process listening
 on the socket belongs to the same user, whatever path names the socket. When it
 does not, the client closes the connection, prints one line saying so, and runs
 the job at once without sending the command line. The daemon opens the lock file

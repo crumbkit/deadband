@@ -211,6 +211,7 @@ impl Model {
             Unasked::Closed => Some(Absence::MaybeOlder),
             Unasked::Unreachable { .. }
             | Unasked::Foreign { .. }
+            | Unasked::Directory { .. }
             | Unasked::Silent { .. }
             | Unasked::Garbled { .. } => None,
         };

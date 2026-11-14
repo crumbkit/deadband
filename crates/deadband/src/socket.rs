@@ -130,7 +130,9 @@ fn fallback(read: &impl Fn(&str) -> Option<OsString>, uid: u32) -> PathBuf {
 /// Returns the directory that the daemon makes and checks for the user
 /// whose uid is `uid`, which is the one of the fallback socket. It returns
 /// `None` when `DEADBAND_SOCKET`, `DEADBAND_SOCKET_DIR` or `TMPDIR` names the
-/// socket, because the person who named it owns the directory it is in.
+/// socket, because deadband cannot tell who owns the directory it is in. The client
+/// still refuses to connect through a directory that another user owns or that
+/// others can write to, and checks who owns the listener.
 pub(crate) fn fallback_directory(
     read: impl Fn(&str) -> Option<OsString>,
     uid: u32,

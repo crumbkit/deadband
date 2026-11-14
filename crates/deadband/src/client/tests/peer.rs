@@ -1,7 +1,9 @@
 //! Tests of the check that the daemon on the socket belongs to the user who
 //! asks, before the client sends it a command line.
 
+use std::fs::{DirBuilder, Permissions};
 use std::io::{self, BufReader};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::thread::{self, JoinHandle};
@@ -9,7 +11,11 @@ use std::thread::{self, JoinHandle};
 use rustix::process::getuid;
 
 use super::{ANSWER_WITHIN, job, scripted};
-use crate::client::{Admission, Unasked, ask_checked, jobs_checked, peer_uid};
+use crate::client::{
+    Admission, Unasked, ask_checked, check_directory, connect_checked, jobs_checked, peer_uid,
+};
+use crate::daemon::DirectoryFault;
+use crate::history::tests::Scratch;
 use crate::protocol::{Jobs, Reply, Request, read_line};
 use crate::testing::socket_path;
 
@@ -130,4 +136,101 @@ fn a_peer_whose_credentials_cannot_be_read_starts_the_job() {
 fn the_system_reports_this_user_as_the_peer_of_a_socket_this_user_made() {
     let (client, _server) = UnixStream::pair().expect("the pair is made");
     assert_eq!(peer_uid(&client).expect("the uid reads"), own());
+}
+
+/// Makes a directory under `scratch` with exactly `mode`.
+fn directory_with(scratch: &Scratch, name: &str, mode: u32) -> std::path::PathBuf {
+    let directory = scratch.path().join(name);
+    DirBuilder::new()
+        .create(&directory)
+        .expect("the directory is made");
+    std::fs::set_permissions(&directory, Permissions::from_mode(mode)).expect("the mode is set");
+    directory
+}
+
+#[test]
+fn a_socket_in_a_directory_of_another_user_is_not_asked() {
+    let scratch = Scratch::new();
+    let directory = directory_with(&scratch, "deadband", 0o700);
+    let refused = check_directory(&directory.join("deadband.sock"), own() + 1)
+        .expect_err("another user's directory is refused");
+    assert!(
+        matches!(
+            refused,
+            Unasked::Directory {
+                fault: DirectoryFault::Owner { .. },
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    check_directory(&directory.join("deadband.sock"), own())
+        .expect("the twin: the caller's own directory is asked");
+}
+
+#[test]
+fn a_socket_in_a_directory_that_anyone_can_write_to_is_not_asked() {
+    let scratch = Scratch::new();
+    let open = directory_with(&scratch, "open", 0o777);
+    let refused = check_directory(&open.join("deadband.sock"), own())
+        .expect_err("a world-writable directory is refused");
+    assert!(
+        matches!(
+            refused,
+            Unasked::Directory {
+                fault: DirectoryFault::Mode { .. },
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    let line = refused.to_string();
+    assert!(line.contains("not asked") && !line.contains('\n'), "{line}");
+    let sticky = directory_with(&scratch, "sticky", 0o1777);
+    check_directory(&sticky.join("deadband.sock"), own())
+        .expect("the twin: a sticky directory such as /tmp is asked");
+    let readable = directory_with(&scratch, "readable", 0o755);
+    check_directory(&readable.join("deadband.sock"), own())
+        .expect("the twin: a directory only its owner writes is asked");
+}
+
+#[test]
+fn a_job_starts_at_once_when_the_socket_is_in_a_directory_anyone_can_write_to() {
+    let scratch = Scratch::new();
+    let open = directory_with(&scratch, "open", 0o777);
+    let path = open.join("deadband.sock");
+    let _listener = UnixListener::bind(&path).expect("the socket binds");
+    let admission = ask_checked(&path, &job(), ANSWER_WITHIN, |_, _| {}, None, same);
+    assert!(
+        matches!(admission, Admission::Open(Unasked::Directory { .. })),
+        "{admission:?}"
+    );
+}
+
+#[test]
+fn a_listener_with_a_full_queue_makes_the_client_fail_open_instead_of_waiting() {
+    use rustix::net::{AddressFamily, SocketAddrUnix, SocketType, bind, connect, listen, socket};
+
+    let path = socket_path();
+    let address = SocketAddrUnix::new(&*path).expect("the address is valid");
+    let listener =
+        socket(AddressFamily::UNIX, SocketType::STREAM, None).expect("the socket is made");
+    bind(&listener, &address).expect("the socket binds");
+    listen(&listener, 0).expect("the socket listens");
+    // The listener never accepts, so connections fill its queue until one
+    // does not complete.
+    let mut queued = Vec::new();
+    loop {
+        let filler =
+            socket(AddressFamily::UNIX, SocketType::STREAM, None).expect("the socket is made");
+        rustix::fs::fcntl_setfl(&filler, rustix::fs::OFlags::NONBLOCK)
+            .expect("the socket is nonblocking");
+        let full = connect(&filler, &address).is_err();
+        queued.push(filler);
+        if full {
+            break;
+        }
+    }
+    let answer = connect_checked(&path, same);
+    assert!(answer.is_err(), "a full queue let the client connect");
 }

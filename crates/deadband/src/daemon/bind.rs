@@ -54,7 +54,7 @@ pub enum Unbound {
     /// only this user can use, so the daemon does not listen in it.
     #[failure(
         code = SOCKET_DIRECTORY,
-        hint = "remove the directory, or name one you own with DEADBAND_SOCKET_DIR",
+        hint = "set XDG_RUNTIME_DIR or DEADBAND_SOCKET_DIR to a directory you own; only the directory's owner or root can remove this one",
         field(path = path.to_string_lossy())
     )]
     Directory {

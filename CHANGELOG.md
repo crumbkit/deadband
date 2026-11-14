@@ -20,6 +20,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before they send anything. When it does not, they print one line and run the
   job at once without sending its command line. The check applies to every
   socket path.
+- Before connecting, `run`, `status` and `top` refuse a socket whose directory
+  belongs to another user or that others can write to (unless it is sticky),
+  and the connection no longer waits for a listener whose queue is full, so a
+  listener planted by another user cannot hold a job back.
 - The daemon, the history writer and the service commands open their lock
   files without following a symlink and refuse a lock file that another user
   owns.

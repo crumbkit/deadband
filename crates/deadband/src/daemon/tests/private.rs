@@ -134,6 +134,7 @@ fn the_refusal_names_the_directory_and_says_the_repair() {
         matches!(
             refused.recovery(),
             Recovery::Hint(ref text) if text.contains("DEADBAND_SOCKET_DIR")
+                && text.contains("XDG_RUNTIME_DIR") && text.contains("root")
         ),
         "{:?}",
         refused.recovery()

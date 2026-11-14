@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use rustix::process::getuid;
 
 use crate::admit::Hold;
+use crate::daemon::DirectoryFault;
 use crate::protocol::{Job, Jobs, Reply, Request, Timeline, read_line, write_line};
 
 mod lease;
@@ -74,6 +75,14 @@ pub enum Unasked {
         /// The uid of the user who owns the listening process.
         uid: u32,
     },
+    /// The socket is in a directory that another user could have made or can
+    /// write to, so the client did not ask the daemon.
+    Directory {
+        /// The directory's path.
+        path: PathBuf,
+        /// What is wrong with it.
+        fault: DirectoryFault,
+    },
     /// The daemon did not answer in time.
     Silent {
         /// How long the client waited.
@@ -107,6 +116,9 @@ impl fmt::Display for Unasked {
                 "the process that listens on {} belongs to uid {uid}, not to this user, so the command line was not sent",
                 path.display()
             ),
+            Self::Directory { path, fault } => {
+                write!(f, "{} {fault}, so the daemon was not asked", path.display())
+            }
             Self::Silent { waited } => write!(
                 f,
                 "the daemon did not answer within {} ms",
@@ -130,7 +142,8 @@ fn connect(path: &Path) -> Result<UnixStream, Unasked> {
 /// nothing before this returns, so a listener of another user never sees a
 /// command line.
 fn connect_checked(path: &Path, peer: PeerUid) -> Result<UnixStream, Unasked> {
-    let stream = UnixStream::connect(path).map_err(|error| match error.kind() {
+    check_directory(path, getuid().as_raw())?;
+    let stream = dial(path).map_err(|error| match error.kind() {
         ErrorKind::NotFound | ErrorKind::ConnectionRefused => Unasked::NotRunning {
             path: path.to_owned(),
         },
@@ -150,6 +163,60 @@ fn connect_checked(path: &Path, peer: PeerUid) -> Result<UnixStream, Unasked> {
             error,
         }),
     }
+}
+
+/// Refuses a socket whose directory another user made or can write to,
+/// before the client connects: the directory must belong to `uid` or to
+/// root, and no group or other user may write to it unless it is sticky, as
+/// `/tmp` is. The check is read-only. A directory that fails it can hold a
+/// listener of another user that never accepts.
+fn check_directory(path: &Path, uid: u32) -> Result<(), Unasked> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let Some(directory) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return Ok(());
+    };
+    // A directory that cannot be read is left to the connection to report.
+    let Ok(metadata) = std::fs::metadata(directory) else {
+        return Ok(());
+    };
+    let fault = if metadata.uid() != uid && metadata.uid() != 0 {
+        Some(DirectoryFault::Owner {
+            owner: metadata.uid(),
+        })
+    } else if metadata.mode() & 0o022 != 0 && metadata.mode() & 0o1000 == 0 {
+        Some(DirectoryFault::Mode {
+            mode: metadata.mode() & 0o7777,
+        })
+    } else {
+        None
+    };
+    fault.map_or(Ok(()), |fault| {
+        Err(Unasked::Directory {
+            path: directory.to_owned(),
+            fault,
+        })
+    })
+}
+
+/// Connects to the socket at `path` without waiting: a listener whose queue
+/// is full makes the call fail at once, where a blocking connect on Linux
+/// waits for room for as long as the listener lets it.
+fn dial(path: &Path) -> io::Result<UnixStream> {
+    use rustix::fs::{OFlags, fcntl_setfl};
+    use rustix::io::{FdFlags, fcntl_setfd};
+    use rustix::net::{AddressFamily, SocketAddrUnix, SocketType, connect, socket};
+
+    let address = SocketAddrUnix::new(path)?;
+    let socket = socket(AddressFamily::UNIX, SocketType::STREAM, None)?;
+    fcntl_setfd(&socket, FdFlags::CLOEXEC)?;
+    fcntl_setfl(&socket, OFlags::NONBLOCK)?;
+    connect(&socket, &address)?;
+    fcntl_setfl(&socket, OFlags::empty())?;
+    Ok(UnixStream::from(socket))
 }
 
 /// Reads one reply from `reader`, saying why when none arrives.
