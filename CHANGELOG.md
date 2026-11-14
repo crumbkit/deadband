@@ -27,8 +27,26 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The daemon, the history writer and the service commands open their lock
   files without following a symlink and refuse a lock file that another user
   owns.
+- The daemon refuses a job whose label holds a control character, such as a
+  line feed, and closes its connection, so the client runs the job at once.
+  `deadband run` and `admit` replace each control character in a label with
+  a space before they ask, so their jobs are still admitted. `status` prints
+  the command line that an older daemon sends with each control character
+  escaped, so a label or a command line can no longer add a forged row to
+  `status`. The daemon now keeps the first 64 bytes of a label, as `top` and
+  the history file already showed it, so `status` and the stuck hook see the
+  same label.
 
 ### Changed
+
+- In the library, `Job::label` and `StuckJob::label` are `Label`,
+  `StuckJob::quiet` is a `Duration`, `Reply::Granted`, `Request::Seat`,
+  `Limits::parallelism` and `Lease::threads` (which was `Lease::jobs`) use
+  `Threads`, `JobId` is its own type, and `name` takes `Label` and `Short`.
+  `Running::recent_jobs` is renamed `recent_threads`, and `Queue::remove`
+  returns a running job's threads, which replaces `Queue::threads_of`.
+  `Arrival::read` takes the seated job's age as an `Ago`. The JSON on the
+  socket and in `status --json` is unchanged.
 
 - `deadband daemon` now exits 0, where it exited 4, when another daemon
   already serves the socket. It still prints the `deadband::daemon::running`

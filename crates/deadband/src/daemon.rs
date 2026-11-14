@@ -28,7 +28,7 @@ use self::timeline::Ended;
 use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
 use crate::history::{Arrival, Recorder, Tally};
 use crate::probe::{Pressure, Probe};
-use crate::protocol::{Job, Label};
+use crate::protocol::Job;
 use crate::reclaim::{self, ReclaimLock, Reclaimed, Resource, Watch};
 use crate::spawn;
 
@@ -80,8 +80,6 @@ struct Waiter {
     /// The connection that the daemon writes the grant to, which a
     /// delivery shares after the queue lock is released.
     stream: Arc<UnixStream>,
-    /// The job's label as `deadband top` shows it.
-    label: Label,
     /// When the job asked to start.
     queued: Instant,
     /// What the history line needs from the job's arrival, or `None` when

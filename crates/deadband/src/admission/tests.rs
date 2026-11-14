@@ -11,7 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::{Admitted, Asked, Notices, admit};
-use crate::admit::Lane;
+use crate::admit::{Lane, Threads};
 use crate::environment::{Environment, HELD};
 use crate::probe::ChildUsage;
 use crate::protocol::{Label, Reply, Request, read_line, write_line};
@@ -137,7 +137,9 @@ fn capped(jobs: usize) -> Vec<(&'static str, String)> {
 
 #[test]
 fn admit_with_a_grant_holds_the_lease_and_gives_the_granted_threads() {
-    let (socket, received) = scripted(vec![Reply::Granted { jobs: 3 }]);
+    let (socket, received) = scripted(vec![Reply::Granted {
+        threads: Threads::new(3),
+    }]);
     let environment = Environment::default();
     let (result, lines) = admitted(&socket, &environment, None);
     assert!(lines.is_empty(), "{lines:?}");
@@ -147,7 +149,7 @@ fn admit_with_a_grant_holds_the_lease_and_gives_the_granted_threads() {
     let Request::Ask(job) = received.recv_timeout(WAIT).expect("the daemon was asked") else {
         panic!("the first request was not an ask");
     };
-    assert_eq!(job.label, "build");
+    assert_eq!(job.label.as_str(), "build");
     assert_eq!(job.command, "make all");
     assert_eq!(job.pid, std::process::id());
     assert_eq!(job.lane, Lane::Normal);
@@ -155,7 +157,9 @@ fn admit_with_a_grant_holds_the_lease_and_gives_the_granted_threads() {
 
 #[test]
 fn admit_sends_the_working_directory_of_the_environment() {
-    let (socket, received) = scripted(vec![Reply::Granted { jobs: 3 }]);
+    let (socket, received) = scripted(vec![Reply::Granted {
+        threads: Threads::new(3),
+    }]);
     let environment = Environment {
         cwd: Some("/work/repo".into()),
         ..Environment::default()
@@ -169,7 +173,9 @@ fn admit_sends_the_working_directory_of_the_environment() {
 
 #[test]
 fn admit_without_a_working_directory_sends_none() {
-    let (socket, received) = scripted(vec![Reply::Granted { jobs: 3 }]);
+    let (socket, received) = scripted(vec![Reply::Granted {
+        threads: Threads::new(3),
+    }]);
     let (_result, _) = admitted(&socket, &Environment::default(), None);
     let Request::Ask(job) = received.recv_timeout(WAIT).expect("the daemon was asked") else {
         panic!("the first request was not an ask");
@@ -180,7 +186,9 @@ fn admit_without_a_working_directory_sends_none() {
 #[test]
 fn end_measured_tells_the_daemon_the_status_and_the_usage() {
     use std::os::unix::process::ExitStatusExt;
-    let (socket, received) = scripted(vec![Reply::Granted { jobs: 2 }]);
+    let (socket, received) = scripted(vec![Reply::Granted {
+        threads: Threads::new(2),
+    }]);
     let (result, _) = admitted(&socket, &Environment::default(), None);
     let _ = received.recv_timeout(WAIT).expect("the ask arrives");
     let usage = ChildUsage {
@@ -200,7 +208,9 @@ fn end_measured_tells_the_daemon_the_status_and_the_usage() {
 
 #[test]
 fn end_tells_the_daemon_the_exit_code_of_a_granted_job() {
-    let (socket, received) = scripted(vec![Reply::Granted { jobs: 2 }]);
+    let (socket, received) = scripted(vec![Reply::Granted {
+        threads: Threads::new(2),
+    }]);
     let (result, _) = admitted(&socket, &Environment::default(), None);
     let _ = received.recv_timeout(WAIT).expect("the ask arrives");
     result.end(Some(7));
@@ -217,7 +227,9 @@ fn end_tells_the_daemon_the_exit_code_of_a_granted_job() {
 #[test]
 fn end_status_tells_the_daemon_the_signal_that_ended_a_granted_job() {
     use std::os::unix::process::ExitStatusExt;
-    let (socket, received) = scripted(vec![Reply::Granted { jobs: 2 }]);
+    let (socket, received) = scripted(vec![Reply::Granted {
+        threads: Threads::new(2),
+    }]);
     let (result, _) = admitted(&socket, &Environment::default(), None);
     let _ = received.recv_timeout(WAIT).expect("the ask arrives");
     result.end_status(std::process::ExitStatus::from_raw(15));
@@ -259,7 +271,9 @@ fn admit_that_queues_reports_the_wait_and_then_holds_the_grant() {
             ahead: 2,
             held: None,
         },
-        Reply::Granted { jobs: 2 },
+        Reply::Granted {
+            threads: Threads::new(2),
+        },
     ]);
     let environment = Environment::default();
     let (result, lines) = admitted(&socket, &environment, None);
@@ -499,7 +513,9 @@ fn asked_job(notices: Option<&Notices>) -> Request {
 /// Admits a job that names `workspace` on a scripted daemon that grants
 /// it, and returns the job the daemon received.
 fn asked_in(notices: Option<&Notices>, workspace: Option<&str>) -> Request {
-    let (socket, received) = scripted(vec![Reply::Granted { jobs: 2 }]);
+    let (socket, received) = scripted(vec![Reply::Granted {
+        threads: Threads::new(2),
+    }]);
     let environment = Environment::default();
     let asked = Asked {
         socket: &socket,

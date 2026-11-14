@@ -17,7 +17,7 @@ use super::{
 use crate::admit::Lane;
 use crate::daemon::Log;
 use crate::probe::{ChildUsage, Pressure};
-use crate::protocol::{Exit, Job, Label};
+use crate::protocol::{Ago, Exit, Job, Label};
 
 /// How many lines each writer thread has handled, by its state directory.
 /// Only test builds count them, so that a daemon test can wait for the
@@ -113,7 +113,7 @@ fn logged(log: &Mutex<Vec<u8>>) -> Vec<String> {
 /// Returns a job that runs `command` in `cwd`.
 fn job_in(command: &str, cwd: Option<&Path>) -> Job {
     Job {
-        label: "tests".to_owned(),
+        label: Label::new("tests"),
         pid: 7,
         command: command.to_owned(),
         lane: Lane::Normal,
@@ -509,7 +509,7 @@ fn a_seated_arrival_has_no_warmth_because_the_job_has_already_run() {
     directory(&root, "target/debug");
     let job = job_in("make", Some(&root));
     let asked = super::now_ms();
-    let arrival = Arrival::read(&job, &warm_dirs(), &[], Some(5000));
+    let arrival = Arrival::read(&job, &warm_dirs(), &[], Some(Ago::from_millis(5000)));
     assert!(arrival.seated);
     assert_eq!(arrival.place.warm, None);
     assert_eq!(arrival.place.repo.as_deref(), Some("repo"));
@@ -683,7 +683,12 @@ fn a_job_that_left_before_it_ran_has_no_start_threads_or_figures() {
 
 #[test]
 fn a_seated_job_counts_as_starting_when_it_asked() {
-    let arrival = Arrival::read(&job_in("make", None), &[], &[], Some(1000));
+    let arrival = Arrival::read(
+        &job_in("make", None),
+        &[],
+        &[],
+        Some(Ago::from_millis(1000)),
+    );
     let at_ms = arrival.at_ms;
     let departure = Departure {
         label: Label::new("tests"),

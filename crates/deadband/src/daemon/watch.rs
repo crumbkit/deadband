@@ -23,7 +23,7 @@ use self::hook::Hooks;
 use super::{Log, Shared, State, Watching, lock, note};
 use crate::job::busiest::{Census, Failed};
 use crate::probe::{Probe, ProcessUse, TreeUnreadable};
-use crate::protocol::{Ago, OutsideJobs, Reply, StuckJob, write_line};
+use crate::protocol::{Ago, Label, OutsideJobs, Reply, StuckJob, write_line};
 use crate::spawn;
 use crate::stuck::{self, Change, Period, Track};
 
@@ -75,7 +75,7 @@ struct Noticed {
     /// The process ID of the job's root.
     pid: u32,
     /// The job's label.
-    label: String,
+    label: Label,
     /// What changed.
     change: Change,
 }
@@ -90,7 +90,7 @@ impl State {
                 Some(StuckJob {
                     label: waiter.job.label.clone(),
                     pid: waiter.job.pid,
-                    quiet_seconds: quiet.as_secs(),
+                    quiet,
                 })
             })
             .collect()
@@ -113,7 +113,7 @@ impl State {
         after: Duration,
         now: Instant,
     ) -> Vec<Noticed> {
-        let running: HashMap<u32, String> = self
+        let running: HashMap<u32, Label> = self
             .queue
             .running()
             .map(|waiter| (waiter.job.pid, waiter.job.label.clone()))
@@ -356,7 +356,7 @@ impl<P: Probe> Watcher<P> {
             let _ = write_line(&mut &*stream, &reply);
         }
         if let Change::Stuck { quiet } = noticed.change {
-            self.hooks.run(&noticed.label, quiet, busiest);
+            self.hooks.run(noticed.label.as_str(), quiet, busiest);
         }
     }
 }

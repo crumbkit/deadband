@@ -216,7 +216,7 @@ pub fn admit(asked: &Asked<'_>, notify: &mut impl FnMut(&str)) -> Admitted {
     }
     let lane = lane_of(asked, notify);
     let job = Job {
-        label: asked.label.to_owned(),
+        label: Label::new(asked.label),
         pid: std::process::id(),
         command: asked.command.to_owned(),
         lane,
@@ -235,14 +235,14 @@ pub fn admit(asked: &Asked<'_>, notify: &mut impl FnMut(&str)) -> Admitted {
         }
     };
     let variables = match &lease {
-        Some(lease) => environment.job_variables(lease.jobs(), true),
+        Some(lease) => environment.job_variables(lease.threads().get(), true),
         None => {
             let fallback = Limits {
                 max_jobs: daemon::default_max_jobs(asked.cores),
                 cores: asked.cores,
                 reserve_lanes: false,
             };
-            environment.job_variables(fallback.parallelism(lane), false)
+            environment.job_variables(fallback.parallelism(lane).get(), false)
         }
     };
     Admitted {

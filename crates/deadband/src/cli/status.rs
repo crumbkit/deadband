@@ -5,7 +5,6 @@
 //! daemon that sends no short command.
 
 use std::fmt;
-use std::time::Duration;
 
 use crumbkit::{Document, Prose};
 use schemars::JsonSchema;
@@ -22,7 +21,8 @@ use crate::stuck::quiet_text;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ShownJob {
     /// The label that `--label` gave, or the program's name.
-    pub label: String,
+    #[schemars(with = "String")]
+    pub label: Label,
     /// The workspace the job runs in, or absent outside a workspace or from
     /// an older daemon.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,22 +67,34 @@ impl From<Job> for ShownJob {
 impl ShownJob {
     /// Returns the job's name: its workspace and its label, joined.
     fn name(&self) -> String {
-        name(
-            self.workspace.as_ref().map(Label::as_str),
-            &self.label,
-            self.short.as_ref().map(Short::as_str),
-        )
+        name(self.workspace.as_ref(), &self.label, self.short.as_ref())
     }
 
     /// Returns the text after the pid: the short command, or the full
-    /// command line from an older daemon, or `None` when the short command
-    /// is empty.
-    fn command(&self) -> Option<&str> {
+    /// command line from an older daemon with each control character
+    /// escaped, or `None` when the short command is empty.
+    fn command(&self) -> Option<String> {
         match &self.short {
-            Some(short) => Some(short.as_str()).filter(|text| !text.is_empty()),
-            None => self.older_command.as_deref(),
+            Some(short) => Some(short.as_str().to_owned()).filter(|text| !text.is_empty()),
+            None => self.older_command.as_deref().map(escaped),
         }
     }
+}
+
+/// Returns `text` with each control character, a line feed and a tab
+/// among them, written as its Rust escape, such as `\n` or `\u{1b}`. The
+/// text of `deadband status` prints a job's command line through it, so
+/// the command line cannot add a line of its own or move the cursor.
+fn escaped(text: &str) -> String {
+    let mut shown = String::with_capacity(text.len());
+    for each in text.chars() {
+        if each.is_control() {
+            shown.extend(each.escape_debug());
+        } else {
+            shown.push(each);
+        }
+    }
+    shown
 }
 
 /// What `deadband status` prints: one sample of the machine, and the
@@ -138,9 +150,9 @@ impl fmt::Display for Status {
             write!(
                 f,
                 "\nstuck: {} (pid {}): no CPU, new process or disk use for {}",
-                shown.map_or_else(|| stuck.label.clone(), ShownJob::name),
+                shown.map_or_else(|| stuck.label.as_str().to_owned(), ShownJob::name),
                 stuck.pid,
-                quiet_text(Duration::from_secs(stuck.quiet_seconds))
+                quiet_text(stuck.quiet)
             )?;
         }
         if let (false, Some(busiest)) = (jobs.stuck.is_empty(), &jobs.busiest) {

@@ -5,7 +5,7 @@
 use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
-use super::{GIB, Hold, Lane, Limits, Queue, RECENT, Reading, Running, admits};
+use super::{GIB, Hold, JobId, Lane, Limits, Queue, RECENT, Reading, Running, Threads, admits};
 use crate::probe::{Disk, Pressure};
 
 /// Returns `n` as a positive number.
@@ -33,13 +33,29 @@ fn reserving(max_jobs: usize, cores: usize) -> Limits {
 }
 
 /// `all` running jobs, all in the asking job's lane, whose threads started
-/// in the last minute add up to `recent_jobs`.
-fn running(all: usize, recent_jobs: usize) -> Running {
+/// in the last minute add up to `recent_threads`.
+fn running(all: usize, recent_threads: usize) -> Running {
     Running {
         all,
         in_lane: all,
-        recent_jobs,
+        recent_threads,
     }
+}
+
+/// Starts the jobs of `queue` that may start at `now`, as
+/// [`Queue::admit`] does, and returns each one's number with its count of
+/// threads.
+fn admitted<J>(
+    queue: &mut Queue<J>,
+    reading: Option<&Reading>,
+    limits: &Limits,
+    now: Instant,
+) -> Vec<(JobId, usize)> {
+    queue
+        .admit(reading, limits, now)
+        .into_iter()
+        .map(|(id, threads)| (id, threads.get()))
+        .collect()
 }
 
 /// A disk with `free` of `total` GiB free.
@@ -260,7 +276,7 @@ fn with_a_priority_file_a_lane_waits_once_it_runs_all_but_one_place() {
     let full_lane = Running {
         all: 3,
         in_lane: 3,
-        recent_jobs: 0,
+        recent_threads: 0,
     };
     assert_eq!(
         admits(Some(&calm()), &full_lane, &reserving(4, 16)),
@@ -273,7 +289,7 @@ fn with_a_priority_file_a_job_starts_in_the_lane_that_has_its_reserved_place() {
     let other_lane = Running {
         all: 3,
         in_lane: 0,
-        recent_jobs: 0,
+        recent_threads: 0,
     };
     assert_eq!(
         admits(Some(&calm()), &other_lane, &reserving(4, 16)),
@@ -286,7 +302,7 @@ fn without_a_priority_file_one_lane_may_take_every_place() {
     let full_lane = Running {
         all: 3,
         in_lane: 3,
-        recent_jobs: 0,
+        recent_threads: 0,
     };
     assert_eq!(admits(Some(&calm()), &full_lane, &limits(4, 16)), Ok(()));
 }
@@ -302,20 +318,20 @@ fn with_one_place_a_priority_file_reserves_nothing() {
 #[test]
 fn each_job_gets_the_cores_divided_by_max_jobs_and_a_fast_job_one_more() {
     let limits = limits(4, 14);
-    assert_eq!(limits.parallelism(Lane::Normal), 3);
-    assert_eq!(limits.parallelism(Lane::Fast), 4);
+    assert_eq!(limits.parallelism(Lane::Normal), Threads::new(3));
+    assert_eq!(limits.parallelism(Lane::Fast), Threads::new(4));
 }
 
 #[test]
 fn each_job_gets_at_least_one_thread() {
-    assert_eq!(limits(8, 4).parallelism(Lane::Normal), 1);
+    assert_eq!(limits(8, 4).parallelism(Lane::Normal), Threads::new(1));
     let unknown = Limits {
         max_jobs: positive(2),
         cores: None,
         reserve_lanes: false,
     };
-    assert_eq!(unknown.parallelism(Lane::Normal), 1);
-    assert_eq!(unknown.parallelism(Lane::Fast), 2);
+    assert_eq!(unknown.parallelism(Lane::Normal), Threads::new(1));
+    assert_eq!(unknown.parallelism(Lane::Fast), Threads::new(2));
 }
 
 #[test]
@@ -326,7 +342,7 @@ fn the_queue_starts_waiting_jobs_in_the_order_they_arrived() {
     let second = queue.push("second", Lane::Normal);
     let third = queue.push("third", Lane::Normal);
     assert_eq!(
-        queue.admit(Some(&calm()), &limits(2, 16), now),
+        admitted(&mut queue, Some(&calm()), &limits(2, 16), now),
         [(first, 8), (second, 8)]
     );
     assert_eq!(
@@ -344,7 +360,7 @@ fn a_waiting_fast_job_starts_before_the_normal_jobs_that_arrived_earlier() {
     let mut queue = Queue::default();
     let running = queue.push("running", Lane::Normal);
     assert_eq!(
-        queue.admit(Some(&calm()), &limits(1, 16), now),
+        admitted(&mut queue, Some(&calm()), &limits(1, 16), now),
         [(running, 16)]
     );
     let normal = queue.push("normal", Lane::Normal);
@@ -357,7 +373,7 @@ fn a_waiting_fast_job_starts_before_the_normal_jobs_that_arrived_earlier() {
     );
     queue.remove(running);
     assert_eq!(
-        queue.admit(Some(&calm()), &limits(1, 16), now),
+        admitted(&mut queue, Some(&calm()), &limits(1, 16), now),
         [(fast, 17)]
     );
 }
@@ -367,11 +383,11 @@ fn a_waiting_normal_job_starts_when_no_fast_job_waits() {
     let now = Instant::now();
     let mut queue = Queue::default();
     let running = queue.push("running", Lane::Fast);
-    queue.admit(Some(&calm()), &limits(1, 16), now);
+    admitted(&mut queue, Some(&calm()), &limits(1, 16), now);
     let normal = queue.push("normal", Lane::Normal);
     queue.remove(running);
     assert_eq!(
-        queue.admit(Some(&calm()), &limits(1, 16), now),
+        admitted(&mut queue, Some(&calm()), &limits(1, 16), now),
         [(normal, 16)]
     );
 }
@@ -387,11 +403,11 @@ fn the_queue_counts_each_job_started_in_the_last_minute_as_its_parallelism() {
     // because nothing runs. A load of 9 and the first job's 4 project 13,
     // so the second starts, and with both the projection is 17.
     assert_eq!(
-        queue.admit(Some(&busy), &limits(4, 16), start),
+        admitted(&mut queue, Some(&busy), &limits(4, 16), start),
         [(first, 4), (second, 4)]
     );
     let third = queue.push("third", Lane::Normal);
-    assert!(queue.admit(Some(&busy), &limits(4, 16), start).is_empty());
+    assert!(admitted(&mut queue, Some(&busy), &limits(4, 16), start).is_empty());
     assert_eq!(
         queue.held(),
         Some(Hold::Load {
@@ -401,7 +417,7 @@ fn the_queue_counts_each_job_started_in_the_last_minute_as_its_parallelism() {
     );
     let later = start + RECENT + Duration::from_secs(1);
     assert_eq!(
-        queue.admit(Some(&busy), &limits(4, 16), later),
+        admitted(&mut queue, Some(&busy), &limits(4, 16), later),
         [(third, 4)]
     );
 }
@@ -413,7 +429,10 @@ fn a_fast_job_on_a_machine_full_of_normal_jobs_starts_at_once() {
     for each in ["a", "b", "c"] {
         queue.push(each, Lane::Normal);
     }
-    assert_eq!(queue.admit(Some(&calm()), &reserving(4, 16), now).len(), 3);
+    assert_eq!(
+        admitted(&mut queue, Some(&calm()), &reserving(4, 16), now).len(),
+        3
+    );
     let normal = queue.push("normal", Lane::Normal);
     assert!(
         queue
@@ -423,7 +442,7 @@ fn a_fast_job_on_a_machine_full_of_normal_jobs_starts_at_once() {
     assert_eq!(queue.held(), Some(Hold::Lane { places: 3 }));
     let fast = queue.push("fast", Lane::Fast);
     assert_eq!(
-        queue.admit(Some(&calm()), &reserving(4, 16), now),
+        admitted(&mut queue, Some(&calm()), &reserving(4, 16), now),
         [(fast, 5)]
     );
     assert_eq!(queue.ahead_of(normal), Some(0));
@@ -436,11 +455,14 @@ fn a_normal_job_starts_when_the_fast_lane_waits_on_its_own_cap() {
     for each in ["a", "b", "c"] {
         queue.push(each, Lane::Fast);
     }
-    assert_eq!(queue.admit(Some(&calm()), &reserving(4, 32), now).len(), 3);
+    assert_eq!(
+        admitted(&mut queue, Some(&calm()), &reserving(4, 32), now).len(),
+        3
+    );
     let fast = queue.push("fast", Lane::Fast);
     let normal = queue.push("normal", Lane::Normal);
     assert_eq!(
-        queue.admit(Some(&calm()), &reserving(4, 32), now),
+        admitted(&mut queue, Some(&calm()), &reserving(4, 32), now),
         [(normal, 8)]
     );
     assert_eq!(queue.ahead_of(fast), Some(0));
@@ -455,12 +477,15 @@ fn a_finished_job_no_longer_adds_its_threads_to_the_load() {
     let second = queue.push("second", Lane::Normal);
     let third = queue.push("third", Lane::Normal);
     assert_eq!(
-        queue.admit(Some(&busy), &limits(4, 16), now),
+        admitted(&mut queue, Some(&busy), &limits(4, 16), now),
         [(first, 4), (second, 4)]
     );
-    assert!(queue.admit(Some(&busy), &limits(4, 16), now).is_empty());
+    assert!(admitted(&mut queue, Some(&busy), &limits(4, 16), now).is_empty());
     queue.remove(first);
-    assert_eq!(queue.admit(Some(&busy), &limits(4, 16), now), [(third, 4)]);
+    assert_eq!(
+        admitted(&mut queue, Some(&busy), &limits(4, 16), now),
+        [(third, 4)]
+    );
 }
 
 #[test]
@@ -470,13 +495,13 @@ fn the_queue_starts_the_next_job_when_a_running_job_is_removed() {
     let first = queue.push("first", Lane::Normal);
     let second = queue.push("second", Lane::Normal);
     assert_eq!(
-        queue.admit(Some(&calm()), &limits(1, 16), now),
+        admitted(&mut queue, Some(&calm()), &limits(1, 16), now),
         [(first, 16)]
     );
-    assert!(queue.admit(Some(&calm()), &limits(1, 16), now).is_empty());
+    assert!(admitted(&mut queue, Some(&calm()), &limits(1, 16), now).is_empty());
     assert_eq!(queue.remove(first).map(|(job, _)| job), Some("first"));
     assert_eq!(
-        queue.admit(Some(&calm()), &limits(1, 16), now),
+        admitted(&mut queue, Some(&calm()), &limits(1, 16), now),
         [(second, 16)]
     );
     assert_eq!(queue.running_job(second), Some(&"second"));
@@ -489,13 +514,13 @@ fn a_removed_waiting_job_never_starts_and_the_jobs_behind_it_move_up() {
     let first = queue.push("first", Lane::Normal);
     let second = queue.push("second", Lane::Normal);
     let third = queue.push("third", Lane::Normal);
-    queue.admit(Some(&calm()), &limits(1, 16), now);
+    admitted(&mut queue, Some(&calm()), &limits(1, 16), now);
     assert_eq!(queue.ahead_of(third), Some(1));
     assert_eq!(queue.remove(second).map(|(job, _)| job), Some("second"));
     assert_eq!(queue.ahead_of(third), Some(0));
     assert_eq!(queue.remove(first).map(|(job, _)| job), Some("first"));
     assert_eq!(
-        queue.admit(Some(&calm()), &limits(1, 16), now),
+        admitted(&mut queue, Some(&calm()), &limits(1, 16), now),
         [(third, 16)]
     );
 }
@@ -507,7 +532,10 @@ fn the_queue_starts_one_job_under_pressure_when_nothing_runs() {
     let first = queue.push("first", Lane::Normal);
     queue.push("second", Lane::Normal);
     let warn = reading(Pressure::Warn, 1.0);
-    assert_eq!(queue.admit(Some(&warn), &limits(4, 16), now), [(first, 4)]);
+    assert_eq!(
+        admitted(&mut queue, Some(&warn), &limits(4, 16), now),
+        [(first, 4)]
+    );
 }
 
 #[test]
@@ -554,13 +582,13 @@ fn each_hold_says_why_in_one_line() {
 }
 
 #[test]
-fn removing_a_running_job_returns_when_it_started() {
+fn removing_a_running_job_returns_when_it_started_and_its_threads() {
     let mut queue = Queue::default();
     let limits = limits(2, 16);
     let at = Instant::now();
     let id = queue.push("job", Lane::Normal);
-    queue.admit(None, &limits, at);
-    assert_eq!(queue.remove(id), Some(("job", Some(at))));
+    admitted(&mut queue, None, &limits, at);
+    assert_eq!(queue.remove(id), Some(("job", Some((at, Threads::new(8))))));
 }
 
 #[test]
@@ -583,12 +611,12 @@ fn a_seated_job_fills_a_place_without_waiting() {
     let mut queue = Queue::default();
     let limits = limits(2, 16);
     let at = Instant::now();
-    queue.seat("seated", Lane::Normal, 8, at, &limits);
+    queue.seat("seated", Lane::Normal, Threads::new(8), at, &limits);
     assert_eq!(queue.running().collect::<Vec<_>>(), vec![&"seated"]);
     assert_eq!(queue.waiting().count(), 0);
     let second = queue.push("second", Lane::Normal);
     queue.push("third", Lane::Normal);
-    assert_eq!(queue.admit(None, &limits, at), [(second, 8)]);
+    assert_eq!(admitted(&mut queue, None, &limits, at), [(second, 8)]);
     assert_eq!(queue.held(), Some(Hold::Full { max_jobs: 2 }));
 }
 
@@ -597,18 +625,18 @@ fn a_seat_past_max_jobs_holds_new_jobs_until_it_leaves() {
     let mut queue = Queue::default();
     let limits = limits(1, 16);
     let at = Instant::now();
-    let first = queue.seat("first", Lane::Normal, 16, at, &limits);
-    let second = queue.seat("second", Lane::Normal, 16, at, &limits);
+    let first = queue.seat("first", Lane::Normal, Threads::new(16), at, &limits);
+    let second = queue.seat("second", Lane::Normal, Threads::new(16), at, &limits);
     assert_eq!(queue.running().count(), 2);
     let waiting = queue.push("waiting", Lane::Normal);
-    assert!(queue.admit(None, &limits, at).is_empty());
+    assert!(admitted(&mut queue, None, &limits, at).is_empty());
     assert_eq!(queue.held(), Some(Hold::Full { max_jobs: 1 }));
     queue.remove(first);
-    assert!(queue.admit(None, &limits, at).is_empty());
+    assert!(admitted(&mut queue, None, &limits, at).is_empty());
     assert_eq!(queue.held(), Some(Hold::Full { max_jobs: 1 }));
     // The twin: the same job starts once the last seat has left.
     queue.remove(second);
-    assert_eq!(queue.admit(None, &limits, at), [(waiting, 16)]);
+    assert_eq!(admitted(&mut queue, None, &limits, at), [(waiting, 16)]);
 }
 
 #[test]
@@ -617,10 +645,10 @@ fn a_seat_younger_than_recent_adds_its_threads_to_the_load() {
     let limits = limits(8, 16);
     let busy = reading(Pressure::Normal, 14.0);
     let at = Instant::now();
-    queue.seat("seated", Lane::Normal, 2, at, &limits);
+    queue.seat("seated", Lane::Normal, Threads::new(2), at, &limits);
     queue.push("waiting", Lane::Normal);
     let young = at + RECENT - Duration::from_secs(1);
-    assert!(queue.admit(Some(&busy), &limits, young).is_empty());
+    assert!(admitted(&mut queue, Some(&busy), &limits, young).is_empty());
     assert_eq!(
         queue.held(),
         Some(Hold::Load {
@@ -636,10 +664,13 @@ fn a_seat_older_than_recent_adds_nothing_to_the_load() {
     let limits = limits(8, 16);
     let busy = reading(Pressure::Normal, 14.0);
     let at = Instant::now();
-    queue.seat("seated", Lane::Normal, 2, at, &limits);
+    queue.seat("seated", Lane::Normal, Threads::new(2), at, &limits);
     let waiting = queue.push("waiting", Lane::Normal);
     let old = at + RECENT + Duration::from_secs(1);
-    assert_eq!(queue.admit(Some(&busy), &limits, old), [(waiting, 2)]);
+    assert_eq!(
+        admitted(&mut queue, Some(&busy), &limits, old),
+        [(waiting, 2)]
+    );
 }
 
 #[test]
@@ -648,10 +679,19 @@ fn a_seat_counts_at_most_the_threads_of_one_grant() {
     let limits = limits(8, 16);
     let busy = reading(Pressure::Normal, 13.0);
     let at = Instant::now();
-    queue.seat("seated", Lane::Normal, usize::MAX, at, &limits);
+    queue.seat(
+        "seated",
+        Lane::Normal,
+        Threads::new(usize::MAX),
+        at,
+        &limits,
+    );
     let waiting = queue.push("waiting", Lane::Normal);
     // A load of 13 and one grant's 2 threads project 15 of 16 cores.
-    assert_eq!(queue.admit(Some(&busy), &limits, at), [(waiting, 2)]);
+    assert_eq!(
+        admitted(&mut queue, Some(&busy), &limits, at),
+        [(waiting, 2)]
+    );
 }
 
 #[test]
@@ -660,15 +700,15 @@ fn seated_jobs_list_in_the_order_they_started() {
     let limits = limits(4, 16);
     let at = Instant::now();
     queue.push("granted", Lane::Normal);
-    queue.admit(None, &limits, at + Duration::from_secs(5));
+    admitted(&mut queue, None, &limits, at + Duration::from_secs(5));
     queue.seat(
         "late",
         Lane::Normal,
-        1,
+        Threads::new(1),
         at + Duration::from_secs(9),
         &limits,
     );
-    queue.seat("early", Lane::Normal, 1, at, &limits);
+    queue.seat("early", Lane::Normal, Threads::new(1), at, &limits);
     assert_eq!(
         queue.running().copied().collect::<Vec<_>>(),
         ["early", "granted", "late"]
@@ -681,7 +721,7 @@ fn the_running_jobs_list_when_they_started() {
     let limits = limits(2, 16);
     let at = Instant::now();
     queue.push("job", Lane::Normal);
-    queue.admit(None, &limits, at);
+    admitted(&mut queue, None, &limits, at);
     assert_eq!(
         queue.running_since().collect::<Vec<_>>(),
         vec![(&"job", at)]

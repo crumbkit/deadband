@@ -13,7 +13,7 @@ use super::super::{SAMPLE_EVERY, Shared, WRITE_TIMEOUT, Waiter, lock};
 use super::timeline::{row, state};
 use super::{REPLY_WITHIN, job, queued};
 use crate::admit::Lane;
-use crate::protocol::{JobState, Label, Reply, Request, read_line, write_line};
+use crate::protocol::{JobState, Reply, Request, read_line, write_line};
 
 /// How long a test lets taking the queue lock take while another client
 /// does not read. It is well under [`WRITE_TIMEOUT`], so a lock held across
@@ -54,7 +54,6 @@ fn push_stuck(shared: &Shared, label: &str) -> UnixStream {
         Waiter {
             job: job(label),
             stream: ours.into(),
-            label: Label::new(label),
             queued: Instant::now(),
             arrival: None,
             ahead: 0,

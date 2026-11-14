@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 
 use super::timeline::{ended, row, timeline, timeline_until};
 use super::{Client, Dial, granted, job, jobs, start_with, until_running};
+use crate::admit::Threads;
 use crate::history::WORKSPACE_MARKER;
 use crate::history::tests::{Scratch, write_file};
 use crate::probe::Pressure;
-use crate::protocol::{Job, Label, Request, Short};
+use crate::protocol::{Ago, Job, Label, Request, Short};
 
 /// Returns a checkout named `checkout` inside a workspace named
 /// `workspace` under `parent`, whose directory holds the marker.
@@ -151,8 +152,8 @@ fn a_seated_job_gets_its_workspace_and_short_command() {
     let mut client = Client::connect(&path);
     client.send(&Request::Seat {
         job: job_in("build", "make all", Some(&tree)),
-        jobs: 1,
-        ran_ms: 1000,
+        threads: Threads::new(1),
+        ran: Ago::from_millis(1000),
     });
     let listed = until_running(&path, 1);
     assert_eq!(listed.running[0].workspace, Some(Label::new("triage")));

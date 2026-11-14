@@ -30,8 +30,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use super::connect;
+use crate::admit::Threads;
 use crate::probe::ChildUsage;
-use crate::protocol::{Job, Reply, Request, read_line, write_line};
+use crate::protocol::{Ago, Job, Reply, Request, read_line, write_line};
 use crate::spawn;
 use crate::stuck::{active_line, still_line, stuck_line};
 
@@ -83,15 +84,15 @@ pub struct Lease {
     /// The connection, which the watcher replaces when the daemon goes.
     seat: Arc<Seat>,
     /// The threads the daemon gave the job.
-    jobs: usize,
+    threads: Threads,
 }
 
 impl Lease {
     /// Returns the lease of `job`, which the daemon at `path` granted just
-    /// now on `stream` with `jobs` threads, and starts its watcher.
+    /// now on `stream` with `threads` threads, and starts its watcher.
     pub(super) fn watched(
         stream: UnixStream,
-        jobs: usize,
+        threads: Threads,
         path: &Path,
         job: &Job,
         notices: Option<&Notices>,
@@ -103,7 +104,7 @@ impl Lease {
                 seat: Arc::clone(&seat),
                 path: path.to_owned(),
                 job: job.clone(),
-                jobs,
+                threads,
                 started: Instant::now(),
                 notices: notices.cloned(),
             };
@@ -116,13 +117,13 @@ impl Lease {
         {
             notices.tell(UNWATCHED);
         }
-        Self { seat, jobs }
+        Self { seat, threads }
     }
 
     /// Returns the threads the daemon gave the job.
     #[must_use]
-    pub const fn jobs(&self) -> usize {
-        self.jobs
+    pub const fn threads(&self) -> Threads {
+        self.threads
     }
 
     /// Tells the daemon that the job ended with `exit_code` and closes the
@@ -265,7 +266,7 @@ struct Watcher {
     /// The job as its client described it.
     job: Job,
     /// The threads of the job's grant.
-    jobs: usize,
+    threads: Threads,
     /// When the daemon granted the job.
     started: Instant,
     /// Where the lines about the job's activity go.
@@ -351,8 +352,8 @@ impl Watcher {
         let read = stream.try_clone().ok()?;
         let seat = Request::Seat {
             job: self.job.clone(),
-            jobs: self.jobs,
-            ran_ms: u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            threads: self.threads,
+            ran: Ago::between(self.started, Instant::now()),
         };
         self.seat.install(stream, &seat).then_some(read)
     }

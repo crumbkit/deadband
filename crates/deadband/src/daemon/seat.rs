@@ -7,14 +7,14 @@
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::reply::deliver;
 use super::{Shared, State, WRITE_TIMEOUT, Waiter, lock};
-use crate::admit::JobId;
+use crate::admit::{JobId, Threads};
 use crate::history::{Arrival, Tally};
 use crate::probe::ChildUsage;
-use crate::protocol::{Exit, Job, Label, Reply, Request, Short, read_line, write_line};
+use crate::protocol::{Ago, Exit, Job, Reply, Request, Short, read_line, write_line};
 
 /// Serves one client on `stream`. A client that sends no first line within
 /// the settings' `first_line_within` is closed.
@@ -49,9 +49,9 @@ pub(super) fn connection(shared: &Shared, stream: UnixStream) {
             let timeline = lock(shared).timeline(Instant::now());
             let _ = write_line(&mut &stream, &Reply::Timeline(timeline.fit()));
         }
-        Ok(Some(Request::Seat { job, jobs, ran_ms })) => {
+        Ok(Some(Request::Seat { job, threads, ran })) => {
             if stream.set_read_timeout(None).is_ok() {
-                seat(shared, stream, &mut reader, job, jobs, ran_ms);
+                seat(shared, stream, &mut reader, job, threads, ran);
             }
         }
         Ok(Some(Request::Done { .. }) | None) | Err(_) => {}
@@ -67,7 +67,7 @@ pub(super) fn connection(shared: &Shared, stream: UnixStream) {
 /// no job. A daemon that records no job reads no warm directory. The lock
 /// is released before the disk is read, so the disk never holds the queue
 /// up.
-fn arrive(shared: &Shared, job: &mut Job, ran_ms: Option<u64>) -> Option<Arrival> {
+fn arrive(shared: &Shared, job: &mut Job, ran: Option<Ago>) -> Option<Arrival> {
     let (recording, warm_dirs, kind_tools) = {
         let state = lock(shared);
         let config = &state.settings.reclaim;
@@ -79,7 +79,7 @@ fn arrive(shared: &Shared, job: &mut Job, ran_ms: Option<u64>) -> Option<Arrival
         };
         (recording, warm_dirs, config.kind_tools.clone())
     };
-    let mut arrival = Arrival::read(job, &warm_dirs, &kind_tools, ran_ms);
+    let mut arrival = Arrival::read(job, &warm_dirs, &kind_tools, ran);
     job.short = Some(Short::new(&arrival.kind));
     if job.workspace.is_none() {
         job.workspace = arrival.place.workspace.take();
@@ -99,7 +99,6 @@ pub(super) fn ask(
     let stream = Arc::new(stream);
     let arrival = arrive(shared, &mut job, None);
     let queued = Instant::now();
-    let label = Label::new(&job.label);
     let (id, replies) = {
         let mut state = lock(shared);
         let lane = job.lane;
@@ -108,7 +107,6 @@ pub(super) fn ask(
             Waiter {
                 job,
                 stream: Arc::clone(&stream),
-                label,
                 queued,
                 arrival,
                 ahead,
@@ -128,11 +126,11 @@ pub(super) fn ask(
     finish(shared, reader, id);
 }
 
-/// Counts `job` as running since `ran_ms` ago on the connection `stream`,
+/// Counts `job` as running since `ran` ago on the connection `stream`,
 /// and removes it when its client says it ended or closes the connection.
 /// On Linux and macOS an `Instant` holds signed seconds, so subtracting any
-/// `ran_ms` succeeds, and a claim of `u64::MAX` becomes a very large age that
-/// only shows in `top`. A clock that cannot subtract the age makes
+/// age succeeds, and a claim of `u64::MAX` milliseconds becomes a very large
+/// age that only shows in `top`. A clock that cannot subtract the age makes
 /// `checked_sub` return `None`, and the job then counts from now. The plain
 /// subtraction `now - duration` panics in that case, and a client must not
 /// be able to panic the daemon.
@@ -141,15 +139,13 @@ pub(super) fn seat(
     stream: UnixStream,
     reader: &mut BufReader<UnixStream>,
     mut job: Job,
-    jobs: usize,
-    ran_ms: u64,
+    threads: Threads,
+    ran: Ago,
 ) {
-    let arrival = arrive(shared, &mut job, Some(ran_ms));
+    let arrival = arrive(shared, &mut job, Some(ran));
     let now = Instant::now();
-    let at = now
-        .checked_sub(Duration::from_millis(ran_ms))
-        .unwrap_or(now);
-    let id = lock(shared).seat(job, stream, jobs, at, arrival);
+    let at = now.checked_sub(ran.duration()).unwrap_or(now);
+    let id = lock(shared).seat(job, stream, threads, at, arrival);
     finish(shared, reader, id);
 }
 
@@ -190,22 +186,20 @@ impl State {
         &mut self,
         job: Job,
         stream: UnixStream,
-        jobs: usize,
+        threads: Threads,
         at: Instant,
         arrival: Option<Arrival>,
     ) -> JobId {
         let limits = self.limits();
         let lane = job.lane;
-        let label = Label::new(&job.label);
         let waiter = Waiter {
             job,
             stream: Arc::new(stream),
-            label,
             queued: at,
             arrival,
             ahead: 0,
         };
-        let id = self.queue.seat(waiter, lane, jobs, at, &limits);
+        let id = self.queue.seat(waiter, lane, threads, at, &limits);
         let running = self.note_running();
         self.tallies.insert(id, Tally::seated(running));
         id
