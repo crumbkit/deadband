@@ -44,11 +44,43 @@ fn run_adds_the_variables_it_is_given_to_the_jobs_environment() {
     assert_eq!(exit_code(status), 0);
 }
 
+/// Tests of reading which signals this process inherited as ignored.
+mod ignored {
+    use crate::job::ignored::{ignored_mask, signal_in_mask};
+
+    #[test]
+    fn the_sigign_line_of_a_proc_status_text_gives_the_mask() {
+        let status = "Name:\tdeadband\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000001001\n";
+        assert_eq!(ignored_mask(status), Some(0x1001));
+    }
+
+    #[test]
+    fn a_status_text_without_a_readable_sigign_line_gives_no_mask() {
+        assert_eq!(ignored_mask("Name:\tdeadband\n"), None);
+        assert_eq!(ignored_mask("SigIgn:\tnot-hex\n"), None);
+    }
+
+    #[test]
+    fn bit_n_minus_1_of_the_mask_stands_for_signal_n() {
+        assert!(signal_in_mask(0b1, 1));
+        assert!(!signal_in_mask(0b1, 2));
+        assert!(signal_in_mask(1 << 14, 15));
+    }
+
+    #[test]
+    fn a_signal_number_outside_the_mask_is_not_held() {
+        assert!(!signal_in_mask(u64::MAX, 0));
+        assert!(!signal_in_mask(u64::MAX, -1));
+        assert!(!signal_in_mask(u64::MAX, 65));
+    }
+}
+
 /// Tests of passing a signal that the caller sent on to the job. They use
 /// SIGALRM and SIGPROF, which nothing else in the test process handles and
-/// which are outside `job::FORWARDED`, so a `job::run` in another test of the
-/// same process does not pass them on to its own job. The test of a job that exits on its
-/// own registers SIGWINCH, which no test sends.
+/// which are outside the signals that `job::run` passes on, so a `job::run`
+/// in another test of the same process does not pass them on to its own
+/// job. The test of a job that exits on its own registers SIGWINCH, which
+/// no test sends.
 mod forwarding {
     use std::ffi::OsString;
     use std::path::PathBuf;

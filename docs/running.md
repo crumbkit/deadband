@@ -63,16 +63,26 @@ and exits with the job's status, so a `kill` of `deadband run` ends the job
 the job as ended. A job that handles the signal decides for itself how to
 end. SIGKILL and SIGSTOP cannot be caught, so `deadband run` cannot pass them
 on: a SIGKILL sent to `deadband run` alone leaves the job running, and the
-daemon no longer counts it. A Ctrl-C, a Ctrl-\ or a hangup at the terminal
-reaches the job directly and through `deadband run`, so the job receives the
-SIGINT, SIGQUIT or SIGHUP twice; a program that stops at once on a second
-SIGINT takes that path on one Ctrl-C. `deadband run` replaces an ignored
-disposition of these signals that its caller passed down, such as the
-ignored SIGINT of a background job in a non-interactive shell script, so
-the job no longer inherits the ignore. If the signals cannot be registered,
-the job runs without forwarding. If only the forwarding thread cannot start,
-the job runs without forwarding and `deadband run` ignores these signals
-until the job ends.
+daemon no longer counts it.
+
+A Ctrl-C or a Ctrl-\ at the terminal reaches the job directly and through
+`deadband run`, so the job receives the SIGINT or SIGQUIT twice, and a
+terminal hangup reaches it at least twice. A program that stops at once on
+a second SIGINT takes that path on one Ctrl-C, and a program that prints a
+report on SIGQUIT, as a JVM prints its thread dump, prints it twice. A job
+that sends one of these signals to its own process group, as `kill 0` does,
+or to its parent also receives it back through `deadband run`; under the
+default action of SIGUSR1 or SIGUSR2, that ends the job.
+
+A signal that `deadband run` inherited as ignored is not passed on and stays
+ignored, so the job inherits the ignore. Under `nohup deadband run -- <job>`,
+SIGHUP stays ignored for both, and the job survives a hangup as it would
+under `nohup` alone. The same holds for the ignored SIGINT of a background
+job in a non-interactive shell script. When `deadband run` cannot read a
+signal's disposition, it treats the signal as not ignored and passes it on.
+If the signals cannot be registered, the job runs without forwarding. If
+only the forwarding thread cannot start, the job runs without forwarding and
+`deadband run` ignores the registered signals until the job ends.
 
 The daemon samples memory pressure, the 1-minute load average and the free
 space of the disk that holds `$HOME` once a second. It admits a waiting job

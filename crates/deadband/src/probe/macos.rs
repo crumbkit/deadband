@@ -10,6 +10,9 @@
 //! length with a null buffer of length 0, then fills a buffer of exactly that
 //! length. `getpeereid` receives a socket's descriptor and pointers to one
 //! `uid_t` and one `gid_t` that this module owns, and it only reads.
+//! `sigaction` receives a null new action, so it changes no signal's
+//! disposition, and a pointer to one `sigaction` that this module owns, which
+//! it fills with the current disposition.
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
@@ -112,6 +115,24 @@ pub(super) fn child_usage() -> Option<ChildUsage> {
         cpu_ms: millis(usage.ru_utime)?.saturating_add(millis(usage.ru_stime)?),
         peak_rss_bytes: u64::try_from(usage.ru_maxrss).ok()?,
     })
+}
+
+/// Returns whether this process has `signal` set to ignored, or `None` when
+/// `sigaction` refuses the query, as it does for a number that names no
+/// signal.
+pub(super) fn signal_ignored(signal: libc::c_int) -> Option<bool> {
+    let mut current = MaybeUninit::<libc::sigaction>::zeroed();
+    // SAFETY: the new action is null, so sigaction changes nothing and only
+    // reads. `current` is writable for one `sigaction`, the only value that
+    // sigaction writes.
+    let status = unsafe { libc::sigaction(signal, std::ptr::null(), current.as_mut_ptr()) };
+    if status != 0 {
+        return None;
+    }
+    // SAFETY: sigaction returned 0, so it filled `current`, and a
+    // `sigaction` of zeroes was already a valid value of the plain C struct.
+    let current = unsafe { current.assume_init() };
+    Some(current.sa_sigaction == libc::SIG_IGN)
 }
 
 /// Returns `time` in whole milliseconds, or `None` when it is negative.
