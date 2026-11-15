@@ -8,12 +8,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::super::alive::stale_after;
 use super::super::seat::ask;
 use super::super::{SAMPLE_EVERY, Shared, WRITE_TIMEOUT, Waiter, lock};
 use super::timeline::{row, state};
-use super::{REPLY_WITHIN, job, queued};
-use crate::admit::Lane;
-use crate::protocol::{JobState, Reply, Request, read_line, write_line};
+use super::{Client, Dial, REPLY_WITHIN, granted, job, queued, start};
+use crate::admit::{Hold, Lane};
+use crate::client::BEAT_SILENCE;
+use crate::probe::Pressure;
+use crate::protocol::{Job, JobState, Reply, Request, read_line, write_line};
 
 /// How long a test lets taking the queue lock take while another client
 /// does not read. It is well under [`WRITE_TIMEOUT`], so a lock held across
@@ -273,4 +276,39 @@ fn a_client_that_reads_gets_its_queued_reply_and_then_its_grant() {
     drop(reader);
     drop(second);
     serving.join().expect("the connection thread ends");
+}
+
+#[test]
+fn a_daemon_beats_to_a_waiting_client_that_asked_for_beats_and_to_no_other() {
+    let (path, _) = start(1, &Dial::new(Pressure::Normal));
+    let mut running = Client::ask(&path, "a");
+    assert_eq!(running.reply(), granted(1));
+    let mut beaten = Client::connect(&path);
+    beaten.send(&Request::Ask(Job {
+        beats: true,
+        ..job("b")
+    }));
+    let promised = Reply::Queued {
+        ahead: 0,
+        held: Some(Hold::Full { max_jobs: 1 }),
+        beats: true,
+    };
+    assert_eq!(beaten.reply(), promised);
+    let mut quiet = Client::ask(&path, "c");
+    assert_eq!(quiet.reply(), queued(1, 1));
+    for _ in 0..3 {
+        assert_eq!(beaten.reply(), Reply::Beat);
+    }
+    // The client that asked for none has had three beat periods to read one.
+    quiet
+        .stream
+        .set_read_timeout(Some(Duration::from_millis(1)))
+        .expect("the timeout sets");
+    let none = read_line::<Reply>(&mut quiet.reader);
+    assert!(none.is_err(), "{none:?}");
+}
+
+#[test]
+fn a_client_counts_its_daemon_as_hung_after_three_beat_periods_and_one_sample() {
+    assert_eq!(BEAT_SILENCE, stale_after(SAMPLE_EVERY) * 3 + SAMPLE_EVERY);
 }

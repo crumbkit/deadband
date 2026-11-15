@@ -26,6 +26,7 @@ fn job() -> Job {
         workspace: None,
         short: None,
         id: None,
+        beats: false,
     }
 }
 
@@ -139,7 +140,8 @@ fn each_reply_is_one_json_line() {
     assert_eq!(
         line(&Reply::Queued {
             ahead: 2,
-            held: Some(Hold::Full { max_jobs: 1 })
+            held: Some(Hold::Full { max_jobs: 1 }),
+            beats: false,
         }),
         "{\"queued\":{\"ahead\":2,\"held\":{\"hold\":\"full\",\"max_jobs\":1}}}\n"
     );
@@ -616,6 +618,26 @@ fn a_watched_job_says_so_on_the_wire() {
     })
     .expect("a job serializes");
     assert!(line.contains("\"watched\":true"), "{line}");
+}
+
+#[test]
+fn an_ask_for_beats_a_queued_reply_that_promises_them_and_a_beat_have_their_wire_form() {
+    let asked = line(&Request::Ask(Job {
+        beats: true,
+        ..job()
+    }));
+    assert!(asked.contains("\"beats\":true"), "{asked}");
+    assert_eq!(
+        line(&Reply::Queued {
+            ahead: 1,
+            held: None,
+            beats: true,
+        }),
+        "{\"queued\":{\"ahead\":1,\"held\":null,\"beats\":true}}\n"
+    );
+    assert_eq!(line(&Reply::Beat), "\"beat\"\n");
+    let read = read_line::<Reply>(&mut BufReader::new("\"beat\"\n".as_bytes())).expect("reads");
+    assert_eq!(read, Some(Reply::Beat));
 }
 
 #[test]

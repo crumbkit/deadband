@@ -363,16 +363,32 @@ the daemon and without setting its threads or its priority.
 ## When the daemon cannot be asked
 
 `deadband run` does not wait on a daemon that is missing, silent or gone.
-When no daemon listens, when the daemon does not answer within 2 seconds,
-or when it closes the connection, the job starts at once and `deadband run`
-prints one line on standard error that says why. After the daemon has
-queued a job, `deadband run` waits for the grant with no deadline, so a
-daemon that hangs while it keeps the connection open also keeps the job
-waiting. Stopping that daemon closes the connection. The waiting
-`deadband run` then tries to reach a daemon every 100 ms for 5 seconds and
-asks again, so a restarted daemon queues the job once more. The job starts at
+When no daemon listens, when the daemon does not take the request and
+answer it within 2 seconds, or when it closes the connection, the job starts
+at once and `deadband run` prints one line on standard error that says why.
+The 2 seconds cover sending the request and reading the whole answer, so a
+daemon that has stopped reading, or that sends its answer a byte at a time,
+cannot stretch them.
+
+While the job waits, the daemon sends a beat to `deadband run` every five
+sampling intervals, which is every 5 seconds. When no line arrives for
+16 seconds, three beat periods and one sample, `deadband run` closes the
+connection, prints `the daemon queued the job and then sent nothing for
+16000 ms, so the job starts now` and runs the job. That covers a daemon
+that is stopped with SIGSTOP, or one whose threads block or deadlock while
+they hold its queue. A daemon of an earlier release sends no beats and says
+so in its reply, and `deadband run` then waits for the grant with no
+deadline, as before.
+
+When the daemon that queued a job closes the connection, the waiting
+`deadband run` tries to reach a daemon every 100 ms for 5 seconds and asks
+again, so a restarted daemon queues the job once more. The job starts at
 once, with the same line on standard error, only when no daemon answers
-within those 5 seconds. When the probe cannot read the machine, the
+within those 5 seconds. A daemon that queues the job again and sends a beat
+starts the 5 seconds afresh for its own loss, so every restart of a daemon
+that served the job gets the full window. A daemon that queues the job and
+closes before it beats does not, so a daemon that fails each time it queues
+the job holds it for at most 5 seconds. When the probe cannot read the machine, the
 daemon admits each job as soon as a place is free, and its log says why.
 The daemon treats a reading that is more than five sampling intervals old
 (at least 250 ms) as a failed probe, so a stalled sampler does not hold jobs
@@ -591,13 +607,12 @@ A short-lived process that exists to run one job may also call
 nice 5 for the rest of its life, and leaves a process that already runs at a
 higher nice value where it is, so a long-lived program does not call it.
 
-`admit` waits until the daemon admits the job. It waits at most 2 seconds for
-the daemon's first answer, and then the job starts without a grant. That
-limit does not cover sending the request, which has no deadline, so a daemon
-that has stopped reading can block `admit` when the command text is longer
-than the socket's send buffer, about 8 KiB on macOS. Once the daemon has
-queued the job, the wait for the grant has no deadline and cannot be
-cancelled. `admit` writes nothing itself; each line it reports goes to the callback: why the job waits, why it starts
+`admit` waits until the daemon admits the job. The daemon has 2 seconds to
+take the request and send its whole first answer, and otherwise the job
+starts without a grant. Once the daemon has queued the job, `admit` asks it
+for beats and waits for the grant for as long as a line arrives at least
+every 16 seconds; a daemon of an earlier release sends none, and `admit`
+then waits with no deadline. The wait cannot be cancelled. `admit` writes nothing itself; each line it reports goes to the callback: why the job waits, why it starts
 without the daemon, and why the priority file could not be read. A job that
 runs inside a granted job, or with `DEADBAND_BYPASS` set, is not asked:
 `admit` reports nothing and returns no lane and no variables. The job's pid

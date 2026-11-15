@@ -201,6 +201,7 @@ fn job(label: &str) -> Job {
         workspace: None,
         short: None,
         id: None,
+        beats: false,
     }
 }
 
@@ -229,6 +230,7 @@ fn queued(ahead: usize, max_jobs: usize) -> Reply {
     Reply::Queued {
         ahead,
         held: Some(Hold::Full { max_jobs }),
+        beats: false,
     }
 }
 
@@ -407,7 +409,14 @@ fn a_job_waits_under_warn_pressure_and_starts_when_pressure_falls_to_normal() {
     let held = Some(Hold::Memory {
         pressure: Pressure::Warn,
     });
-    assert_eq!(second.reply(), Reply::Queued { ahead: 0, held });
+    assert_eq!(
+        second.reply(),
+        Reply::Queued {
+            ahead: 0,
+            held,
+            beats: false
+        }
+    );
     dial.set(Pressure::Normal);
     assert_eq!(second.reply(), granted(2));
 }
@@ -426,7 +435,8 @@ fn status_reports_the_hold_that_follows_the_machine_and_none_once_the_queue_drai
         second.reply(),
         Reply::Queued {
             ahead: 0,
-            held: Some(memory)
+            held: Some(memory),
+            beats: false
         }
     );
     assert_eq!(jobs(&path).held, Some(memory));
@@ -457,7 +467,8 @@ fn a_job_waits_while_free_disk_is_critically_low_even_when_nothing_runs_and_star
             first.reply(),
             Reply::Queued {
                 ahead: 0,
-                held: Some(Hold::Disk { .. })
+                held: Some(Hold::Disk { .. }),
+                ..
             }
         ),
         "the low disk holds the first job"
@@ -515,7 +526,8 @@ fn with_an_active_priority_file_a_fast_job_takes_the_place_that_normal_jobs_leav
         second.reply(),
         Reply::Queued {
             ahead: 0,
-            held: Some(Hold::Lane { places: 1 })
+            held: Some(Hold::Lane { places: 1 }),
+            beats: false
         }
     );
     let mut fast = Client::ask_in(&path, "fast", Lane::Fast);

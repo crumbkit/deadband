@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use super::lease::Seat;
 use super::{
-    Admission, Lease, Notices, REASK_FOR, Unasked, ask, ask_noticed, ask_reasking, jobs, reply,
-    timeline,
+    Admission, BEAT_SILENCE, Lease, Notices, REASK_FOR, Unasked, Waits, ask, ask_noticed,
+    ask_reasking, jobs, reply, timeline,
 };
 use crate::admit::{Hold, Lane, Threads};
 use crate::protocol::{
@@ -19,6 +19,7 @@ use crate::protocol::{
 };
 use crate::testing::{TestSocket, socket_path};
 
+mod beats;
 mod peer;
 
 /// How long the tests let a scripted daemon take to answer.
@@ -38,6 +39,17 @@ fn job() -> Job {
         workspace: None,
         short: None,
         id: None,
+        beats: false,
+    }
+}
+
+/// Returns the waits of a test client that keeps asking for `reask` after
+/// it loses a daemon that queued it.
+const fn reasking(reask: Duration) -> Waits {
+    Waits {
+        answer: ANSWER_WITHIN,
+        reask,
+        silence: BEAT_SILENCE,
     }
 }
 
@@ -133,13 +145,13 @@ fn ask_starts_the_job_when_the_daemon_closes_the_connection_while_it_waits() {
     let (path, received) = scripted(vec![Reply::Queued {
         ahead: 2,
         held: Some(held),
+        beats: false,
     }]);
     let mut queued = None;
     let admission = ask_reasking(
         &path,
         &job(),
-        ANSWER_WITHIN,
-        Duration::from_millis(300),
+        reasking(Duration::from_millis(300)),
         |n, why| queued = Some((n, why)),
         None,
     );
@@ -172,8 +184,7 @@ fn queued_then_lost(
         ask_reasking(
             &asked,
             &job(),
-            ANSWER_WITHIN,
-            reask_for,
+            reasking(reask_for),
             |ahead, _| reports.send(ahead).expect("the test receives"),
             None,
         )
@@ -185,6 +196,7 @@ fn queued_then_lost(
         &Reply::Queued {
             ahead: 3,
             held: None,
+            beats: false,
         },
     )
     .expect("the queue place writes");
@@ -226,6 +238,14 @@ fn a_queued_client_starts_the_job_when_no_daemon_returns_within_the_bound() {
     );
 }
 
+/// A job that asks the daemon for beats while it waits.
+fn beating() -> Job {
+    Job {
+        beats: true,
+        ..job()
+    }
+}
+
 #[test]
 fn a_queued_client_stops_asking_at_the_bound_when_every_daemon_queues_it_and_closes() {
     let path = socket_path();
@@ -233,17 +253,12 @@ fn a_queued_client_stops_asking_at_the_bound_when_every_daemon_queues_it_and_clo
     let (done, finished) = mpsc::channel();
     let asked = path.to_path_buf();
     thread::spawn(move || {
-        let admission = ask_reasking(
-            &asked,
-            &job(),
-            ANSWER_WITHIN,
-            Duration::from_millis(300),
-            |_, _| {},
-            None,
-        );
+        let waits = reasking(Duration::from_millis(300));
+        let admission = ask_reasking(&asked, &beating(), waits, |_, _| {}, None);
         let _ = done.send(admission);
     });
-    // The daemon queues each try and closes it. It ends with the process.
+    // The daemon queues each try, promises beats and closes before it sends
+    // one, so no try clears the first loss. It ends with the process.
     thread::spawn(move || {
         while let Ok((mut stream, _)) = listener.accept() {
             let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
@@ -251,6 +266,7 @@ fn a_queued_client_stops_asking_at_the_bound_when_every_daemon_queues_it_and_clo
             let queued = Reply::Queued {
                 ahead: 1,
                 held: None,
+                beats: true,
             };
             let _ = write_line(&mut stream, &queued);
         }
@@ -282,6 +298,7 @@ fn ask_returns_a_lease_when_the_daemon_grants_the_job_after_it_waits() {
     let queued = Reply::Queued {
         ahead: 0,
         held: None,
+        beats: false,
     };
     let (path, received) = granting(vec![
         queued,

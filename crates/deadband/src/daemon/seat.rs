@@ -101,7 +101,7 @@ pub(super) fn ask(
     let queued = Instant::now();
     let (id, replies) = {
         let mut state = lock(shared);
-        let lane = job.lane;
+        let (lane, beats) = (job.lane, job.beats);
         let ahead = state.queue.ahead_in(lane);
         let id = state.queue.push(
             Waiter {
@@ -117,8 +117,10 @@ pub(super) fn ask(
         if let Some(ahead) = state.queue.ahead_of(id) {
             let held = state.queue.held();
             // A client that cannot take this reply has its connection shut
-            // down, which the read in `finish` sees.
-            replies.tell(stream, Reply::Queued { ahead, held });
+            // down, which the read in `finish` sees. The reply promises
+            // beats to a client that asked for them, which the watchdog
+            // in `alive` sends.
+            replies.tell(stream, Reply::Queued { ahead, held, beats });
         }
         (id, replies)
     };

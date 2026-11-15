@@ -270,6 +270,7 @@ fn admit_that_queues_reports_the_wait_and_then_holds_the_grant() {
         Reply::Queued {
             ahead: 2,
             held: None,
+            beats: false,
         },
         Reply::Granted {
             threads: Threads::new(2),
@@ -545,6 +546,12 @@ fn a_caller_that_passes_notices_asks_for_a_watched_job() {
 fn a_caller_that_passes_no_notices_asks_for_an_unwatched_job() {
     let request = asked_job(None);
     assert!(matches!(request, Request::Ask(job) if !job.watched));
+}
+
+#[test]
+fn a_caller_asks_the_daemon_for_beats_while_its_job_waits() {
+    let request = asked_job(None);
+    assert!(matches!(request, Request::Ask(job) if job.beats));
 }
 
 #[test]

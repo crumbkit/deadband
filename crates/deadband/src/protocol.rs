@@ -4,7 +4,9 @@
 //! A client opens one connection per request. `run` sends [`Request::Ask`],
 //! reads [`Reply::Granted`] or [`Reply::Queued`] and then, if it waited,
 //! [`Reply::Granted`], which carries the job's threads, keeps the connection open while its job runs, and
-//! sends [`Request::Done`] when the job ends. The daemon counts the job as
+//! sends [`Request::Done`] when the job ends. While the job waits, a daemon
+//! sends [`Reply::Beat`] every five sampling intervals to a client whose
+//! `Ask` set `beats`, and says so in its `Queued` reply. The daemon counts the job as
 //! running until that line arrives or the connection closes. When that
 //! connection closes while the job runs, `run` connects again every 100 ms
 //! and sends [`Request::Seat`], and the daemon that reads it counts the job
@@ -94,6 +96,10 @@ pub struct Job {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<u64>")]
     pub id: Option<JobId>,
+    /// Whether the client reads [`Reply::Beat`] while the job waits. A
+    /// client that names none, as an older client does, gets no beats.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub beats: bool,
 }
 
 /// What the daemon knows of the processes outside the jobs when a job is
@@ -209,7 +215,15 @@ pub enum Reply {
         /// Why the first waiting job does not start yet, or `None` when the
         /// daemon does not know.
         held: Option<Hold>,
+        /// Whether the daemon sends [`Reply::Beat`] while the job waits,
+        /// which it does when the job's client asked for beats. An older
+        /// daemon sends none, and its client then waits with no deadline.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        beats: bool,
     },
+    /// The daemon still serves its queue. It goes to each waiting job whose
+    /// client asked for beats once per five sampling intervals.
+    Beat,
     /// The running and waiting jobs.
     Jobs(Jobs),
     /// The jobs that `deadband top` draws.
