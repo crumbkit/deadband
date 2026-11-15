@@ -283,9 +283,9 @@ that embeds deadband.
 
 | State | Meaning | Enters when | Leaves when |
 | --- | --- | --- | --- |
-| Asked | The client has sent `Ask` and waits up to 2 seconds for the first answer | The client connects to the socket | `Granted` goes to Running; `Queued` goes to Waiting; no daemon on the socket, a connection that fails, no answer within 2 seconds, a closed connection or an unreadable answer goes to Open |
-| Waiting | The daemon holds the job in its queue and the client waits with no deadline | The daemon replies `Queued` | `Granted` goes to Running; a closed connection goes to Asking again |
-| Asking again | The client asks again every 100 ms, so a restarted daemon queues or grants it | The connection of a queued job closes | A daemon grants the job, which goes to Running, or queues it, which goes to Waiting; 5 seconds after the first loss with no grant, the job goes to Open |
+| Asked | The client sends `Ask` with `beats` set, and the daemon has 2 seconds in all to take the line and send its whole first answer | The client connects to the socket | `Granted` goes to Running; `Queued` goes to Waiting; no daemon on the socket, a connection that fails, a line not taken or an answer not read within the 2 seconds, a closed connection or an unreadable answer goes to Open |
+| Waiting | The daemon holds the job in its queue. When its `Queued` reply promised beats, the watchdog sends `Beat` every five sampling intervals (5 seconds), and the client waits for at most 16 seconds between two lines; otherwise it waits with no deadline | The daemon replies `Queued` | `Granted` goes to Running; a beat stays in Waiting and clears the first loss; 16 seconds with no line goes to Open; a closed connection goes to Asking again |
+| Asking again | The client asks again every 100 ms, so a restarted daemon queues or grants it | The connection of a queued job closes | A daemon grants the job, which goes to Running, or queues it, which goes to Waiting; 5 seconds after the first loss that no beat has cleared, with no grant, the job goes to Open |
 | Running | The job runs and the daemon counts its place; the lease's watcher thread reads the connection | The daemon grants the job | The job ends and the client sends `Done`, which goes to Ended; the connection closes while the client lives, which goes to Reseating |
 | Reseating | The lease has lost its daemon and tries to connect and send `Seat` every 100 ms | The daemon stops or closes the connection while the job runs | A daemon accepts the seat and counts the job at once, which goes to Running; the job ends first, and no daemon is told |
 | Open | The job starts at once without a lease, and `deadband run` says why in one line | The daemon could not be asked or did not keep the job, or `DEADBAND_HELD` or `DEADBAND_BYPASS` is set, in which case nothing is asked and nothing is said | The job starts, which goes to Uncounted |
@@ -303,10 +303,30 @@ shuts that connection down after it has released the lock. The client then
 goes to Open if it had read no `Queued` line, or only part of one, and to
 Asking again if it had read `Queued`.
 
+The watchdog thread (`daemon/alive.rs`) decides the beats under the lock and
+writes them with the same `deliver`, so a daemon that is stopped, or whose
+threads block or deadlock while they hold the queue lock, sends none. A
+stalled sampler does not hold the lock, so the watchdog keeps beating and
+keeps admitting jobs on the stale reading. The client skips a beat that
+arrives before its `Queued` reply, and the lease's watcher ignores one that
+arrives after the grant. A queued job's loss counts from the latest daemon
+that queued it and sent a beat, so each restart of a daemon that served the
+job gets the full 5 seconds, and a daemon that queues the job and closes
+before it beats leaves the earlier loss in place.
+
 The tests are `a_queued_client_asks_a_restarted_daemon_again_before_it_starts_the_job`,
 `a_queued_client_starts_the_job_when_no_daemon_returns_within_the_bound` and
 `a_queued_client_stops_asking_at_the_bound_when_every_daemon_queues_it_and_closes`
-in `src/client/tests.rs`; `admit_without_a_daemon_starts_the_job_with_capped_threads_and_says_why`
+in `src/client/tests.rs`;
+`a_queued_client_whose_daemon_promised_beats_and_went_silent_starts_its_job`,
+`a_queued_client_whose_daemon_keeps_beating_waits_past_the_silence_for_its_grant`,
+`a_queued_client_waits_with_no_deadline_on_a_daemon_that_promised_no_beats`,
+`a_daemon_that_queues_the_job_again_and_beats_gives_its_next_loss_a_window_of_its_own`,
+`an_ask_that_the_daemon_never_reads_gives_up_when_the_first_answer_is_due` and
+`an_ask_whose_daemon_drips_its_first_answer_gives_up_at_the_deadline` in
+`src/client/tests/beats.rs`;
+`a_daemon_beats_to_a_waiting_client_that_asked_for_beats_and_to_no_other` in
+`src/daemon/tests/reply.rs`; `admit_without_a_daemon_starts_the_job_with_capped_threads_and_says_why`
 and `admit_with_bypass_asks_nothing` in `src/admission/tests.rs`;
 `a_job_that_runs_when_its_daemon_is_killed_counts_on_the_next_daemon` and
 `a_run_inside_the_job_that_holds_the_only_place_runs_at_once` in
@@ -396,7 +416,8 @@ in `src/cli/tests/reclaim.rs`.
 | --- | --- | --- |
 | The sampler panics | The sampler's ending sends its reason, the daemon stops serving and the process ends. Waiting clients ask again for 5 seconds and then start, and running jobs reseat on the next daemon | `a_daemon_stops_serving_when_its_sampler_panics` in `src/daemon/tests/alive.rs` |
 | The sampler blocks | After five sampling intervals the watchdog counts the reading as stale, so the jobs it held start once a place is free, and it keeps checking the socket and lock files | `a_job_starts_when_the_sampler_stalls_and_its_last_reading_holds_the_job` and `a_daemon_whose_sampler_is_stalled_stops_serving_when_its_socket_file_is_removed` in `src/daemon/tests/alive.rs` |
-| The daemon hangs after it sent `Queued`, with the connection open | The client keeps waiting with no deadline, because fail-open applies only to a closed connection or a missing first answer. A stalled sampler is the case above; a daemon whose every thread hangs keeps its waiting jobs waiting until it is stopped | No test injects a whole-daemon hang |
+| The daemon hangs after it sent `Queued`, with the connection open | The client reads no beat for 16 seconds, closes the connection, says the daemon queued the job and then sent nothing, and starts the job uncounted. A client of a daemon that promised no beats, which is a daemon of an earlier release, keeps waiting with no deadline | `a_queued_client_whose_daemon_promised_beats_and_went_silent_starts_its_job` and its twin `a_queued_client_whose_daemon_keeps_beating_waits_past_the_silence_for_its_grant` in `src/client/tests/beats.rs`; no test hangs a real daemon |
+| The daemon stops reading, or sends its first answer a byte at a time | The `Ask` line and the first answer share the 2-second deadline, so the client gives up when it ends and starts the job | `an_ask_that_the_daemon_never_reads_gives_up_when_the_first_answer_is_due` and `an_ask_whose_daemon_drips_its_first_answer_gives_up_at_the_deadline` in `src/client/tests/beats.rs` |
 | A client never reads its reply | The daemon writes the reply after it releases the queue lock, so the client never holds the lock. The write fails after 1 second. A grant that fails frees the job's place and is recorded once as Left, and the daemon shuts that connection down | `a_client_that_never_reads_its_grant_does_not_delay_the_next_grant`, `a_grant_that_cannot_be_written_frees_its_place_once_and_closes_the_connection` and `a_queued_reply_that_waits_on_its_client_leaves_the_queue_lock_free` in `src/daemon/tests/reply.rs` |
 | The daemon stops or is killed | Waiting clients ask again for 5 seconds, so a restarted daemon queues them again, and start only if no daemon answers. Running jobs keep running, and each lease seats its job on the next daemon | `a_queued_client_asks_a_restarted_daemon_again_before_it_starts_the_job` in `src/client/tests.rs`; `a_job_that_runs_when_its_daemon_is_killed_counts_on_the_next_daemon` in `tests/run.rs` |
 | A reclaimer hangs | The daemon logs that it ran past its timeout, keeps waiting for it, and starts no other reclaim until it exits; admission continues, and `deadband status` shows the reclaim in progress | `a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues` in `src/cli/tests/reclaim.rs`; `status_prints_a_reclaim_in_progress_after_the_jobs` in `src/cli/tests.rs` |

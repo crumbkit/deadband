@@ -30,6 +30,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   non-interactive shell script ended on a SIGINT that it would otherwise have
   ignored; now a `kill -INT` of a `deadband run` that a script started in the
   background no longer ends it.
+- In the library, `protocol::Job` has a `beats` field, `Reply::Queued` has a
+  `beats` field, `Reply` has a `Beat` variant and `client::Unasked` has a
+  `Hung` variant. `admission::admit` always asks for beats. On the wire both
+  fields are left out when false, so an older peer reads the same lines.
 
 ### Fixed
 
@@ -42,6 +46,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with the job. A SIGHUP sent to the process of `deadband run` alone, such as
   a `kill -HUP` from a harness, used to end `deadband run` and leave the job
   running, so the daemon freed the job's place while the job ran uncounted.
+- A queued `deadband run` starts its job when its daemon stops sending
+  beats. The daemon sends a `beat` line every 5 seconds to each waiting job
+  whose `Ask` set `beats`, and says so in its `Queued` reply. When no line
+  arrives for 16 seconds, `deadband run` says that the daemon queued the job
+  and then sent nothing, and runs the job. A daemon that is stopped, or whose
+  threads block while they hold its queue, used to keep every queued run
+  waiting for ever. A daemon of an earlier release sends no beats, and a new
+  client waits on it with no deadline, as before.
+- The `Ask` line and the daemon's first answer share the 2-second deadline.
+  A daemon that stopped reading used to block a run whose command line was
+  longer than the socket's buffer, and a daemon that sent its answer a byte
+  at a time could keep a run waiting for minutes.
+- Each loss of a daemon that queued a job and sent it a beat gets its own
+  5-second window to ask again. A second daemon restart more than 5 seconds
+  after the first used to start every queued job at once.
 
 ## [0.4.0-alpha.1] - 2026-11-14
 

@@ -269,7 +269,10 @@ struct Deadline {
 impl Deadline {
     /// Returns the time left before `at`, or an error once it has passed.
     fn left(&self) -> io::Result<Option<Duration>> {
-        match self.at.map(|at| at.saturating_duration_since(Instant::now())) {
+        match self
+            .at
+            .map(|at| at.saturating_duration_since(Instant::now()))
+        {
             Some(left) if left.is_zero() => Err(ErrorKind::TimedOut.into()),
             left => Ok(left),
         }
