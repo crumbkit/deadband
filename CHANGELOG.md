@@ -22,6 +22,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   output, the reclaimer does not start and the reclaim fails with the
   operating system's error, as it already did when the waiting thread was
   refused. The waiting thread no longer reads the output itself in that case.
+- A SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 or SIGUSR2 that `deadband run`
+  inherited as ignored is no longer registered or passed on, so it stays
+  ignored and the job inherits the ignore. Under `nohup deadband run --
+  <job>`, the job survives a hangup. Before, `deadband run` replaced an
+  ignored SIGINT or SIGTERM with its own handler, so a background job of a
+  non-interactive shell script ended on a SIGINT that it would otherwise have
+  ignored; now a `kill -INT` of a `deadband run` that a script started in the
+  background no longer ends it.
 
 ### Fixed
 
@@ -29,6 +37,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   thread that reads it late. Once the reclaimer exits, the daemon reads what
   its standard output already holds, where it used to stop reading 250 ms
   after the exit and count a cut-off report as failed.
+- `deadband run` passes a SIGHUP, SIGQUIT, SIGUSR1 or SIGUSR2 that it
+  receives on to its job, as it already did for SIGTERM and SIGINT, and exits
+  with the job. A SIGHUP sent to the process of `deadband run` alone, such as
+  a `kill -HUP` from a harness, used to end `deadband run` and leave the job
+  running, so the daemon freed the job's place while the job ran uncounted.
 
 ## [0.4.0-alpha.1] - 2026-11-14
 

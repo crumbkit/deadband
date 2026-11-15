@@ -44,10 +44,43 @@ fn run_adds_the_variables_it_is_given_to_the_jobs_environment() {
     assert_eq!(exit_code(status), 0);
 }
 
+/// Tests of reading which signals this process inherited as ignored.
+mod ignored {
+    use crate::job::ignored::{ignored_mask, signal_in_mask};
+
+    #[test]
+    fn the_sigign_line_of_a_proc_status_text_gives_the_mask() {
+        let status = "Name:\tdeadband\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000001001\n";
+        assert_eq!(ignored_mask(status), Some(0x1001));
+    }
+
+    #[test]
+    fn a_status_text_without_a_readable_sigign_line_gives_no_mask() {
+        assert_eq!(ignored_mask("Name:\tdeadband\n"), None);
+        assert_eq!(ignored_mask("SigIgn:\tnot-hex\n"), None);
+    }
+
+    #[test]
+    fn bit_n_minus_1_of_the_mask_stands_for_signal_n() {
+        assert!(signal_in_mask(0b1, 1));
+        assert!(!signal_in_mask(0b1, 2));
+        assert!(signal_in_mask(1 << 14, 15));
+    }
+
+    #[test]
+    fn a_signal_number_outside_the_mask_is_not_held() {
+        assert!(!signal_in_mask(u64::MAX, 0));
+        assert!(!signal_in_mask(u64::MAX, -1));
+        assert!(!signal_in_mask(u64::MAX, 65));
+    }
+}
+
 /// Tests of passing a signal that the caller sent on to the job. They use
-/// SIGUSR1 and SIGUSR2, which nothing else in the test process handles, so
-/// the tests do not disturb the others. The test of a job that exits on its
-/// own registers SIGWINCH, which no test sends.
+/// SIGALRM and SIGPROF, which nothing else in the test process handles and
+/// which are outside the signals that `job::run` passes on, so a `job::run`
+/// in another test of the same process does not pass them on to its own
+/// job. The test of a job that exits on its own registers SIGWINCH, which
+/// no test sends.
 mod forwarding {
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -58,7 +91,7 @@ mod forwarding {
     use crate::job::forward::run_forwarding;
     use crate::job::{CommandLine, exit_code};
 
-    use signal_hook::consts::{SIGUSR1 as USR1, SIGUSR2 as USR2, SIGWINCH as WINCH};
+    use signal_hook::consts::{SIGALRM as ALRM, SIGPROF as PROF, SIGWINCH as WINCH};
 
     fn words(command: &[&str]) -> CommandLine<OsString> {
         CommandLine::from_words(command.iter().map(OsString::from))
@@ -89,13 +122,13 @@ mod forwarding {
     #[test]
     fn a_signal_the_caller_sent_ends_a_sleeping_job_and_the_exit_code_follows_it() {
         let ready = ready_file("end");
-        let sender = send_when_ready(ready.clone(), Signal::USR1);
+        let sender = send_when_ready(ready.clone(), Signal::ALARM);
         let script = format!("touch {}; exec sleep 30", ready.display());
         let started = Instant::now();
         let status =
-            run_forwarding(&words(&["sh", "-c", &script]), &[], &[USR1]).expect("sh starts");
+            run_forwarding(&words(&["sh", "-c", &script]), &[], &[ALRM]).expect("sh starts");
         sender.join().expect("sender ends");
-        assert_eq!(i32::from(exit_code(status)), 128 + USR1);
+        assert_eq!(i32::from(exit_code(status)), 128 + ALRM);
         assert!(started.elapsed() < Duration::from_secs(20));
         let _ = std::fs::remove_file(ready);
     }
@@ -103,13 +136,13 @@ mod forwarding {
     #[test]
     fn the_job_receives_the_signal_unchanged_and_decides_its_own_exit_code() {
         let ready = ready_file("trap");
-        let sender = send_when_ready(ready.clone(), Signal::USR2);
+        let sender = send_when_ready(ready.clone(), Signal::PROF);
         let script = format!(
-            "trap 'exit 7' USR2; touch {}; sleep 30 & wait",
+            "trap 'exit 7' PROF; touch {}; sleep 30 & wait",
             ready.display()
         );
         let status =
-            run_forwarding(&words(&["sh", "-c", &script]), &[], &[USR2]).expect("sh starts");
+            run_forwarding(&words(&["sh", "-c", &script]), &[], &[PROF]).expect("sh starts");
         sender.join().expect("sender ends");
         assert_eq!(exit_code(status), 7);
         let _ = std::fs::remove_file(ready);
@@ -124,7 +157,7 @@ mod forwarding {
 
     #[test]
     fn a_program_that_cannot_start_still_fails_with_not_found() {
-        let error = run_forwarding(&words(&["deadband-test-no-such-program"]), &[], &[USR1])
+        let error = run_forwarding(&words(&["deadband-test-no-such-program"]), &[], &[ALRM])
             .expect_err("nothing starts");
         assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
