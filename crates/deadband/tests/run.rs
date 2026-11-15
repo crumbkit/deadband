@@ -870,7 +870,7 @@ mod history {
         let _daemon = Daemon::started(home.command(&["daemon", "--max-jobs", "1"]));
         let run = output(home.command(&["run", "--", "sh", "-c", "exit 3"]));
         assert_eq!(run.status.code(), Some(3), "{run:?}");
-        let line = first_line(&home.file());
+        let line = first_job_line(&home.file());
         assert_eq!(line["type"], "job");
         assert_eq!(line["kind"], "sh");
         assert_eq!(line["exit"]["exited"]["code"], 3);
