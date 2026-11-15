@@ -122,6 +122,7 @@ fn job_in(command: &str, cwd: Option<&Path>) -> Job {
         workspace: None,
         short: None,
         id: None,
+        beats: false,
     }
 }
 

@@ -213,6 +213,7 @@ impl Model {
             | Unasked::Foreign { .. }
             | Unasked::Directory { .. }
             | Unasked::Silent { .. }
+            | Unasked::Hung { .. }
             | Unasked::Garbled { .. } => None,
         };
         self.failed = Some(match absence {

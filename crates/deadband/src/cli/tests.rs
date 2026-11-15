@@ -152,6 +152,7 @@ fn ask(socket: &Path, label: &str) -> (UnixStream, Reply) {
         workspace: None,
         short: None,
         id: None,
+        beats: false,
     };
     write_line(&mut stream, &Request::Ask(job)).expect("the request writes");
     let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
@@ -742,6 +743,7 @@ fn listed(label: &str, pid: u32) -> Job {
         workspace: None,
         short: None,
         id: None,
+        beats: false,
     }
 }
 

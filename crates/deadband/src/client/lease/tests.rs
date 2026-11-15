@@ -26,6 +26,7 @@ fn job() -> Job {
         workspace: None,
         short: None,
         id: None,
+        beats: false,
     }
 }
 

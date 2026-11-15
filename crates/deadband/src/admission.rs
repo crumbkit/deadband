@@ -225,6 +225,7 @@ pub fn admit(asked: &Asked<'_>, notify: &mut impl FnMut(&str)) -> Admitted {
         workspace: asked.workspace.map(Label::new),
         short: None,
         id: None,
+        beats: false,
     };
     let queued = |ahead: usize, held: Option<Hold>| notify(&waits(ahead, held));
     let lease = match client::ask_noticed(asked.socket, &job, ANSWER_WITHIN, queued, asked.notices)
