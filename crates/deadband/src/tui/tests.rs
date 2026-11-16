@@ -177,6 +177,9 @@ fn reply_line(up: u64) -> Vec<u8> {
         held: None,
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     });
     write_line(&mut line, &reply).expect("the line writes");
     line

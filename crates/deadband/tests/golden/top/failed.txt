@@ -1,0 +1,28 @@
+ deadband  last 10 minutes                                                             HELD · MEMORY · RECLAIM FAILED
+
+ workspace        job                         -10m        -8m        -6m         -4m        -2m      now  state
+ core-props       make  up                    │ ████████████████████████████████████████████████████████  run 9m
+ as59-eval        e2e run                     │           │    ░████████████████████████████████████████  run 7m
+ board-sync       cargo test                  │           │          │      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░  wait 4m
+ flows-ux         npm run build               │           │          │           │          ░░░░░░░░░░░░  wait 2m
+                                              │           │          │           │          │
+ reclaims                                     │           │          │           │          │
+ mxv reclaim      workspaces  memory=4G       │           │          │           │ ✗      ✗ │    ✗        failed 1m
+ tidy reap        caches  memory=4G           │           │          │           │ ━✓     ✓ │    ✓        freed 0 1m
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+ mxv reclaim failed 3 times: it could not start /usr/local/bin/mxv: No such file or directory
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ load   7.8
+ cores  14                                     ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                               ⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤
+                                               ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+ held by                                       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                   ▀ open   ▀ full   ▀ load   ▀ memory   ▀ disk   ░ waiting   █ running   ━ reclaim
+ waiting because: memory pressure is warn; the next reclaim starts in 40s
+ q quit

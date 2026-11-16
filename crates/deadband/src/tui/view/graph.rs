@@ -95,7 +95,7 @@ pub(super) fn draw(
     now: Instant,
     top: u16,
     (x, width): (u16, u16),
-    no_activity: bool,
+    keys: (bool, bool),
 ) {
     put(buffer, 1, top, "load", fg(TEXT));
     let load = model
@@ -113,7 +113,7 @@ pub(super) fn draw(
     let limit = cores.and_then(|cores| u16::try_from(cores).ok());
     graph(buffer, model, now, (top, x, width), scale_top, limit);
     strip(buffer, model, now, top + HEIGHT, x, width);
-    legend(buffer, top + HEIGHT + 1, x, no_activity);
+    legend(buffer, top + HEIGHT + 1, x, keys);
 }
 
 /// Draws the braille graph of the load in `(top, x, width)`. Dots that are
@@ -169,21 +169,32 @@ fn strip(buffer: &mut Buffer, model: &Model, now: Instant, y: u16, x: u16, width
 
 /// Draws the key to the strip's and the bars' colours. It starts left of
 /// the axis when the terminal is too narrow for it there. While a row shows
-/// a period with no activity, the key names it, and in a terminal too
-/// narrow for its usual gaps the gaps close up.
-fn legend(buffer: &mut Buffer, y: u16, x: u16, no_activity: bool) {
+/// a period with no activity, the key names it, and while the reclaims
+/// show, it names their bars. In a terminal too narrow for the usual gaps
+/// the gaps close up.
+fn legend(buffer: &mut Buffer, y: u16, x: u16, (no_activity, reclaim): (bool, bool)) {
     /// The columns the legend takes, with one spare on the right.
     const WIDTH: u16 = 72;
-    /// The columns the legend takes with `no activity`.
+    /// The columns the legend takes with `no activity`, or with `reclaim`.
     const WIDE: u16 = 85;
     /// The columns the legend takes with `no activity` and closed gaps.
     const TIGHT: u16 = 78;
+    /// The columns that each further name adds to the wide key.
+    const MORE: u16 = 12;
     let columns = buffer.area.width;
-    let (gaps, needs): ([u16; 7], u16) = match (no_activity, columns >= WIDE) {
+    let extended = no_activity || reclaim;
+    let wide = columns >= WIDE + if no_activity && reclaim { MORE } else { 0 };
+    let (gaps, needs): ([u16; 7], u16) = match (extended, wide) {
         (false, _) => ([9, 9, 9, 11, 11, 13, 0], WIDTH),
         (true, true) => ([9, 9, 9, 11, 9, 12, 12], WIDE),
         (true, false) => ([8, 8, 8, 10, 8, 11, 11], TIGHT),
     };
+    let needs = needs
+        + if no_activity && reclaim {
+            MORE - u16::from(!wide)
+        } else {
+            0
+        };
     let x = x.min(columns.saturating_sub(needs));
     let parts = [
         ("▀", OPEN, "open"),
@@ -199,6 +210,12 @@ fn legend(buffer: &mut Buffer, y: u16, x: u16, no_activity: bool) {
         put(buffer, at, y, sign, fg(color));
         put(buffer, at + 2, y, name, fg(super::DIM));
         at += gap;
+    }
+    let step = gaps[6];
+    if reclaim {
+        put(buffer, at, y, "━", fg(TEAL));
+        put(buffer, at + 2, y, "reclaim", fg(super::DIM));
+        at += step;
     }
     if no_activity {
         put(buffer, at, y, "▓", fg(RED));

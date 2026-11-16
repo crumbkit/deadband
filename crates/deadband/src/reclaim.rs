@@ -243,6 +243,17 @@ pub struct Report {
     pub freed_bytes: u64,
     /// The `name` of each item whose `freed` is above 0.
     pub items: Vec<String>,
+    /// Each item whose `state` is `kept`, with its `reason`.
+    pub kept: Vec<Kept>,
+}
+
+/// An item that a reclaimer leaves as it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Kept {
+    /// The item's `name`, or empty when it has none.
+    pub name: String,
+    /// The item's `reason`, or empty when it gives none.
+    pub why: String,
 }
 
 /// The fields of a reclaimer's JSON that deadband reads. It ignores every
@@ -261,6 +272,12 @@ struct Item {
     name: Option<String>,
     /// The bytes the item freed, or would free on a dry run.
     freed: u64,
+    /// What the reclaimer did or would do with the item, such as `kept`.
+    #[serde(default)]
+    state: Option<String>,
+    /// Why the reclaimer did that, for a kept item.
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 impl Report {
@@ -277,13 +294,26 @@ impl Report {
             .data
             .iter()
             .fold(0_u64, |sum, item| sum.saturating_add(item.freed));
+        let kept = printed
+            .data
+            .iter()
+            .filter(|item| item.state.as_deref() == Some("kept"))
+            .map(|item| Kept {
+                name: item.name.clone().unwrap_or_default(),
+                why: item.reason.clone().unwrap_or_default(),
+            })
+            .collect();
         let items = printed
             .data
             .into_iter()
             .filter(|item| item.freed > 0)
             .filter_map(|item| item.name)
             .collect();
-        Ok(Self { freed_bytes, items })
+        Ok(Self {
+            freed_bytes,
+            items,
+            kept,
+        })
     }
 }
 
@@ -332,7 +362,7 @@ fn ended_at<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Age, D::Error>
 
 /// A number of bytes, which prints in whole MiB below 1 GiB and in whole
 /// GiB from there.
-struct Bytes(u64);
+pub(crate) struct Bytes(pub(crate) u64);
 
 impl fmt::Display for Bytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -134,6 +134,20 @@ while that period is in the window. The state column reads `stuck 46m`, a red
 `2 STUCK` label sits left of the hold label, and one line above the rule gives
 the count and the busiest process outside the jobs.
 
+Under the jobs, a `reclaims` section holds one row for each configured
+reclaimer. The workspace column names the reclaimer's command, such as
+`mxv reclaim`, and the job column names its config name and need, such as
+`workspaces  memory=4G`. A `━` bar covers each run of the last ten minutes
+and ends in `✓`, or in `✗` when the run failed. The state column reads
+`run 38s`, `freed 1.2G 6m` or `failed 1m`. While a reclaim runs, a line above
+the rule says which items its dry run plans to stop and which it keeps, with
+the reason. When the last run of a reclaimer failed, that line says
+`<command> failed N times` and gives the reason. The header adds
+`RECLAIMING` or `RECLAIM FAILED` after the hold, and the line that says why
+jobs wait says when the next reclaim starts. The daemon remembers the
+reclaim runs of the last ten minutes, at most 64, in memory only, so a
+restart forgets them.
+
 A SIGTERM or SIGKILL sent to `deadband top` leaves the terminal in raw mode.
 Run `reset` to restore it.
 
@@ -531,6 +545,8 @@ reads only `data`, an array of objects, and two fields of each object:
 | --- | --- |
 | `freed` | The bytes the item freed, or would free on a dry run, as a whole number. Required. |
 | `name` | The item's name, which the log shows when `freed` is above 0. Optional. |
+| `state` | `kept` marks an item that the reclaimer leaves as it is. `top` lists it in the plan. Optional. |
+| `reason` | Why a `kept` item stays, such as `jobs queued`. Optional. |
 
 deadband adds up `freed` across `data` and ignores every other field. For
 example:

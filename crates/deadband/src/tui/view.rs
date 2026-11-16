@@ -9,10 +9,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 
 use self::row::{Columns, draw_row};
-use super::model::{Absence, Axis, Gate, Model, Phase};
+use super::model::{Absence, Axis, Gate, Model, Phase, Reclaim};
 use crate::protocol::{Label, OutsideJobs};
 
 mod graph;
+mod reclaim;
 mod row;
 #[cfg(test)]
 mod tests;
@@ -100,9 +101,16 @@ pub(super) fn draw(buffer: &mut Buffer, model: &Model, now: Instant) {
     let axis = Axis::new(width);
     let rows_end = lines - BOTTOM;
     let note = activity_note(model);
-    let capacity = usize::from(rows_end - ROWS_Y) - usize::from(note.is_some());
-    let rows = model.rows(now, axis, capacity);
-    header(buffer, model, &phase, rows.unseen);
+    let reclaim_note = reclaim::note(model, now);
+    let notes = usize::from(note.is_some()) + usize::from(reclaim_note.is_some());
+    let room = usize::from(rows_end - ROWS_Y).saturating_sub(notes);
+    let reclaim_rows = model.reclaim_rows(now, axis);
+    let section = match reclaim::height(&reclaim_rows) {
+        lines if room >= lines + reclaim::MIN_JOBS => lines,
+        _ => 0,
+    };
+    let rows = model.rows(now, axis, room - section);
+    header(buffer, model, &phase, rows.unseen, now);
     axis_labels(buffer, axis, width, left);
     if let Phase::DaemonDown(absence) = phase {
         no_daemon(buffer, absence, rows_end);
@@ -111,14 +119,18 @@ pub(super) fn draw(buffer: &mut Buffer, model: &Model, now: Instant) {
         for (y, row) in (ROWS_Y..rows_end).zip(&rows.rows) {
             draw_row(buffer, y, row, width, left);
         }
+        if section > 0 {
+            let first = ROWS_Y + u16::try_from(rows.rows.len()).unwrap_or(0);
+            reclaim::draw_section(buffer, first, &reclaim_rows, width, left);
+        }
+        let room = usize::from(columns - 2);
+        let mut line = rows_end - 1;
+        if let Some(pieces) = reclaim_note {
+            reclaim::put_pieces(buffer, 1, line, &pieces, room);
+            line -= 1;
+        }
         if let Some((text, style)) = note {
-            put(
-                buffer,
-                1,
-                rows_end - 1,
-                &fit(&text, usize::from(columns - 2)),
-                style,
-            );
+            put(buffer, 1, line, &fit(&text, room), style);
         }
     }
     put(
@@ -135,9 +147,9 @@ pub(super) fn draw(buffer: &mut Buffer, model: &Model, now: Instant) {
         now,
         rows_end + 1,
         (axis_x, width),
-        no_activity,
+        (no_activity, section > 0),
     );
-    reason(buffer, model, &phase, lines - 2);
+    reason(buffer, model, &phase, lines - 2, now);
     put(buffer, 1, lines - 1, "q", bold(TEAL));
     put(buffer, 3, lines - 1, "quit", fg(DIM));
 }
@@ -181,18 +193,25 @@ fn too_small(buffer: &mut Buffer, columns: u16, lines: u16) {
 }
 
 /// Returns the pill's text and colour.
-fn pill(model: &Model, phase: &Phase) -> (String, Color) {
+fn pill(model: &Model, phase: &Phase, now: Instant) -> (String, Color) {
     match phase {
         Phase::DaemonDown(Absence::NotRunning) => (" NO DAEMON ".to_owned(), DIM),
         Phase::DaemonDown(Absence::MaybeOlder) => (" OLDER DAEMON ".to_owned(), AMBER),
         Phase::Connecting(_) => (" CONNECTING ".to_owned(), DIM),
-        Phase::Live | Phase::Stale { .. } | Phase::TooSmall { .. } => match model.held() {
-            None => (" OPEN ".to_owned(), GREEN),
-            Some(hold) => {
-                let (name, color) = gate_name(Gate::from(Some(hold)));
-                (format!(" HELD · {} ", name.to_uppercase()), color)
+        Phase::Live | Phase::Stale { .. } | Phase::TooSmall { .. } => {
+            let (held, color) = match model.held() {
+                None => ("OPEN".to_owned(), GREEN),
+                Some(hold) => {
+                    let (name, color) = gate_name(Gate::from(Some(hold)));
+                    (format!("HELD · {}", name.to_uppercase()), color)
+                }
+            };
+            match model.reclaim(now) {
+                Reclaim::Quiet => (format!(" {held} "), color),
+                Reclaim::Running { .. } => (format!(" {held} · RECLAIMING "), AMBER),
+                Reclaim::Failed { .. } => (format!(" {held} · RECLAIM FAILED "), RED),
             }
-        },
+        }
     }
 }
 
@@ -232,9 +251,9 @@ fn subtitle(model: &Model, phase: &Phase, unseen: usize) -> String {
 }
 
 /// Draws the first line: the title, what the view knows, and the pill.
-fn header(buffer: &mut Buffer, model: &Model, phase: &Phase, unseen: usize) {
+fn header(buffer: &mut Buffer, model: &Model, phase: &Phase, unseen: usize, now: Instant) {
     put(buffer, 0, 0, " deadband ", bold(INK).bg(TEAL));
-    let (text, color) = pill(model, phase);
+    let (text, color) = pill(model, phase, now);
     let pill_x = buffer.area.width - 2 - u16::try_from(text.chars().count()).unwrap_or(0);
     let count = model.stuck_count();
     let stuck = (count > 0).then(|| format!(" {count} STUCK "));
@@ -321,7 +340,7 @@ fn no_daemon(buffer: &mut Buffer, absence: Absence, rows_end: u16) {
 }
 
 /// Draws the line that says why jobs wait now.
-fn reason(buffer: &mut Buffer, model: &Model, phase: &Phase, y: u16) {
+fn reason(buffer: &mut Buffer, model: &Model, phase: &Phase, y: u16, now: Instant) {
     let Some(hold) = model
         .held()
         .filter(|_| !matches!(phase, Phase::DaemonDown(_)))
@@ -329,7 +348,10 @@ fn reason(buffer: &mut Buffer, model: &Model, phase: &Phase, y: u16) {
         return;
     };
     let room = usize::from(buffer.area.width - 2);
-    let text = fit(&format!("waiting because: {hold}"), room);
+    let suffix = reclaim::reason_suffix(model, now)
+        .map(|words| format!("; {words}"))
+        .unwrap_or_default();
+    let text = fit(&format!("waiting because: {hold}{suffix}"), room);
     put(
         buffer,
         1,

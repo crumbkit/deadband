@@ -21,7 +21,8 @@ use super::{BG, draw};
 use crate::admit::{GIB, Hold, Lane};
 use crate::client::Unasked;
 use crate::protocol::{
-    Ago, Exit, JobRecord, JobState, Label, OutsideJobs, Short, StuckPeriod, Timeline,
+    Ago, Ahead, Exit, JobRecord, JobState, KeptItem, Label, OutsideJobs, ReclaimPlan, ReclaimRun,
+    ReclaimRunState, ReclaimerRow, Short, StuckPeriod, Timeline,
 };
 use crate::tui::model::Model;
 
@@ -125,6 +126,9 @@ fn open_model(jobs: Vec<JobRecord>) -> (Model, Instant) {
             held: None,
             busiest: None,
             unreadable: false,
+            reclaimers: Vec::new(),
+            plan: None,
+            next_reclaim: None,
         };
         model.observe(now - secs(age), Ok(reply), Some(6.4));
     }
@@ -346,6 +350,9 @@ fn model_with(
             held: history.hold(age),
             busiest: None,
             unreadable: false,
+            reclaimers: Vec::new(),
+            plan: None,
+            next_reclaim: None,
         };
         model.observe(now - secs(age), Ok(reply), Some(history.load(age)));
     }
@@ -356,6 +363,9 @@ fn model_with(
         held: history.hold(0),
         busiest,
         unreadable,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     };
     model.observe(now, Ok(reply), Some(history.load(0)));
     (model, now)
@@ -444,6 +454,9 @@ fn a_daemon_restart_matches_the_mockup() {
         held: Some(load_hold()),
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     };
     model.observe(now, Ok(reply), Some(15.9));
     assert_golden(
@@ -528,6 +541,9 @@ fn a_reply_says_how_many_jobs_are_not_shown() {
         held: None,
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     };
     model.observe(now, Ok(reply), None);
     let text = render(&model, now, 80, 16);
@@ -545,6 +561,9 @@ fn one_job_with_no_row_reads_in_the_singular() {
         held: None,
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     };
     model.observe(now, Ok(reply), None);
     let text = render(&model, now, 120, 28);
@@ -587,6 +606,9 @@ fn a_label_cut_to_its_column_ends_in_an_ellipsis() {
         held: None,
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     };
     model.observe(now, Ok(reply), None);
     let text = render(&model, now, 120, 28);
@@ -611,6 +633,9 @@ fn longest_state(columns: u16, lines: u16) -> String {
         held: None,
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     };
     model.observe(now, Ok(reply), None);
     render(&model, now, columns, lines)
@@ -866,5 +891,184 @@ fn two_stuck_jobs_on_the_smallest_terminal_match_the_signed_off_screen() {
     assert_golden(
         &incident(80, 16),
         include_str!("../../../tests/golden/top/stuck-min.txt"),
+    );
+}
+
+/// The history of the reclaim states: memory has held jobs for ten minutes.
+fn memory_history() -> History {
+    History {
+        load_now: 7.8,
+        load_before: 7.8,
+        held: Some(Hold::Memory {
+            pressure: crate::probe::Pressure::Warn,
+        }),
+        held_for: 600,
+        seen: 599,
+    }
+}
+
+/// What the daemon says about reclaims, besides the jobs.
+struct Reclaims {
+    reclaimers: Vec<ReclaimerRow>,
+    plan: Option<ReclaimPlan>,
+    next: Option<Ahead>,
+}
+
+/// Returns the model that [`model_of`] does, whose last reply also carries
+/// `reclaims`.
+fn model_reclaiming(jobs: Vec<JobRecord>, reclaims: Reclaims) -> (Model, Instant) {
+    let history = memory_history();
+    let (mut model, now) = model_of(&history, 5000, Vec::new());
+    let reply = Timeline {
+        up: ago(5000),
+        jobs,
+        hidden: 0,
+        held: history.hold(0),
+        busiest: None,
+        unreadable: false,
+        reclaimers: reclaims.reclaimers,
+        plan: reclaims.plan,
+        next_reclaim: reclaims.next,
+    };
+    model.observe(now + secs(1), Ok(reply), Some(history.load(0)));
+    (model, now + secs(1))
+}
+
+fn run_ended(started: u64, ended: u64, freed: Option<u64>, failed: Option<&str>) -> ReclaimRun {
+    ReclaimRun {
+        need: Short::new("memory=4G"),
+        started: ago(started),
+        state: ReclaimRunState::Ended {
+            ended: ago(ended),
+            freed_bytes: freed,
+            failed: failed.map(Short::new),
+        },
+    }
+}
+
+fn reclaimer(name: &str, command: &str, runs: Vec<ReclaimRun>) -> ReclaimerRow {
+    ReclaimerRow {
+        name: Label::new(name),
+        command: Label::new(command),
+        runs,
+    }
+}
+
+fn reclaiming() -> (Model, Instant) {
+    let jobs = vec![
+        named("core-props", "make  up", running("core-props", 580, 580)),
+        named("as59-eval", "e2e run", running("as59-eval", 430, 420)),
+        named(
+            "deadband-hist",
+            "suite  cargo nextest run",
+            past(
+                "deadband-hist",
+                Lane::Normal,
+                520,
+                510,
+                260,
+                Exit::Exited { code: 0 },
+            ),
+        ),
+        named("board-sync", "cargo test", waiting("board-sync", 200)),
+        named("flows-ux", "npm run build", waiting("flows-ux", 125)),
+        named(
+            "multiverse",
+            "mxv-build  cargo build",
+            waiting("multiverse", 60),
+        ),
+    ];
+    let plan = ReclaimPlan {
+        command: Label::new("mxv reclaim"),
+        stop: vec![Label::new("triage"), Label::new("reading-list")],
+        bytes: 4_940_000_000,
+        keep: ["board-sync", "flows-ux", "multiverse"]
+            .map(|name| KeptItem {
+                name: Label::new(name),
+                why: Short::new("jobs queued"),
+            })
+            .to_vec(),
+        more: 0,
+    };
+    model_reclaiming(
+        jobs,
+        Reclaims {
+            reclaimers: vec![
+                reclaimer(
+                    "workspaces",
+                    "mxv reclaim",
+                    vec![
+                        run_ended(380, 360, Some(1_288_490_189), None),
+                        ReclaimRun {
+                            need: Short::new("memory=4G"),
+                            started: ago(38),
+                            state: ReclaimRunState::Running,
+                        },
+                    ],
+                ),
+                reclaimer(
+                    "caches",
+                    "tidy reap",
+                    vec![run_ended(370, 360, Some(1_288_490_189), None)],
+                ),
+            ],
+            plan: Some(plan),
+            next: None,
+        },
+    )
+}
+
+fn failed() -> (Model, Instant) {
+    let jobs = vec![
+        named("core-props", "make  up", running("core-props", 580, 580)),
+        named("as59-eval", "e2e run", running("as59-eval", 430, 420)),
+        named("board-sync", "cargo test", waiting("board-sync", 290)),
+        named("flows-ux", "npm run build", waiting("flows-ux", 125)),
+    ];
+    let why = "it could not start /usr/local/bin/mxv: No such file or directory";
+    model_reclaiming(
+        jobs,
+        Reclaims {
+            reclaimers: vec![
+                reclaimer(
+                    "workspaces",
+                    "mxv reclaim",
+                    vec![
+                        run_ended(220, 219, None, Some(why)),
+                        run_ended(145, 144, None, Some(why)),
+                        run_ended(70, 69, None, Some(why)),
+                    ],
+                ),
+                reclaimer(
+                    "caches",
+                    "tidy reap",
+                    vec![
+                        run_ended(220, 210, Some(0), None),
+                        run_ended(145, 140, Some(0), None),
+                        run_ended(70, 65, Some(0), None),
+                    ],
+                ),
+            ],
+            plan: None,
+            next: Some(Ahead::from_duration(secs(40))),
+        },
+    )
+}
+
+#[test]
+fn a_running_reclaim_shows_its_timeline_and_plan_as_the_mockup_does() {
+    let (model, now) = reclaiming();
+    assert_golden(
+        &render(&model, now, 120, 28),
+        include_str!("../../../tests/golden/top/reclaiming.txt"),
+    );
+}
+
+#[test]
+fn a_failed_reclaimer_shows_how_often_it_failed_as_the_mockup_does() {
+    let (model, now) = failed();
+    assert_golden(
+        &render(&model, now, 120, 28),
+        include_str!("../../../tests/golden/top/failed.txt"),
     );
 }

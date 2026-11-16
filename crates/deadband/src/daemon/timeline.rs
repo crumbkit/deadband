@@ -8,7 +8,7 @@ use crate::admit::{JobId, Lane, Threads};
 use crate::history::{Departure, JobLine, Line, MachineLine, Tally, VERSION, now_ms};
 use crate::probe::ChildUsage;
 use crate::protocol::{
-    Ago, Exit, Job, JobRecord, JobState, Jobs, Label, Short, StuckPeriod, Timeline,
+    Ago, Ahead, Exit, Job, JobRecord, JobState, Jobs, Label, Short, StuckPeriod, Timeline,
 };
 use crate::stuck::Period;
 
@@ -250,6 +250,12 @@ impl State {
             held: self.queue.held(),
             busiest: self.stuck.busiest().cloned(),
             unreadable: self.stuck.unreadable(),
+            reclaimers: self.reclaims.rows(&self.settings.reclaim, now),
+            plan: self.reclaims.plan(),
+            next_reclaim: self
+                .watch
+                .next_in(&self.settings.reclaim, now)
+                .map(Ahead::from_duration),
         }
     }
 }

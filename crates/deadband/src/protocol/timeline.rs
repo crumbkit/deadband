@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{MAX_LINE, OutsideJobs};
+use super::{Ahead, MAX_LINE, OutsideJobs, ReclaimPlan, ReclaimerRow};
 use crate::admit::{Hold, Lane};
 
 /// The most bytes that a [`Label`] holds.
@@ -275,4 +275,16 @@ pub struct Timeline {
     /// Whether the daemon's latest read of a job's processes failed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unreadable: bool,
+    /// Each configured reclaimer with its runs of the last 10 minutes, or
+    /// nothing when no reclaim ran in that time and none runs now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reclaimers: Vec<ReclaimerRow>,
+    /// The plan of the reclaim that runs now, or `null` when none runs or
+    /// its reclaimer gave none yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<ReclaimPlan>,
+    /// How long until the daemon starts its next reclaim, or `null` when
+    /// none is due or one runs now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_reclaim: Option<Ahead>,
 }

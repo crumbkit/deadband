@@ -8,12 +8,14 @@ use std::time::{Duration, Instant};
 
 use crate::admit::Hold;
 use crate::client::Unasked;
-use crate::protocol::{OutsideJobs, Timeline};
+use crate::protocol::{OutsideJobs, ReclaimPlan, Timeline};
 
+mod reclaims;
 mod rows;
 #[cfg(test)]
 mod tests;
 
+pub(super) use self::reclaims::{Ending, Reclaim, ReclaimRow, Standing};
 pub(super) use self::rows::{Axis, Row, Rows, Status};
 use self::rows::{in_window, row};
 
@@ -270,6 +272,37 @@ impl Model {
                 .saturating_sub(capacity)
                 .saturating_add(latest.timeline.hidden),
         }
+    }
+
+    /// Returns the rows of the configured reclaimers at `now`, or none when
+    /// no reclaim ran in the window and none runs.
+    pub(super) fn reclaim_rows(&self, now: Instant, axis: Axis) -> Vec<ReclaimRow> {
+        self.latest.as_ref().map_or_else(Vec::new, |latest| {
+            let elapsed = now.saturating_duration_since(latest.at);
+            reclaims::rows(&latest.timeline, elapsed, axis)
+        })
+    }
+
+    /// Returns what the last reply said of the reclaims at `now`.
+    pub(super) fn reclaim(&self, now: Instant) -> Reclaim {
+        self.latest.as_ref().map_or(Reclaim::Quiet, |latest| {
+            let elapsed = now.saturating_duration_since(latest.at);
+            reclaims::state(&latest.timeline, elapsed)
+        })
+    }
+
+    /// Returns the plan of the reclaim that runs, as the last reply said.
+    pub(super) fn plan(&self) -> Option<&ReclaimPlan> {
+        self.latest.as_ref()?.timeline.plan.as_ref()
+    }
+
+    /// Returns how long until the next reclaim starts at `now`, as the last
+    /// reply said, or `None` when none is due.
+    pub(super) fn next_reclaim(&self, now: Instant) -> Option<Duration> {
+        let latest = self.latest.as_ref()?;
+        let elapsed = now.saturating_duration_since(latest.at);
+        let wait = latest.timeline.next_reclaim?.duration();
+        Some(wait.saturating_sub(elapsed))
     }
 
     /// Returns the load about `age` before `now`, or `None` for a gap or a

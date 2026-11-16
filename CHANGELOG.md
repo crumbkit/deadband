@@ -6,6 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `deadband top` shows reclaims. A `reclaims` section holds one timeline row
+  for each configured reclaimer, the line above the rule gives the plan of a
+  running reclaim or the reason the last one failed, the header adds
+  `RECLAIMING` or `RECLAIM FAILED`, and the line that says why jobs wait
+  says when the next reclaim starts. The daemon keeps the runs of the last
+  ten minutes in memory. A reclaimer's report may mark an item `state:
+  "kept"` with a `reason`, and `top` lists it in the plan.
+
 ### Changed
 
 - In the library, a command is a `job::CommandLine` with a `program` and

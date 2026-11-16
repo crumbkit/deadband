@@ -30,10 +30,14 @@ use crate::admit::{Hold, JobId, Lane, Threads};
 use crate::probe::ChildUsage;
 use crate::reclaim::{Reclaimed, Reclaiming};
 
+mod reclaims;
 #[cfg(test)]
 mod tests;
 mod timeline;
 
+pub use self::reclaims::{
+    Ahead, KeptItem, PLAN_ITEMS, ReclaimPlan, ReclaimRun, ReclaimRunState, ReclaimerRow,
+};
 pub use self::timeline::{
     Ago, Exit, JobRecord, JobState, LABEL_BYTES, Label, SHORT_BYTES, Short, StuckPeriod, Timeline,
 };
