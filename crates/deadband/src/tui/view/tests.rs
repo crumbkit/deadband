@@ -1072,3 +1072,26 @@ fn a_failed_reclaimer_shows_how_often_it_failed_as_the_mockup_does() {
         include_str!("../../../tests/golden/top/failed.txt"),
     );
 }
+
+#[test]
+fn the_legend_keeps_no_activity_whole_at_80_columns_beside_the_reclaims() {
+    let (model, now) = model_reclaiming(
+        vec![stuck("board-cli-test", 400, 390, 300)],
+        Reclaims {
+            reclaimers: vec![reclaimer(
+                "workspaces",
+                "mxv reclaim",
+                vec![run_ended(100, 90, Some(1_288_490_189), None)],
+            )],
+            plan: None,
+            next: None,
+        },
+    );
+    let screen = render(&model, now, 80, 24);
+    assert!(screen.contains("reclaims"), "{screen}");
+    let legend = screen
+        .lines()
+        .find(|line| line.contains("running"))
+        .expect("a legend");
+    assert!(legend.ends_with("no activity"), "{screen}");
+}

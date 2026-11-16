@@ -14,8 +14,8 @@ use crate::protocol::ReclaimPlan;
 use crate::reclaim::size_bytes;
 use crate::tui::model::{Ending, Model, Reclaim, ReclaimRow, Row, Standing, Status};
 
-/// The most job lines that the reclaim section leaves. A terminal with
-/// fewer lines than that and the section leaves the section out.
+/// The fewest job lines that the reclaim section leaves free. A terminal
+/// with fewer lines leaves the section out.
 pub(super) const MIN_JOBS: usize = 3;
 
 /// The lines that the section takes for `rows`: a blank line, its label

@@ -236,8 +236,9 @@ impl Timeline {
     ///
     /// A row holds at most about 800 bytes of JSON, so 100 rows fit unless
     /// most of their labels and workspaces are long and full of characters
-    /// that JSON escapes. Only then does a row leave, and each one costs a
-    /// new serialization of the reply.
+    /// that JSON escapes. The reclaim data takes up to about 30 KB of the
+    /// line in the worst case, so rows leave sooner then. Each row that
+    /// leaves costs a new serialization of the reply.
     #[must_use]
     pub fn fit(mut self) -> Self {
         // The reply wraps the timeline as `{"timeline":...}`, and its line

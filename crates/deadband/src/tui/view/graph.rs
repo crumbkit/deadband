@@ -182,6 +182,9 @@ fn legend(buffer: &mut Buffer, y: u16, x: u16, (no_activity, reclaim): (bool, bo
     /// The columns that each further name adds to the wide key.
     const MORE: u16 = 12;
     let columns = buffer.area.width;
+    // Both names need 89 columns at the closest spacing; a narrower
+    // terminal keeps `no activity` and drops `reclaim`.
+    let reclaim = reclaim && !(no_activity && columns < WIDE + MORE - 8);
     let extended = no_activity || reclaim;
     let wide = columns >= WIDE + if no_activity && reclaim { MORE } else { 0 };
     let (gaps, needs): ([u16; 7], u16) = match (extended, wide) {
