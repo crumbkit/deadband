@@ -88,7 +88,17 @@ status.
   release build a panic in any thread aborts the process. Launchd then starts
   a new daemon, and clients start their jobs at once while none listens.
 - A failure to record a job never delays, holds or ends that job. The daemon
-  does no file I/O while it holds the queue lock.
+  does no file I/O, and writes no log line, while it holds the queue lock, so
+  a standard error that blocks, such as a stopped terminal or an unread pipe,
+  never holds the queue up.
+- launchd opens the daemon's standard error for appending and nothing else
+  limits its size. At start and at each check every 60 samples, the sampler
+  thread empties that file with `set_len(0)` on a duplicate of the descriptor
+  when it is a regular file opened for appending and longer than 8 MiB, and
+  logs one line saying so (`daemon/alive.rs`). The next write lands at the
+  new end. A terminal, a pipe or a file opened without appending is left
+  alone, because emptying a file whose writer keeps its own offset would
+  leave a hole the size of the old file.
 - The daemon writes no reply to a client while it holds the queue lock. A
   thread decides each grant and queued reply under the lock, releases it, and
   then writes the replies one after another (`daemon/reply.rs`). Each write
@@ -236,8 +246,9 @@ reads the config's `warm_dirs` before it takes the queue lock. Later, while it
 holds the lock, the daemon builds the record and hands it to one writer thread
 with `try_send` on a channel of 256 entries, so the daemon never waits for the
 disk. A line that finds the channel full is dropped, and a counter that each
-machine line reports goes up. If the writer thread has stopped, the first line
-that cannot reach it is logged once.
+machine line reports goes up. If the writer thread has stopped, a line that
+cannot reach it marks the writer stopped, and the watchdog logs that once
+after it releases the queue lock.
 
 The same walk runs for every job, including on a daemon that records nothing,
 because it also finds the job's workspace. It keeps going past `.git` to the
@@ -305,7 +316,9 @@ Asking again if it had read `Queued`.
 
 The watchdog thread (`daemon/alive.rs`) decides the beats under the lock and
 writes them with the same `deliver`, so a daemon that is stopped, or whose
-threads block or deadlock while they hold the queue lock, sends none. A
+threads block or deadlock while they hold the queue lock, sends none. It
+checks the socket file and writes its log lines after it has released the
+lock, so a log write that blocks stops only the watchdog. A
 stalled sampler does not hold the lock, so the watchdog keeps beating and
 keeps admitting jobs on the stale reading. The client skips a beat that
 arrives before its `Queued` reply, and the lease's watcher ignores one that

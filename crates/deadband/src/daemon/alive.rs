@@ -8,15 +8,23 @@
 //! system refuses a thread it needs, grants nobody, so it stops too. A
 //! client whose daemon stops starts its job at once. The watchdog here also
 //! beats to the waiting clients that asked for beats.
+//!
+//! launchd appends the daemon's standard error to a log file that nothing
+//! else limits, so at start and at each alive check the daemon empties
+//! that file once it has passed [`LOG_LIMIT`].
 
+use std::fmt;
+use std::fs::File;
 use std::io;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::fs::{OFlags, fcntl_getfl};
 use rustix::io::Errno;
 
 use super::reply::{Replies, deliver};
@@ -42,33 +50,50 @@ impl State {
 /// Once per [`stale_after`] it sends a beat to each waiting job whose
 /// client asked for beats, so a client stops hearing them when the daemon
 /// stops, or when a thread blocks or deadlocks while it holds the queue
-/// lock. Each time the reading is stale it also checks the socket file with
-/// `ending`, starts the waiting jobs that a stale reading lets start, and
-/// writes one log line when the reading first goes stale.
+/// lock. Each time the reading is stale it also starts the waiting jobs
+/// that a stale reading lets start, checks the socket file with `ending`,
+/// and writes one log line when the reading first goes stale. It also
+/// writes the line that the history thread has stopped, once a line found
+/// it stopped.
+///
+/// Only the decisions and the grants happen under the queue lock. The file
+/// checks and the log lines come after the lock is released, so a log that
+/// blocks, such as a stopped terminal, never holds the queue up.
 pub(super) fn age(shared: &Shared, stopped: &Receiver<()>, log: &Log, ending: Ending) {
-    let every = stale_after(lock(shared).settings.sample_every);
+    let (every, recorder) = {
+        let state = lock(shared);
+        (
+            stale_after(state.settings.sample_every),
+            state.recorder.clone(),
+        )
+    };
     while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(every) {
         let mut state = lock(shared);
         let mut replies = Replies::default();
-        if state.stale(Instant::now()) {
-            if ending.check() {
-                return;
-            }
-            if !state.stale_noted {
-                state.stale_noted = true;
-                note(
-                    log,
-                    format_args!(
-                        "the probe has not read the machine for over {}, so each job starts once a place is free until it reads again",
-                        humantime::format_duration(every)
-                    ),
-                );
-            }
+        let stale = state.stale(Instant::now());
+        let first_stale = stale && !state.stale_noted;
+        if stale {
+            state.stale_noted = true;
             replies = state.grant();
         }
         state.beat(&mut replies);
         drop(state);
         deliver(shared, replies);
+        if stale && ending.check() {
+            return;
+        }
+        if first_stale {
+            note(
+                log,
+                format_args!(
+                    "the probe has not read the machine for over {}, so each job starts once a place is free until it reads again",
+                    humantime::format_duration(every)
+                ),
+            );
+        }
+        if let Some(recorder) = &recorder {
+            recorder.say_stopped();
+        }
     }
 }
 
@@ -174,6 +199,9 @@ pub(super) struct Ending {
     lock: Option<HeldFile>,
     /// The samples since the last check of the socket file.
     since_check: u32,
+    /// The daemon's standard error, which the alive check empties past
+    /// [`LOG_LIMIT`], or `None` when this ending checks no log file.
+    log_file: Option<LogFile>,
     /// Where the reason for stopping goes.
     reason: Sender<String>,
 }
@@ -193,19 +221,38 @@ impl Ending {
             socket,
             lock,
             since_check: 0,
+            log_file: None,
             reason,
         }
     }
 
-    /// Counts one sample, and once a minute checks the socket file and the
-    /// lock file. It sends the reason and returns `true` when the daemon
-    /// should stop.
+    /// Makes this ending check the daemon's standard error at each alive
+    /// check, and checks it once now, at the daemon's start. `log` says
+    /// when the check empties the file.
+    pub(super) fn trimming(mut self, log: &Log) -> Self {
+        self.log_file = standard_error().map(|file| LogFile {
+            file,
+            log: Arc::clone(log),
+        });
+        if let Some(log_file) = &self.log_file {
+            trim(&log_file.file, LOG_LIMIT, &log_file.log);
+        }
+        self
+    }
+
+    /// Counts one sample, and once a minute empties the log file when it
+    /// has passed [`LOG_LIMIT`] and checks the socket file and the lock
+    /// file. It sends the reason and returns `true` when the daemon should
+    /// stop.
     pub(super) fn tick(&mut self) -> bool {
         self.since_check += 1;
         if self.since_check < CHECK_EVERY_SAMPLES {
             return false;
         }
         self.since_check = 0;
+        if let Some(log_file) = &self.log_file {
+            trim(&log_file.file, LOG_LIMIT, &log_file.log);
+        }
         self.check()
     }
 
@@ -226,6 +273,87 @@ impl Ending {
         ));
         true
     }
+}
+
+/// The size past which the daemon empties its standard error file: 8 MiB.
+pub(super) const LOG_LIMIT: u64 = 8 * 1024 * 1024;
+
+/// The daemon's standard error, which launchd appends to
+/// `~/Library/Logs/deadband.log`, and the log that says when it is emptied.
+struct LogFile {
+    /// A duplicate of the standard error descriptor.
+    file: File,
+    /// Where the line that says the file was emptied goes.
+    log: Log,
+}
+
+impl fmt::Debug for LogFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LogFile")
+            .field("file", &self.file)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Empties `file` when it is a regular file opened for appending and longer
+/// than `limit` bytes, and logs one line saying so. Because the file is
+/// opened for appending, the next write lands at the new end, so the
+/// writer that opened it, such as launchd, needs no signal. A terminal, a
+/// pipe or a file opened without appending is left alone. A file that
+/// cannot be emptied is logged at each check, at most once a minute.
+pub(super) fn trim(file: &File, limit: u64, log: &Log) {
+    let Ok(metadata) = file.metadata() else {
+        return;
+    };
+    let appending = fcntl_getfl(file).is_ok_and(|flags| flags.contains(OFlags::APPEND));
+    if !metadata.is_file() || !appending || metadata.len() <= limit {
+        return;
+    }
+    match file.set_len(0) {
+        Ok(()) => note(
+            log,
+            format_args!("the log file had grown past {limit} bytes, so the daemon emptied it"),
+        ),
+        Err(error) => note(
+            log,
+            format_args!(
+                "the log file has grown past {limit} bytes and the daemon could not empty it: {error}"
+            ),
+        ),
+    }
+}
+
+/// Returns a duplicate of the process's standard error, or `None` when it
+/// cannot be duplicated.
+#[cfg(not(test))]
+fn standard_error() -> Option<File> {
+    use std::os::fd::AsFd as _;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the daemon duplicates its standard error to check the size of the log file launchd appends it to, and writes nothing through it"
+    )]
+    let stderr = io::stderr();
+    stderr.as_fd().try_clone_to_owned().ok().map(File::from)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The file that a test gives the daemon as its standard error.
+    static STANDARD_ERROR: std::cell::RefCell<Option<File>> = const { std::cell::RefCell::new(None) };
+}
+
+/// In the tests, the daemon's standard error is the file that the test on
+/// this thread gave it, so no test empties the test process's own.
+#[cfg(test)]
+fn standard_error() -> Option<File> {
+    STANDARD_ERROR.with(|file| file.borrow_mut().take())
+}
+
+/// Makes `file` the standard error of the daemon that the calling thread
+/// serves next.
+#[cfg(test)]
+pub(super) fn standard_error_as(file: File) {
+    STANDARD_ERROR.with(|standard| *standard.borrow_mut() = Some(file));
 }
 
 impl Drop for Ending {

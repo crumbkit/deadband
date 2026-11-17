@@ -237,7 +237,7 @@ pub fn serve<P: Probe + Clone + Send + 'static>(
     watch::start(&shared, probe.clone(), watch_stopped, log);
     let (reason, ends) = mpsc::channel::<String>();
     let watchdog_ending = Ending::new(listener, reason.clone());
-    let ending = Ending::new(listener, reason);
+    let ending = Ending::new(listener, reason).trimming(log);
     let sampling = spawn::thread("deadband-sampler", move || {
         sample(&sampler, &probe, &stopped, &sampler_log, ending);
     });
