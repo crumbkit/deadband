@@ -1,4 +1,5 @@
-//! Draws the load graph, the strip of what held jobs, and the legend.
+//! Draws the load, the cores and the free disk, the load graph, the strip
+//! of what held jobs, and the legend.
 
 use std::time::{Duration, Instant};
 
@@ -6,6 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::style::Color;
 
 use super::{AMBER, LINE, RED, TEAL, TEXT, VIOLET, bold, fg, put};
+use crate::admit::{GIB, disk_critical};
 use crate::tui::model::{Gate, Model, WINDOW};
 
 /// The graph's height in lines.
@@ -88,7 +90,8 @@ fn scale_color(permille: u32) -> Color {
     )
 }
 
-/// Draws the load, the cores, the strip and the legend from line `top`.
+/// Draws the load, the cores, the disk, the strip and the legend from line
+/// `top`.
 pub(super) fn draw(
     buffer: &mut Buffer,
     model: &Model,
@@ -107,6 +110,7 @@ pub(super) fn draw(
         put(buffer, 1, top + 1, "cores", fg(AMBER));
         put(buffer, 8, top + 1, &cores.to_string(), fg(AMBER));
     }
+    disk(buffer, model, top + 2);
     let scale_top = cores.map_or(20, |cores| {
         (u16::try_from(cores * 14 / 10).unwrap_or(u16::MAX)).max(20)
     });
@@ -114,6 +118,20 @@ pub(super) fn draw(
     graph(buffer, model, now, (top, x, width), scale_top, limit);
     strip(buffer, model, now, top + HEIGHT, x, width);
     legend(buffer, top + HEIGHT + 1, x, keys);
+}
+
+/// Draws the free space of the disk that holds the home directory on line
+/// `y`, in whole GiB, red while admission holds jobs for it, or `-` when it
+/// could not be read.
+fn disk(buffer: &mut Buffer, model: &Model, y: u16) {
+    put(buffer, 1, y, "disk", fg(TEXT));
+    let Some(disk) = model.disk() else {
+        put(buffer, 8, y, "-", bold(super::HI));
+        return;
+    };
+    let color = if disk_critical(&disk) { RED } else { super::HI };
+    let free = format!("{} GiB", disk.free_bytes / GIB);
+    put(buffer, 8, y, &free, bold(color));
 }
 
 /// Draws the braille graph of the load in `(top, x, width)`. Dots that are

@@ -6,7 +6,7 @@ Run a heavy job when the machine has room
   run         Wait until the daemon admits a job, then run it
 
 See the machine and its jobs
-  status      Print the machine's load, memory pressure and swap, and the daemon's jobs
+  status      Print the machine's load, free disk space, memory pressure and swap, and the daemon's jobs
   top         Show the last ten minutes of jobs, load and holds in the terminal
 
 Admit jobs

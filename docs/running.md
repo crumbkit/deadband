@@ -118,6 +118,12 @@ that shows when it waited, when it ran and how it ended, and the view holds a
 line for the load and a line for what held jobs, on one time axis. Press `q`
 or Ctrl-C to quit. The terminal must be at least 80 columns by 16 lines.
 
+Left of the load graph, the view shows the current load, the number of
+cores, and the free space of the disk that holds `$HOME` in whole GiB, such
+as `disk   212 GiB`. The view reads the disk at each poll. The value is red
+while the disk is under the level at which the daemon holds jobs, 20 GiB or
+3% of the disk, and shows `-` when the disk cannot be read.
+
 The rows come from the daemon, which remembers the last 64 jobs that ended,
 in memory only, so a restart forgets them. The load and the holds come from
 the view's own polls, once a second, so they start empty when the view opens.
@@ -421,9 +427,13 @@ none listens. When the operating system refuses the thread of a reclaim, of
 an `on_stuck` command or of a `/bin/ps` run, the daemon logs one line and
 keeps serving, and the next one tries again.
 
-`deadband status` prints the load, memory pressure and swap, followed by the
-running and waiting jobs and the last reclaim, or `daemon: not running`
-when no daemon answers. While a reclaim runs, it also prints
+`deadband status` prints the load, the free space of the disk that holds
+`$HOME`, memory pressure and swap, followed by the running and waiting jobs and the last reclaim, or `daemon: not running`
+when no daemon answers. The disk line reads `disk: 212 GiB free of 994 GiB
+(21%)`. When the disk cannot be read, it reads `disk: could not be read
+(<reason>)` and the rest prints as usual. `deadband status --json` gives the
+disk in a `disk` object with `free_bytes` and `total_bytes`, or `null` when it
+could not be read. While a reclaim runs, it also prints
 `reclaiming: <need>, started <age> ago`. When jobs wait, it also prints a line that names the
 first waiting job and says why it does not start yet.
 

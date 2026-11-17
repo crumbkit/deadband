@@ -58,8 +58,8 @@ pub struct Cli {
 /// The commands of `deadband`.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Print the machine's load, memory pressure and swap, and the daemon's
-    /// jobs.
+    /// Print the machine's load, free disk space, memory pressure and swap,
+    /// and the daemon's jobs.
     Status,
     /// Wait until the daemon admits a job, then run it.
     ///
@@ -228,10 +228,17 @@ pub fn run_to<O: Write, W: Write, T: Into<OsString>, P: Probe + Clone + Send + '
     }
 }
 
-/// Takes one sample with the machine's probe, and asks the daemon for its
-/// jobs, for `deadband status`.
+/// Takes one sample with the machine's probe, reads the disk that holds
+/// the home directory, and asks the daemon for its jobs, for `deadband
+/// status`. A disk that cannot be read gives the reason in its place.
 fn status<P: Probe>(machine: &Machine<P>) -> Result<Prose<Status>, Unreadable> {
     let sample = machine.probe.sample()?;
+    let disk = machine
+        .environment
+        .home
+        .as_deref()
+        .ok_or_else(|| "the home directory is unknown".to_owned())
+        .and_then(|home| machine.probe.disk(home).map_err(|error| error.to_string()));
     let daemon = client::jobs(&machine.socket, ANSWER_WITHIN).ok();
     let failures = daemon
         .as_ref()
@@ -246,6 +253,7 @@ fn status<P: Probe>(machine: &Machine<P>) -> Result<Prose<Status>, Unreadable> {
     let daemon = daemon.map(|jobs| jobs.map(ShownJob::from));
     let status = Status {
         sample,
+        disk,
         daemon,
         daemon_state,
     };

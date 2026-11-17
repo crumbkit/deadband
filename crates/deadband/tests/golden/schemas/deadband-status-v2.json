@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "deadband/status/v2",
-  "description": "One sample of the machine's 1-minute load average, memory pressure and swap, and the daemon's running and waiting jobs, each with its workspace and short command.",
+  "description": "One sample of the machine's 1-minute load average, free disk space, memory pressure and swap, and the daemon's running and waiting jobs, each with its workspace and short command.",
   "type": "object",
   "properties": {
     "data": {
@@ -458,6 +458,28 @@
         }
       ]
     },
+    "Disk": {
+      "description": "The space of one disk.",
+      "type": "object",
+      "properties": {
+        "free_bytes": {
+          "description": "The bytes that a user without special privileges may still write.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "total_bytes": {
+          "description": "The bytes the disk holds in all.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "free_bytes",
+        "total_bytes"
+      ]
+    },
     "Hold": {
       "description": "Why a waiting job does not start yet.",
       "oneOf": [
@@ -887,7 +909,7 @@
       ]
     },
     "Status": {
-      "description": "What `deadband status` prints: one sample of the machine, and the\ndaemon's jobs.",
+      "description": "What `deadband status` prints: one sample of the machine, the free\nspace of the disk that holds the home directory, and the daemon's jobs.",
       "type": "object",
       "properties": {
         "daemon": {
@@ -906,6 +928,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/DaemonState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disk": {
+          "description": "The free and total space of the disk that holds the home directory,\nor `null` when it could not be read. The text gives the reason.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Disk"
             },
             {
               "type": "null"
@@ -939,6 +972,7 @@
         "memory_pressure",
         "swap_used_bytes",
         "swap_total_bytes",
+        "disk",
         "daemon"
       ]
     },

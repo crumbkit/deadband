@@ -21,7 +21,6 @@ mod ids;
 mod tests;
 
 pub use self::hold::Hold;
-use self::hold::percent;
 pub use self::ids::{JobId, Threads};
 
 /// The bytes in a gibibyte.
@@ -169,8 +168,7 @@ pub fn admits(reading: Option<&Reading>, running: &Running, limits: &Limits) -> 
 /// [`DISK_CRITICAL_BYTES`] or [`DISK_CRITICAL_PERCENT`] of the disk.
 #[must_use]
 pub fn disk_critical(disk: &Disk) -> bool {
-    disk.free_bytes < DISK_CRITICAL_BYTES
-        || percent(disk.free_bytes, disk.total_bytes) < DISK_CRITICAL_PERCENT
+    disk.free_bytes < DISK_CRITICAL_BYTES || disk.free_percent() < DISK_CRITICAL_PERCENT
 }
 
 /// The waiting jobs in each lane in the order they arrived, and the

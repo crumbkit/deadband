@@ -15,9 +15,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   says when the next reclaim starts. The daemon keeps the runs of the last
   ten minutes in memory. A reclaimer's report may mark an item `state:
   "kept"` with a `reason`, and `top` lists it in the plan.
+- `deadband status` prints the free space of the disk that holds the home
+  directory on the line after the load, such as `disk: 212 GiB free of 994
+  GiB (21%)`, or `disk: could not be read (<reason>)` when the disk cannot be
+  read. `deadband status --json` gives it in a `disk` object with
+  `free_bytes` and `total_bytes`, or `null` when it could not be read.
+- `deadband top` shows a `disk` row under the `load` and `cores` rows with
+  the free space in whole GiB, read at each poll. The value is red while the
+  disk is under the level at which the daemon holds jobs, and `-` when the
+  disk cannot be read.
 
 ### Changed
 
+- In the library, `probe::Sample` no longer implements `Display`;
+  `cli::Status` writes the status text and has a `disk` field.
+  `probe::Disk` derives `Serialize` and `JsonSchema` and gains
+  `free_percent`.
 - In the library, a command is a `job::CommandLine` with a `program` and
   `args`. `Reclaimer::command` and `Watching::census` are `CommandLine`,
   `stuck::Config::on_stuck` is `Option<CommandLine>`, and `job::run`,

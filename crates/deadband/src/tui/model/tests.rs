@@ -678,3 +678,17 @@ fn a_period_outside_the_window_draws_no_span() {
     let rows = model.rows(now, Axis::new(60), 3);
     assert!(rows.rows[0].stuck.is_empty());
 }
+
+#[test]
+fn the_model_keeps_the_latest_disk_reading_and_forgets_it_when_a_read_fails() {
+    let mut model = model();
+    assert_eq!(model.disk(), None);
+    let disk = crate::probe::Disk {
+        free_bytes: 212 * crate::admit::GIB,
+        total_bytes: 994 * crate::admit::GIB,
+    };
+    model.note_disk(Some(disk));
+    assert_eq!(model.disk(), Some(disk));
+    model.note_disk(None);
+    assert_eq!(model.disk(), None);
+}

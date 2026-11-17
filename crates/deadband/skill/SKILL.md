@@ -10,7 +10,7 @@ queues it when it does not.
 
 Start every build, test suite and other heavy job as
 `deadband run --label <label> -- <command>`. The label names the job in
-`deadband status`.
+`deadband status`, which also shows the load and the free disk space.
 
 When deadband holds a job, wait for it, or push and let CI test. Never bypass
 the hold.
