@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-17
+
 ### Added
 
 - `deadband top` shows reclaims. A `reclaims` section holds one timeline row
@@ -61,10 +63,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   RUSTSEC-2026-0542 marks unmaintained. Every age that the docs use, such as
   `"60s"`, `"5m"`, `"1h 30m"`, `"2 hours"` and `"1d"`, reads as before, and
   log and status text prints ages as before, such as `1m`, `50m`, `1h 30m`
-  and `1day 2h`. Config ages now also accept a fraction such as `"1.5m"`, a
-  comma between units such as `"1h, 30m"`, and a leading `+` such as
-  `"+5m"`. Config ages in months or years, such as `"1M"` or `"1y"`, are now
-  refused. A refused age keeps its message's start and gives jiff's reason.
+  and `1day 2h`. Config ages now also accept a comma between units such as
+  `"1h, 30m"` and a leading `+` such as `"+5m"`. Config ages in months or
+  years, such as `"1M"` or `"1y"`, are now refused, and so are ages with
+  units out of order or repeated, such as `"30m 1h"` or `"1m 1m"`. Ages of
+  31 days or more print in days, for example `31days`, where they printed
+  months. A refused age keeps its message's start and gives jiff's reason.
 - `deadband skills install`, `check` and `print` name deadband in their help
   and examples, such as "Install deadband's skills into each agent skills
   directory that exists", in place of "this tool's skills".
