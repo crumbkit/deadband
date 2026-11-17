@@ -27,7 +27,7 @@ mod file;
 mod lock;
 pub(crate) mod program;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod text;
 mod watch;
 mod worker;
@@ -60,6 +60,11 @@ pub const MIN_AFTER: Duration = Duration::from_secs(10);
 /// How long the daemon waits for one run of a reclaimer when the config
 /// sets no timeout.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// How many times `reclaim_timeout` the daemon waits for one run of a
+/// reclaimer before it leaves the reclaimer running and lets other reclaims
+/// start.
+pub const CEILING_TIMES: u32 = 10;
 
 /// One reclaimer: a name for the log and `deadband status`, and the command
 /// that the daemon runs with `--need` added.
@@ -113,6 +118,14 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Returns how long the daemon waits for one run of a reclaimer before
+    /// it leaves the reclaimer running: [`CEILING_TIMES`] times the
+    /// timeout.
+    #[must_use]
+    pub const fn ceiling(&self) -> Duration {
+        self.timeout.saturating_mul(CEILING_TIMES)
+    }
+
     /// Reads a config file's `text`.
     ///
     /// # Errors

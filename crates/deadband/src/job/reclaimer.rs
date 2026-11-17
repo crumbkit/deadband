@@ -15,11 +15,15 @@
 //! - Streams and deadline: the reclaimer reads nothing on standard input,
 //!   deadband keeps the first [`MAX_OUTPUT`] bytes of its standard output
 //!   and drops the rest, and discards its standard error. The deadline is
-//!   the timeout the caller passes. When it passes, `run` calls the
-//!   caller's `on_timeout` and then keeps waiting until the reclaimer
-//!   exits, so the daemon never runs two reclaimers at once.
-//! - End: deadband waits for the reclaimer and reaps it. deadband never
-//!   stops or signals a reclaimer, even past its deadline: a reclaimer
+//!   the timeout the caller passes. When it passes, [`run_until`] calls the
+//!   caller's `on_timeout` and keeps waiting until the reclaimer exits or
+//!   the caller's ceiling passes, so the daemon runs no second reclaimer
+//!   before then. Past the ceiling it stops waiting and returns
+//!   [`Ended::Abandoned`].
+//! - End: deadband waits for the reclaimer and reaps it, also after it
+//!   stopped waiting at the ceiling; an abandoned reclaimer's output is
+//!   discarded and the caller's `on_late_exit` hears its exit. deadband
+//!   never stops or signals a reclaimer, even past its ceiling: a reclaimer
 //!   stopped halfway could leave what it was stopping half stopped.
 //!
 //! A reading thread reads standard output while the reclaimer runs. Once
@@ -41,7 +45,9 @@
 
 use std::io::{self, PipeReader, PipeWriter, Read};
 use std::process::{ChildStdout, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
 use rustix::event::{PollFd, PollFlags, poll};
@@ -63,9 +69,14 @@ pub enum Ended {
         /// The first [`MAX_OUTPUT`] bytes of its standard output.
         stdout: Vec<u8>,
     },
-    /// The deadline passed before the reclaimer exited. `run` returns once
-    /// it has exited.
+    /// The deadline passed before the reclaimer exited, and it exited
+    /// before the ceiling.
     TimedOut,
+    /// The ceiling passed before the reclaimer exited. It is left running.
+    Abandoned {
+        /// Its process ID.
+        pid: u32,
+    },
 }
 
 /// The first [`MAX_OUTPUT`] bytes of a reclaimer's standard output.
@@ -127,6 +138,30 @@ pub fn run(
     timeout: Duration,
     on_timeout: impl FnOnce(),
 ) -> io::Result<Ended> {
+    run_until(command, args, timeout, Duration::MAX, on_timeout, |_, _| {})
+}
+
+/// Runs `command` with `args` added, and waits for it. When `timeout`
+/// passes first, it calls `on_timeout` and waits until the reclaimer exits,
+/// which returns [`Ended::TimedOut`], or until `ceiling`, counted from the
+/// start, passes. Then it returns [`Ended::Abandoned`] and leaves the
+/// reclaimer running; when it exits, its output is discarded and
+/// `on_late_exit` hears its process ID and exit code, the code `None` when
+/// a signal ended it or it could not be waited for.
+///
+/// # Errors
+///
+/// Returns the operating system's error when it refuses the reading or the
+/// waiting thread, and the error of a program that could not start or be
+/// waited for.
+pub fn run_until(
+    command: &CommandLine,
+    args: &[&str],
+    timeout: Duration,
+    ceiling: Duration,
+    on_timeout: impl FnOnce(),
+    on_late_exit: impl FnOnce(u32, Option<i32>) + Send + 'static,
+) -> io::Result<Ended> {
     let mut started = command.command();
     started
         .args(args)
@@ -136,6 +171,14 @@ pub fn run(
     // The reading thread starts before the reclaimer, so a refused thread
     // leaves no reclaimer unreaped.
     let reader = start_reader()?;
+    // The waiting thread sends the process ID, then reaps the reclaimer
+    // and drops `running`, which tells a caller past its timeout that the
+    // reclaimer exited. Whichever of the reaping and the ceiling takes
+    // `settled` first decides whether the reclaimer was abandoned.
+    let (running, pid) = mpsc::channel::<u32>();
+    let settled = Arc::new(AtomicBool::new(false));
+    let reaped = Arc::clone(&settled);
+    let mut abandoned = None;
     let waited = wait::start_and_wait(
         "deadband-reclaimer-wait",
         started,
@@ -143,20 +186,36 @@ pub fn run(
             if let Some(stdout) = child.stdout.take() {
                 let _ = reader.stdout.send(stdout);
             }
+            let id = child.id();
+            let _ = running.send(id);
+            // The waiting thread's own wait then returns this status.
+            let code = child.wait().ok().and_then(|status| status.code());
+            drop(running);
+            if reaped.swap(true, Ordering::SeqCst) {
+                on_late_exit(id, code);
+            }
             reader
         },
         timeout,
         || {
             on_timeout();
-            AfterDeadline::KeepWaiting
+            let id = pid.recv().ok();
+            match pid.recv_timeout(ceiling.saturating_sub(timeout)) {
+                Err(RecvTimeoutError::Timeout) if !settled.swap(true, Ordering::SeqCst) => {
+                    abandoned = id;
+                    AfterDeadline::StopWaiting
+                }
+                _ => AfterDeadline::KeepWaiting,
+            }
         },
     )?;
-    Ok(match waited {
-        Waited::Exited(status, reader) => Ended::Exited {
+    Ok(match (waited, abandoned) {
+        (Waited::Exited(status, reader), _) => Ended::Exited {
             code: status.code(),
             stdout: reader.collect(),
         },
-        Waited::Late => Ended::TimedOut,
+        (Waited::Late, Some(pid)) => Ended::Abandoned { pid },
+        (Waited::Late, None) => Ended::TimedOut,
     })
 }
 
