@@ -225,12 +225,21 @@ fn a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues() {
 
 #[test]
 fn a_reclaimer_past_its_ceiling_shows_as_failed_and_no_reclaim_in_progress() {
-    let reclaimer = Reclaimer::with("20ms", "echo $$ > \"$(dirname \"$0\")/pid\"\nexec sleep 30");
+    // Only the first run hangs, so a later reclaim ends at once and leaves
+    // no second process behind.
+    let reclaimer = Reclaimer::with(
+        "20ms",
+        "d=\"$(dirname \"$0\")\"\n\
+         if [ ! -e \"$d/hung\" ]; then : > \"$d/hung\"; echo $$ > \"$d/pid\"; exec sleep 30; fi\n\
+         echo '{\"data\":[]}'",
+    );
     let left = Left::new(&[&reclaimer.0.join("pid")]);
     let test = Test::new(Warn);
     start_daemon(&test, &reclaimer);
-    let out = status_until(&test, |out| out.contains("ran past its ceiling of 200ms"));
-    assert!(out.contains(r#""reclaiming":null"#), "{out}");
+    let out = status_until(&test, |out| {
+        out.contains("ran past its ceiling of 200ms") && out.contains(r#""reclaiming":null"#)
+    });
+    assert!(out.contains(r#""reclaimer":"workspaces""#), "{out}");
     assert!(left.alive(0), "deadband never ends a reclaimer");
 }
 

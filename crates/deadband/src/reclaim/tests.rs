@@ -469,20 +469,29 @@ fn text(written: &Mutex<Vec<u8>>) -> String {
 }
 
 /// The reclaimers that a test leaves running, read from the files their
-/// scripts write their process IDs to. Dropping it ends them, so none
-/// outlives the test.
-pub(crate) struct Left(Vec<PathBuf>);
+/// scripts write their process IDs to. Dropping it ends those not marked
+/// as exited, so none outlives the test.
+pub(crate) struct Left(Vec<Option<PathBuf>>);
 
 impl Left {
     /// Watches the process IDs that scripts write to `files`.
     pub(crate) fn new(files: &[&Path]) -> Self {
-        Self(files.iter().map(|file| file.to_path_buf()).collect())
+        Self(files.iter().map(|file| Some(file.to_path_buf())).collect())
     }
 
-    /// Returns the process ID in the file at `place`, once a script wrote it.
+    /// Returns the process ID in the file at `place`, once a script wrote it
+    /// and while it is not marked as exited.
     pub(crate) fn pid(&self, place: usize) -> Option<Pid> {
-        let text = std::fs::read_to_string(self.0.get(place)?).ok()?;
+        let text = std::fs::read_to_string(self.0.get(place)?.as_ref()?).ok()?;
         Pid::from_raw(text.trim().parse().ok()?)
+    }
+
+    /// Marks the process at `place` as exited and reaped, so the drop never
+    /// signals its process ID, which another process may now hold.
+    pub(crate) fn exited(&mut self, place: usize) {
+        if let Some(file) = self.0.get_mut(place) {
+            *file = None;
+        }
     }
 
     /// Reports whether the process in the file at `place` still runs.
@@ -581,7 +590,7 @@ fn a_reclaimer_that_exits_after_the_daemon_left_it_changes_nothing_but_one_log_l
         ..Config::default()
     };
     let (freed, records, written) = run_with(&config, false);
-    let left = Left::new(&[&pid]);
+    let mut left = Left::new(&[&pid]);
     let pid = left.pid(0).expect("the script wrote its process ID");
     let exited = format!(
         "the reclaimer late (process {}) exited with code 0 after the daemon stopped waiting for it, so its output is discarded",
@@ -596,6 +605,7 @@ fn a_reclaimer_that_exits_after_the_daemon_left_it_changes_nothing_but_one_log_l
         );
         std::thread::yield_now();
     }
+    left.exited(0);
     assert_eq!(freed, 0);
     assert_eq!(records.len(), 1);
     assert_eq!(text(&written).matches("exited with code").count(), 1);
