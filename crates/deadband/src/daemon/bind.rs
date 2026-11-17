@@ -2,14 +2,16 @@
 //! user can open, and nothing removed that is not a socket.
 
 use std::fmt;
-use std::fs::{File, TryLockError};
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
 
 use crumbkit::{Code, Failure};
-use rustix::fs::{Mode, OFlags};
+use crumbkit_durable::{LockError, PathLock};
+use rustix::fs::Mode;
 use rustix::process::{Resource, Rlimit, getrlimit, getuid, setrlimit, umask};
 
 /// The code of a refusal to start a daemon while another one holds the
@@ -206,8 +208,9 @@ pub(crate) fn private_directory_as(directory: &Path, uid: u32) -> Result<(), Unb
 pub struct Bound {
     /// The listening socket.
     pub listener: UnixListener,
-    /// The open lock file, which holds an exclusive lock.
-    _lock: File,
+    /// The lock on the lock file next to the socket, which the daemon's
+    /// watchdog and sampler check with [`PathLock::still_current`].
+    pub(super) lock: Arc<PathLock>,
 }
 
 /// Returns the path of the lock file next to the socket at `path`.
@@ -218,57 +221,14 @@ pub fn lock_path(path: &Path) -> PathBuf {
     PathBuf::from(lock)
 }
 
-/// Opens the lock file at `path`, making it with mode 0600 when it does not
-/// exist, and takes an exclusive lock on it without waiting. The lock holds
-/// until the returned file is closed. The daemon's socket and the writer of
-/// the job history both lock through this function.
-///
-/// The open does not follow a symlink at `path`, and the opened file must
-/// belong to the caller, so another user cannot plant a link or a file that
-/// makes the daemon lock or create something of theirs.
-///
-/// # Errors
-///
-/// Returns [`TryLockError::WouldBlock`] when another open file holds the
-/// lock, and [`TryLockError::Error`] when the file cannot be opened or
-/// locked, is a symlink, or belongs to another user.
-pub(crate) fn take_lock(path: &Path) -> Result<File, TryLockError> {
-    take_lock_as(path, getuid().as_raw())
-}
-
-/// Takes the lock as [`take_lock`] does for the user whose uid is `uid`.
-pub(crate) fn take_lock_as(path: &Path, uid: u32) -> Result<File, TryLockError> {
-    let opened = rustix::fs::open(
-        path,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::RUSR | Mode::WUSR,
-    )
-    .map_err(|errno| TryLockError::Error(io::Error::from(errno)))?;
-    let lock = File::from(opened);
-    let owner = lock.metadata().map_err(TryLockError::Error)?.uid();
-    if owner != uid {
-        return Err(TryLockError::Error(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "{} belongs to uid {owner}, not to this user",
-                path.display()
-            ),
-        )));
-    }
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "crates/deadband/src/daemon/bind.rs takes each lock without waiting, so the lock needs no deadline"
-    )]
-    let locked = lock.try_lock();
-    locked.map(|()| lock)
-}
-
 /// Makes the socket at `path` and listens on it.
 ///
-/// The daemon first takes an exclusive lock on `<path>.lock`, so two
-/// daemons never both bind. Removing the lock file lets a second daemon
-/// lock a new one, so a serving daemon checks its lock file with its socket
-/// file once a minute and stops when either is gone or replaced. A socket
+/// The daemon first takes an exclusive lock on `<path>.lock` through
+/// crumbkit-durable's [`PathLock`], without waiting, so two daemons never
+/// both bind. The lock file is not followed through a symlink and must
+/// belong to this user. Removing the lock file lets a second daemon lock a
+/// new one, so a serving daemon checks its lock with its socket file once a
+/// minute and stops when either is gone or replaced. A socket
 /// left at `path` by a daemon that ended is removed; anything else at
 /// `path` is refused. The socket and the lock
 /// file are made with a umask that keeps every other user out.
@@ -291,14 +251,16 @@ fn bind_private(path: &Path) -> Result<Bound, Unbound> {
         path: path.to_owned(),
         error,
     };
-    let lock = match take_lock(&lock_path(path)) {
+    // A deadline that has passed tries the lock once.
+    let lock = match PathLock::acquire(&lock_path(path), Instant::now()) {
         Ok(lock) => lock,
-        Err(TryLockError::WouldBlock) => {
+        Err(LockError::Busy { .. }) => {
             return Err(Unbound::Running {
                 path: path.to_owned(),
             });
         }
-        Err(TryLockError::Error(error)) => return Err(socket_error(error)),
+        Err(LockError::Io { source, .. }) => return Err(socket_error(source)),
+        Err(error) => return Err(socket_error(io::Error::from(error))),
     };
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_socket() => {
@@ -315,7 +277,7 @@ fn bind_private(path: &Path) -> Result<Bound, Unbound> {
     let listener = UnixListener::bind(path).map_err(socket_error)?;
     Ok(Bound {
         listener,
-        _lock: lock,
+        lock: Arc::new(lock),
     })
 }
 

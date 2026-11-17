@@ -98,7 +98,7 @@ fn serving_logged(
         if let Some(file) = standard_error {
             standard_error_as(file);
         }
-        let _ = ended.send(serve(&bound.listener, probe, settings, &log));
+        let _ = ended.send(serve(&bound, probe, settings, &log));
     });
     ends
 }
@@ -202,6 +202,31 @@ fn a_daemon_stops_serving_when_another_file_replaces_its_lock_file() {
     let lock = crate::daemon::lock_path(&path);
     std::fs::remove_file(&lock).expect("the lock file is removed");
     let _other = UnixListener::bind(&lock).expect("another file takes the path");
+    assert!(ended(&ends).to_string().contains("lock file"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_daemon_whose_lock_file_is_replaced_before_it_serves_stops_serving() {
+    let path = socket_path();
+    let bound = bind(&path).expect("the test socket binds");
+    let lock = crate::daemon::lock_path(&path);
+    std::fs::remove_file(&lock).expect("the lock file is removed");
+    let _other = UnixListener::bind(&lock).expect("another file takes the path");
+    let settings = Settings {
+        sample_every: SAMPLE_EVERY,
+        ..Settings::new(
+            NonZeroUsize::new(2).expect("two is positive"),
+            NonZeroUsize::new(CORES),
+            None,
+            None,
+        )
+    };
+    let log: Log = Arc::new(Mutex::new(Vec::new()));
+    let (ended_tx, ends) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = ended_tx.send(serve(&bound, Dial::new(Pressure::Normal), settings, &log));
+    });
     assert!(ended(&ends).to_string().contains("lock file"));
 }
 
@@ -433,7 +458,7 @@ fn the_line_that_the_history_thread_stopped_is_written_with_the_queue_lock_relea
     let path = socket_path();
     let listener = UnixListener::bind(&*path).expect("the test socket binds");
     let (reason, _ends) = mpsc::channel();
-    let ending = Ending::new(&listener, reason);
+    let ending = Ending::new(&listener, None, reason);
     let (_stop, stopped) = mpsc::channel::<()>();
     let watchdog = Arc::clone(&shared);
     thread::spawn(move || age(&watchdog, &stopped, &log, ending));

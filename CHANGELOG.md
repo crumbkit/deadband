@@ -6,6 +6,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- deadband takes its four lock files, the daemon's `<socket>.lock`,
+  `service.lock`, `reclaim.lock` and `jobs.lock`, through crumbkit-durable
+  0.6.1's `PathLock`. The files keep their names, places and mode 0600, and
+  every refusal keeps its code and exit status. A lock file that another user
+  owns is still refused; the reason now reads `<path> is owned by user <uid>,
+  not user <uid>`.
+
+### Fixed
+
+- A daemon whose lock file was replaced after it locked the file and before
+  it started serving now stops at its next alive check. Before, it recorded
+  the new file as its own and kept serving while a second daemon could lock
+  the new file.
+- When another program replaces a lock file while deadband is locking it,
+  deadband now opens and locks the new file, up to three times, instead of
+  holding a lock on a file that is no longer at the path.
+
 ## [0.4.0] - 2026-11-17
 
 ### Added

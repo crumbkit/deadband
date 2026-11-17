@@ -153,12 +153,7 @@ pub fn run_daemon<P: Probe + Clone + Send + 'static>(
             );
             settings.reclaim = reclaim_config(machine);
             settings.history = machine.environment.history_directory();
-            let error = daemon::serve(
-                &bound.listener,
-                machine.probe.clone(),
-                settings,
-                &machine.log,
-            );
+            let error = daemon::serve(&bound, machine.probe.clone(), settings, &machine.log);
             Unbound::Stopped {
                 path: machine.socket.clone(),
                 error,

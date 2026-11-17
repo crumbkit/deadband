@@ -150,7 +150,7 @@ fn start_daemon(test: &Test<Warn>, reclaimer: &Reclaimer) {
         let max_jobs = NonZeroUsize::new(2).expect("positive");
         let mut settings = Settings::new(max_jobs, NonZeroUsize::new(4), None, None);
         settings.reclaim = config;
-        serve(&bound.listener, Warn, settings, &log)
+        serve(&bound, Warn, settings, &log)
     });
     wait_for_daemon(test);
 }
