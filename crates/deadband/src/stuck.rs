@@ -19,6 +19,7 @@ use regex_lite::Regex;
 use crate::job::CommandLine;
 use crate::probe::ProcessUse;
 use crate::protocol::OutsideJobs;
+use crate::reclaim::parse_age;
 
 #[cfg(test)]
 mod tests;
@@ -290,7 +291,7 @@ impl Config {
             None => Some(DEFAULT_AFTER),
             Some("off") => None,
             Some(text) => {
-                let age = humantime::parse_duration(text).map_err(|error| {
+                let age = parse_age(text).map_err(|error| {
                     format!("stuck_after {text:?} is not an age such as \"5m\": {error}")
                 })?;
                 if age < MIN_AFTER {

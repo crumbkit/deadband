@@ -1,4 +1,8 @@
-//! Reads the config file's TOML text into its serde type.
+//! Reads the config file's TOML text into its serde type, reads the ages
+//! its keys hold, and writes an age as the daemon's log and status print it.
+
+use std::fmt;
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 
@@ -25,4 +29,23 @@ pub(super) fn from_toml<T: DeserializeOwned>(text: &str) -> Result<T, String> {
         let column = before.rsplit('\n').next().unwrap_or(before).chars().count() + 1;
         format!("{message} at line {line} column {column}")
     })
+}
+
+/// Reads an age, such as "60s", "5m", "1h 30m" or "2 hours".
+///
+/// # Errors
+///
+/// Returns, in one line, why `text` is not an age.
+pub(crate) fn parse_age(text: &str) -> Result<Duration, String> {
+    humantime::parse_duration(text).map_err(|error| error.to_string())
+}
+
+/// An age as the daemon's log and `deadband status` print it, in its largest
+/// units first, such as "1m", "50m" or "1h 30m".
+pub(crate) struct ShownAge(pub(crate) Duration);
+
+impl fmt::Display for ShownAge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", humantime::format_duration(self.0))
+    }
 }

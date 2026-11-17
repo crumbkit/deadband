@@ -33,6 +33,7 @@ mod watch;
 mod worker;
 
 pub use self::lock::ReclaimLock;
+pub(crate) use self::text::{ShownAge, parse_age};
 pub use self::watch::{MAX_REST, Reclaiming, Watch};
 pub use self::worker::reclaim;
 
@@ -153,7 +154,7 @@ impl Config {
         if after < MIN_AFTER {
             return Err(format!(
                 "reclaim_after is {}, under the shortest it accepts, 10s",
-                humantime::format_duration(after)
+                ShownAge(after)
             ));
         }
         let timeout = age(file.reclaim_timeout, defaults.timeout)?;
