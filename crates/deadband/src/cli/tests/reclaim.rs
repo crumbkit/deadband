@@ -17,6 +17,7 @@ use crate::cli::{Machine, run_to};
 use crate::daemon::{Settings, bind, serve};
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::Reply;
+use crate::reclaim::tests::Left;
 use crate::reclaim::{CONFIG_FILE, Config};
 
 /// A probe whose memory pressure is always warn, the test hook that forces
@@ -220,6 +221,17 @@ fn a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues() {
             threads: Threads::new(2)
         }
     );
+}
+
+#[test]
+fn a_reclaimer_past_its_ceiling_shows_as_failed_and_no_reclaim_in_progress() {
+    let reclaimer = Reclaimer::with("20ms", "echo $$ > \"$(dirname \"$0\")/pid\"\nexec sleep 30");
+    let left = Left::new(&[&reclaimer.0.join("pid")]);
+    let test = Test::new(Warn);
+    start_daemon(&test, &reclaimer);
+    let out = status_until(&test, |out| out.contains("ran past its ceiling of 200ms"));
+    assert!(out.contains(r#""reclaiming":null"#), "{out}");
+    assert!(left.alive(0), "deadband never ends a reclaimer");
 }
 
 #[test]
