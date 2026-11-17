@@ -84,6 +84,9 @@ fn timeline(up: u64, jobs: Vec<JobRecord>) -> Timeline {
         held: None,
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     }
 }
 

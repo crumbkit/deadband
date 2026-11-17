@@ -1,0 +1,28 @@
+ deadband  last 10 minutes                                                                 HELD · MEMORY · RECLAIMING
+
+ workspace        job                         -10m        -8m        -6m         -4m        -2m      now  state
+ core-props       make  up                    │ ████████████████████████████████████████████████████████  run 9m
+ deadband-hist    suite  cargo nextest run    │       ░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒✓│          │             ok 4m
+ as59-eval        e2e run                     │           │    ░████████████████████████████████████████  run 7m
+ board-sync       cargo test                  │           │          │           │  ░░░░░░░░░░░░░░░░░░░░  wait 3m
+ flows-ux         npm run build               │           │          │           │          ░░░░░░░░░░░░  wait 2m
+ multiverse       mxv-build  cargo build      │           │          │           │          │     ░░░░░░  wait 1m
+                                              │           │          │           │          │
+ reclaims                                     │           │          │           │          │
+ mxv reclaim      workspaces  memory=4G       │           │        ━━✓           │          │       ━━━━  run 38s
+ tidy reap        caches  memory=4G           │           │         ━✓           │          │             freed 1.2G 6m
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+                                              │           │          │           │          │
+ mxv reclaim plans: stop triage, reading-list (4.6 GiB); keep board-sync, flows-ux, multiverse (jobs queued)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ load   7.8
+ cores  14                                     ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                               ⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤
+                                               ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿
+ held by                                       ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                   ▀ open   ▀ full   ▀ load   ▀ memory   ▀ disk   ░ waiting   █ running   ━ reclaim
+ waiting because: memory pressure is warn; mxv reclaim is freeing 4 GiB, started 38s ago
+ q quit

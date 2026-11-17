@@ -59,7 +59,7 @@ impl Columns {
 /// Draws the job's workspace, then its label and short command in the job
 /// column. The label is bold while the job waits or runs, and the label is
 /// left out when the row says so.
-fn names(buffer: &mut Buffer, y: u16, row: &Row, columns: Columns, live: bool) {
+pub(super) fn names(buffer: &mut Buffer, y: u16, row: &Row, columns: Columns, live: bool) {
     let (workspace, label, command) = if live {
         (fg(TEAL), bold(HI), fg(TEXT))
     } else {

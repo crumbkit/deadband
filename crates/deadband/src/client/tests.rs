@@ -385,6 +385,9 @@ fn empty_timeline() -> Timeline {
         held: None,
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     }
 }
 

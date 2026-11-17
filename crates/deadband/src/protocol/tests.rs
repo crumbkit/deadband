@@ -458,6 +458,9 @@ fn timeline() -> Timeline {
         held: Some(Hold::Full { max_jobs: 1 }),
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     }
 }
 
@@ -539,6 +542,9 @@ fn the_largest_timeline_reply_leaves_out_its_oldest_rows_until_it_fits_in_one_li
             cpu_percent: u32::MAX,
         }),
         unreadable: true,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     }
     .fit();
     assert!(fitted.hidden > 0, "every row fits: {}", fitted.jobs.len());

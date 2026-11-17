@@ -24,6 +24,7 @@ use crate::testing::{TestSocket, socket_path};
 
 mod alive;
 mod private;
+mod reclaims;
 mod reply;
 mod shown;
 mod timeline;

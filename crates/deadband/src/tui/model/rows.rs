@@ -27,7 +27,7 @@ impl Axis {
 
     /// Returns the columns from `first` to `last`, both included, clipped
     /// to the axis.
-    fn span(self, first: i64, last: i64) -> Range<u16> {
+    pub(super) fn span(self, first: i64, last: i64) -> Range<u16> {
         let width = i64::from(self.0);
         let start = first.clamp(0, width);
         let end = last.saturating_add(1).clamp(start, width);
