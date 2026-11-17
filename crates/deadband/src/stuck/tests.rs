@@ -258,6 +258,26 @@ fn stuck_after_reads_an_age_and_off() {
 }
 
 #[test]
+fn stuck_after_reads_the_documented_ages_in_short_and_long_units() {
+    for (text, seconds) in [
+        ("5m", 5 * 60),
+        ("1m", 60),
+        ("60s", 60),
+        ("1h 30m", 90 * 60),
+        ("2 hours", 2 * 60 * 60),
+        ("10 minutes", 10 * 60),
+    ] {
+        let config = Config::parse(Some(text), &[], None).expect(text);
+        assert_eq!(config.after, Some(Duration::from_secs(seconds)), "{text}");
+    }
+    let error = Config::parse(Some("soon"), &[], None).expect_err("soon is refused");
+    assert!(
+        error.starts_with("stuck_after \"soon\" is not an age such as \"5m\": "),
+        "{error}"
+    );
+}
+
+#[test]
 fn stuck_after_under_a_minute_is_refused() {
     assert!(Config::parse(Some("59s"), &[], None).is_err());
     assert!(Config::parse(Some("soon"), &[], None).is_err());

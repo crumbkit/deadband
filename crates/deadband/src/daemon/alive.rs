@@ -31,6 +31,7 @@ use super::reply::{Replies, deliver};
 use super::{Log, Shared, State, lock, lock_path, note};
 use crate::admit::Reading;
 use crate::file_id::FileId;
+use crate::reclaim::ShownAge;
 
 impl State {
     /// Reports whether the sampler stored its reading longer ago than
@@ -87,7 +88,7 @@ pub(super) fn age(shared: &Shared, stopped: &Receiver<()>, log: &Log, ending: En
                 log,
                 format_args!(
                     "the probe has not read the machine for over {}, so each job starts once a place is free until it reads again",
-                    humantime::format_duration(every)
+                    ShownAge(every)
                 ),
             );
         }

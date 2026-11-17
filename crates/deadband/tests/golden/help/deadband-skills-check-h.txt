@@ -1,4 +1,4 @@
-Check that each installed copy of this tool's skills matches this build
+Check that each installed copy of deadband's skills matches this deadband
 
 Usage: deadband skills check [OPTIONS]
 
@@ -10,6 +10,6 @@ Examples:
   deadband skills check
 
 Effects: read-only, closed-world.
-Rows: the default text lists only the rows that report a problem, and --long, --fields or --json lists every row.
+Rows: the default text lists only the rows that report a problem or a warning, and --long, --fields or --json lists every row.
 Global flags: --json, --fields <FIELD>, --long, --full, --no-input. `deadband skills check --help` describes them.
 Next: deadband skills check --help explains each column.

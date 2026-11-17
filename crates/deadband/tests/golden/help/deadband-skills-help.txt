@@ -3,9 +3,9 @@ Give coding agents deadband's skill
 Usage: deadband skills [OPTIONS] <COMMAND>
 
 Commands:
-  install  Install this tool's skills into each agent skills directory that exists
-  check    Check that each installed copy of this tool's skills matches this build
-  print    Print this tool's skill
+  install  Install deadband's skills into each agent skills directory that exists
+  check    Check that each installed copy of deadband's skills matches this deadband
+  print    Print deadband's skill
 
 Options:
       --json

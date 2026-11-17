@@ -14,13 +14,13 @@ use rustix::process::{Resource, Rlimit, getrlimit, getuid, setrlimit, umask};
 
 /// The code of a refusal to start a daemon while another one holds the
 /// same socket.
-pub const DAEMON_RUNNING: Code = Code::new("deadband", "daemon", "running");
+pub const DAEMON_RUNNING: Code = Code::from_spelling("deadband::daemon::running");
 
 /// The code of a socket that the daemon could not listen on.
-pub const SOCKET_UNUSABLE: Code = Code::new("deadband", "socket", "unusable");
+pub const SOCKET_UNUSABLE: Code = Code::from_spelling("deadband::socket::unusable");
 
 /// The code of a socket directory that deadband refuses to listen in.
-pub const SOCKET_DIRECTORY: Code = Code::new("deadband", "socket", "directory");
+pub const SOCKET_DIRECTORY: Code = Code::from_spelling("deadband::socket::directory");
 
 /// The file mode bits that the umask clears while the daemon makes its
 /// socket and lock file: every bit for the group and for others.
@@ -341,4 +341,25 @@ pub fn raise_descriptor_limit() {
             },
         );
     }
+}
+
+/// The mode of the state directory: only its owner may enter it.
+const STATE_DIR_MODE: u32 = 0o700;
+
+/// Makes the state directory `directory` with mode 0700 when it does not
+/// exist, and sets that mode when it does. The history writer, the reclaim
+/// lock and the service lock each call it before they open a file there, so
+/// whichever runs first leaves the directory private.
+///
+/// # Errors
+///
+/// Returns the error of making the directory or of setting its mode.
+pub(crate) fn make_state_dir(directory: &Path) -> io::Result<()> {
+    use std::fs::{self, DirBuilder, Permissions};
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+    DirBuilder::new()
+        .recursive(true)
+        .mode(STATE_DIR_MODE)
+        .create(directory)?;
+    fs::set_permissions(directory, Permissions::from_mode(STATE_DIR_MODE))
 }

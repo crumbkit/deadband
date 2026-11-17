@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 
 use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 
-use super::{Config, Kept, Reclaimed, Reclaimer, Report, Resource, Watch, reclaim, size_bytes};
+use super::{
+    Config, Kept, Reclaimed, Reclaimer, Report, Resource, ShownAge, Watch, parse_age, reclaim,
+    size_bytes,
+};
 use crate::admit::GIB;
 use crate::daemon::Log;
 use crate::job::CommandLine;
@@ -836,4 +839,117 @@ fn the_nearer_of_the_memory_and_disk_starts_is_the_next_reclaim() {
     // Disk rests for twice the wait after one empty reclaim; memory has to
     // stay short for the wait, which ends sooner.
     assert_eq!(watch.next_in(&config, later), Some(AFTER));
+}
+
+#[test]
+fn every_age_the_docs_and_configs_use_reads_as_the_same_duration() {
+    let ages = [
+        ("60s", 60),
+        ("90s", 90),
+        ("10s", 10),
+        ("30s", 30),
+        ("2m", 2 * 60),
+        ("5m", 5 * 60),
+        ("10m", 10 * 60),
+        ("1h", 60 * 60),
+        ("2h", 2 * 60 * 60),
+        ("1h 30m", 90 * 60),
+        ("1h30m", 90 * 60),
+        ("1 hour 30 minutes", 90 * 60),
+        ("2 hours", 2 * 60 * 60),
+        ("1hr", 60 * 60),
+        ("5min", 5 * 60),
+        ("5 minutes", 5 * 60),
+        ("30sec", 30),
+        ("30 seconds", 30),
+        ("1d", 24 * 60 * 60),
+        ("2 days", 2 * 24 * 60 * 60),
+        ("1day 2h", 26 * 60 * 60),
+        ("1w", 7 * 24 * 60 * 60),
+        (" 5m ", 5 * 60),
+        ("0", 0),
+    ];
+    for (text, seconds) in ages {
+        assert_eq!(
+            parse_age(text),
+            Ok(Duration::from_secs(seconds)),
+            "{text:?} reads as {seconds}s"
+        );
+    }
+    assert_eq!(parse_age("100ms"), Ok(Duration::from_millis(100)));
+}
+
+#[test]
+fn a_word_that_is_not_an_age_is_refused_naming_the_value() {
+    for text in ["soon", "5", "-5m", "5m ago", ""] {
+        assert!(parse_age(text).is_err(), "{text:?} is refused");
+    }
+    let error = Config::parse("reclaim_timeout = \"soon\"\n").expect_err("soon is refused");
+    assert!(
+        error.starts_with("\"soon\" is not an age such as \"60s\": "),
+        "{error}"
+    );
+    assert!(!error.contains('\n'), "{error}");
+}
+
+#[test]
+fn the_config_reads_each_age_key_in_long_and_short_units() {
+    let config = Config::parse("reclaim_after = \"1 minute\"\nreclaim_timeout = \"1h 30m\"\n")
+        .expect("the ages parse");
+    assert_eq!(config.after, Duration::from_secs(60));
+    assert_eq!(config.timeout, Duration::from_secs(90 * 60));
+    let config = Config::parse("reclaim_timeout = \"2 days\"\n").expect("days parse");
+    assert_eq!(config.timeout, Duration::from_secs(2 * 24 * 60 * 60));
+}
+
+#[test]
+fn an_age_prints_in_its_largest_units_first() {
+    let shown = [
+        (Duration::from_secs(60), "1m"),
+        (Duration::from_secs(50 * 60), "50m"),
+        (Duration::from_secs(90 * 60), "1h 30m"),
+        (Duration::from_secs(5 * 60), "5m"),
+        (Duration::from_secs(10), "10s"),
+        (Duration::from_secs(61), "1m 1s"),
+        (Duration::from_secs(8 * 60 * 60 + 20 * 60), "8h 20m"),
+        (Duration::from_secs(24 * 60 * 60), "1day"),
+        (Duration::from_secs(25 * 60 * 60), "1day 1h"),
+        (Duration::from_secs(2 * 24 * 60 * 60 + 60), "2days 1m"),
+        (Duration::from_millis(200), "200ms"),
+        (Duration::from_millis(1500), "1s 500ms"),
+        (Duration::ZERO, "0s"),
+    ];
+    for (age, text) in shown {
+        assert_eq!(ShownAge(age).to_string(), text, "{age:?}");
+    }
+}
+
+#[test]
+fn a_reclaim_after_under_10_seconds_is_refused_with_its_age_as_it_prints() {
+    let error = Config::parse("reclaim_after = \"9500ms\"\n").expect_err("9.5s is refused");
+    assert_eq!(
+        error,
+        "reclaim_after is 9s 500ms, under the shortest it accepts, 10s"
+    );
+}
+
+#[test]
+fn a_reclaim_time_reads_in_each_rfc_3339_form_the_daemon_has_written() {
+    let at = std::time::UNIX_EPOCH + Duration::from_secs(1_791_374_467);
+    let forms = [
+        ("2026-10-07T12:01:07.000Z", at),
+        ("2026-10-07T12:01:07Z", at),
+        ("2026-10-07T12:01:07+00:00", at),
+        ("2026-10-07 12:01:07Z", at),
+        (
+            "2026-10-07T12:01:07.123456789Z",
+            at + Duration::from_nanos(123_456_789),
+        ),
+    ];
+    let mut json = serde_json::to_value(reclaimed(at, at)).expect("the reclaim serializes");
+    for (text, expected) in forms {
+        json["at"] = text.into();
+        let read: Reclaimed = serde_json::from_value(json.clone()).expect(text);
+        assert_eq!(read.at.at(), expected, "{text}");
+    }
 }

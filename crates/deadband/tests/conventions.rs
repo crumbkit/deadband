@@ -58,7 +58,7 @@ const UNPROVOKED: &[Unprovoked<'_>] = &[
 ];
 
 /// The settings of deadband's recovery check.
-const RECOVERIES: Recoveries<'_> = Recoveries::new(
+const RECOVERIES: Recoveries<'_> = Recoveries::lists(
     EXAMPLES,
     &[
         &[MACHINE_UNREADABLE, MACHINE_UNSUPPORTED],

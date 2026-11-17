@@ -33,6 +33,7 @@ mod watch;
 mod worker;
 
 pub use self::lock::ReclaimLock;
+pub(crate) use self::text::{ShownAge, parse_age};
 pub use self::watch::{MAX_REST, Reclaiming, Watch};
 pub use self::worker::reclaim;
 
@@ -153,7 +154,7 @@ impl Config {
         if after < MIN_AFTER {
             return Err(format!(
                 "reclaim_after is {}, under the shortest it accepts, 10s",
-                humantime::format_duration(after)
+                ShownAge(after)
             ));
         }
         let timeout = age(file.reclaim_timeout, defaults.timeout)?;
@@ -369,7 +370,10 @@ impl fmt::Display for Reclaimed {
 /// and measures its age now, when the client reads the daemon's answer.
 fn ended_at<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Age, D::Error> {
     let text = String::deserialize(deserializer)?;
-    let at = humantime::parse_rfc3339_weak(&text).map_err(serde::de::Error::custom)?;
+    let at = text
+        .parse::<jiff::Timestamp>()
+        .and_then(SystemTime::try_from)
+        .map_err(serde::de::Error::custom)?;
     Ok(Age::since(at, SystemTime::now()))
 }
 

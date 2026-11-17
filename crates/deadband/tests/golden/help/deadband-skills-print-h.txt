@@ -1,4 +1,4 @@
-Print this tool's skill
+Print deadband's skill
 
 Usage: deadband skills print [OPTIONS]
 

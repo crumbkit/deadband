@@ -29,11 +29,15 @@ clap = { version = "4.6.7", default-features = false, features = ["std", "derive
 # derive feature writes each failure type's `Failure` impl from attributes,
 # and the complete feature answers a shell's completion request and gives
 # `deadband completion install`, `check` and `print`.
-crumbkit = { version = "0.5.0", features = ["derive", "complete"] }
+crumbkit = { version = "0.6.0", features = ["derive", "complete"] }
 # crumbkit-skills gives the `deadband` command `skills install`, `skills check`
 # and `skills print`, which install the agent skill that deadband embeds into
 # the agent skills directories and check the installed copies.
-crumbkit-skills = "0.5.0"
+crumbkit-skills = "0.6.0"
+# crumbkit-durable writes the launchd plist through a new temporary file and
+# a rename, so launchd reads the old plist or the new one and never part of
+# either. crumbkit already depends on it.
+crumbkit-durable = "0.6.0"
 # serde and schemars derive the JSON form and the JSON Schema of the sample
 # that `deadband status --json` prints. crumbkit already depends on both.
 serde = { version = "1.0.229", default-features = false, features = ["std", "derive"] }
@@ -63,9 +67,11 @@ signal-hook = { version = "0.4.6", default-features = false, features = ["iterat
 # basic-toml unmaintained. toml adds five crates and refuses in several
 # lines, so reclaim/text.rs joins its message and location into one line.
 toml = { version = "1.2.1", default-features = false, features = ["std", "parse", "serde"] }
-# humantime reads the ages in the config file, such as "60s", and writes
-# the time of the last reclaim. crumbkit already depends on it.
-humantime = { version = "2.4.0", default-features = false }
+# jiff reads the ages in the config file, such as "60s", writes them in the
+# daemon's log, and reads the time of the last reclaim. crumbkit already
+# depends on it with these features; it replaced humantime, which
+# RUSTSEC-2026-0542 marks unmaintained.
+jiff = { version = "1.0.0", default-features = false, features = ["std"] }
 
 # regex-lite matches a job's command line against the `stuck_ignore` list of
 # the daemon's config file. The eval /evals/deadband-commands-regex chose it
@@ -91,7 +97,7 @@ libc = "0.2.191"
 # crumbkit-test checks the command's tool record, effects, documents,
 # schemas, exit codes, failure codes and recoveries against crumbkit's
 # conventions.
-crumbkit-test = "0.5.0"
+crumbkit-test = "0.6.0"
 
 [lints]
 workspace = true

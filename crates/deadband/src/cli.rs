@@ -36,7 +36,13 @@ pub use self::tool::EXIT_TOP;
 pub use self::tool::{
     EXIT_DAEMON, EXIT_MACHINE, EXIT_NOT_FOUND, EXIT_NOT_STARTED, EXIT_SERVICE, TOOL,
 };
-pub use crumbkit_skills::SkillsCommand;
+
+crumbkit_skills::skills_command!(
+    /// The commands of `deadband skills`, which install, check and print
+    /// deadband's agent skill.
+    pub SkillsCommand,
+    "deadband"
+);
 
 /// Keep a busy machine usable while many heavy jobs compete for it.
 #[derive(Debug, Parser)]
@@ -193,7 +199,7 @@ pub fn run<P: Probe + Clone + Send + 'static>(machine: &Machine<P>) -> ExitCode 
         Command::Commands { command } => explore::commands(&mut Sink::standard(), output, &command),
         Command::Schemas { command } => explore::schemas(&mut Sink::standard(), output, &command),
         Command::Skills { command } => {
-            crumbkit_skills::run_to(&mut Sink::standard(), output, &[SKILL], &command)
+            crumbkit_skills::run_to(&mut Sink::standard(), output, &[SKILL], command)
         }
         Command::Completion { command } => {
             setup::completion(&mut Sink::standard(), output, &command)
@@ -223,7 +229,7 @@ pub fn run_to<O: Write, W: Write, T: Into<OsString>, P: Probe + Clone + Send + '
         Command::Top => commands::top(sink, &mut output, machine),
         Command::Commands { command } => explore::commands(sink, output, &command),
         Command::Schemas { command } => explore::schemas(sink, output, &command),
-        Command::Skills { command } => crumbkit_skills::run_to(sink, output, &[SKILL], &command),
+        Command::Skills { command } => crumbkit_skills::run_to(sink, output, &[SKILL], command),
         Command::Completion { command } => setup::completion(sink, output, &command),
     }
 }

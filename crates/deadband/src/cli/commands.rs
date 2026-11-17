@@ -20,16 +20,16 @@ use crate::protocol::Jobs;
 use crate::serve;
 
 /// The code of a program given to `run` that was found but could not start.
-pub const JOB_NOT_STARTED: Code = Code::new("deadband", "job", "not_started");
+pub const JOB_NOT_STARTED: Code = Code::from_spelling("deadband::job::not_started");
 
 /// The code of a program given to `run` that was not found.
-pub const JOB_NOT_FOUND: Code = Code::new("deadband", "job", "not_found");
+pub const JOB_NOT_FOUND: Code = Code::from_spelling("deadband::job::not_found");
 
 /// The code of a `status` that lists at least one stuck job.
-pub const JOB_STUCK: Code = Code::new("deadband", "job", "stuck");
+pub const JOB_STUCK: Code = Code::from_spelling("deadband::job::stuck");
 
 /// The code of a `status` whose daemon could not read the jobs' processes.
-pub const JOB_UNREADABLE: Code = Code::new("deadband", "job", "unreadable");
+pub const JOB_UNREADABLE: Code = Code::from_spelling("deadband::job::unreadable");
 
 /// What makes `status` exit 1 about the daemon's jobs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Failure)]
