@@ -143,7 +143,7 @@ fn start(probe: &Trees, options: Options) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
     let probe = probe.clone();
     thread::spawn(move || {
         let bound = bound;
-        serve(&bound.listener, probe, settings, &log)
+        serve(&bound, probe, settings, &log)
     });
     (path, written)
 }

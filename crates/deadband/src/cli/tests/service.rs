@@ -281,7 +281,7 @@ fn daemon_in(test: &Test<Fixed>, dir: &ShortDir, max_jobs: usize) -> PathBuf {
         let bound = bound;
         let max_jobs = NonZeroUsize::new(max_jobs).expect("positive");
         let settings = Settings::new(max_jobs, NonZeroUsize::new(4), None, None);
-        serve(&bound.listener, Fixed, settings, &log)
+        serve(&bound, Fixed, settings, &log)
     });
     real
 }
@@ -353,7 +353,9 @@ fn a_service_command_takes_its_lock_under_home_whatever_xdg_state_home_says() {
     test.machine.environment.state = Some(elsewhere.join("state"));
     let state = home.join(".local/state/deadband");
     std::fs::create_dir_all(&state).expect("the state directory is made");
-    let _held = crate::daemon::take_lock(&state.join("service.lock")).expect("the lock is free");
+    let _held =
+        crumbkit_durable::PathLock::acquire(&state.join("service.lock"), std::time::Instant::now())
+            .expect("the lock is free");
 
     let (code, _, err) = test.run(&["service", "install"]);
 

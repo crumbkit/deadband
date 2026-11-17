@@ -9,7 +9,7 @@
 //! it never reaches the job.
 //!
 //! Before it opens the file, the writer takes an exclusive lock on
-//! `jobs.lock` in the state directory and holds it for its life, so one
+//! `jobs.lock` in the state directory with crumbkit-durable's `PathLock` and holds it for its life, so one
 //! writer exists per state directory even when two daemons listen on
 //! different sockets. A writer that finds the lock held records nothing and
 //! logs one line. If the writer thread stops, a line that cannot reach it
@@ -17,23 +17,27 @@
 //! releases the queue lock.
 //!
 //! Before each line, the writer checks by device and inode that the lock
-//! and the open file are still the files at their paths. A lock file that
+//! (through `PathLock::still_current`) and the open file are still the files
+//! at their paths. A lock file that
 //! was removed or replaced is released and taken again, so a second daemon
 //! that took a new lock is the only writer. A history file that was removed
 //! or replaced is closed and opened again at its path, so later lines are
 //! recorded where readers look.
 
 use std::fmt;
-use std::fs::{self, File, OpenOptions, Permissions, TryLockError};
+use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{self, Write as _};
 use std::os::unix::fs::{FileExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::time::Instant;
+
+use crumbkit_durable::{LockError, PathLock};
 
 use super::{CHANNEL, FILE, Line, MAX_BYTES, ROTATED_FILE};
-use crate::daemon::{Log, make_state_dir, note, take_lock};
+use crate::daemon::{Log, make_state_dir, note};
 use crate::file_id::FileId;
 use crate::spawn;
 
@@ -151,15 +155,6 @@ struct Open {
     size: u64,
 }
 
-/// The lock on the state directory that the writer holds.
-#[derive(Debug)]
-struct Lock {
-    /// The locked file, which the lock lasts as long as.
-    _file: File,
-    /// The lock file's identity when the writer took it.
-    identity: FileId,
-}
-
 /// The writer of the history file.
 pub(super) struct Writer {
     /// The directory that holds the file.
@@ -169,7 +164,7 @@ pub(super) struct Writer {
     /// Where the writer says that writing failed or recovered.
     log: Log,
     /// The lock on the state directory, once the writer holds it.
-    lock: Option<Lock>,
+    lock: Option<PathLock>,
     /// Whether another writer held the lock when this writer last tried.
     refused: bool,
     /// The open file, or `None` when the writer is closed.
@@ -278,7 +273,7 @@ impl Writer {
     fn claim(&mut self) -> io::Result<bool> {
         let path = self.directory.join(LOCK_FILE);
         match &self.lock {
-            Some(lock) if still_at(lock.identity, &path) => return Ok(true),
+            Some(lock) if lock.still_current().unwrap_or(false) => return Ok(true),
             Some(_) => {
                 self.lock = None;
                 self.open = None;
@@ -286,17 +281,14 @@ impl Writer {
             None => {}
         }
         make_state_dir(&self.directory)?;
-        match take_lock(&path) {
-            Ok(file) => {
-                let identity = FileId::of(&file)?;
-                self.lock = Some(Lock {
-                    _file: file,
-                    identity,
-                });
+        // A deadline that has passed tries the lock once.
+        match PathLock::acquire(&path, Instant::now()) {
+            Ok(lock) => {
+                self.lock = Some(lock);
                 self.refused = false;
                 Ok(true)
             }
-            Err(TryLockError::WouldBlock) => {
+            Err(LockError::Busy { .. }) => {
                 if !self.refused {
                     self.refused = true;
                     note(
@@ -309,7 +301,8 @@ impl Writer {
                 }
                 Ok(false)
             }
-            Err(TryLockError::Error(error)) => Err(error),
+            Err(LockError::Io { source, .. }) => Err(source),
+            Err(error) => Err(error.into()),
         }
     }
 

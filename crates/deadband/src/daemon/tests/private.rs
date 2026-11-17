@@ -4,12 +4,12 @@
 use std::fs::{self, DirBuilder, Permissions};
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::Path;
+use std::time::Instant;
 
+use crumbkit_durable::PathLock;
 use rustix::process::getuid;
 
-use crate::daemon::{
-    DirectoryFault, Unbound, private_directory, private_directory_as, take_lock, take_lock_as,
-};
+use crate::daemon::{DirectoryFault, Unbound, private_directory, private_directory_as};
 use crate::history::tests::{Scratch, write_file};
 
 /// Returns the uid of the user who runs the tests.
@@ -148,7 +148,7 @@ fn a_lock_file_that_is_a_symlink_is_refused_and_its_target_is_not_made() {
     let target = scratch.path().join("victim");
     let link = scratch.path().join("deadband.sock.lock");
     symlink(&target, &link).expect("the link is made");
-    assert!(take_lock(&link).is_err());
+    assert!(PathLock::acquire(&link, Instant::now()).is_err());
     assert!(!target.exists(), "the lock made the link's target");
 }
 
@@ -156,27 +156,10 @@ fn a_lock_file_that_is_a_symlink_is_refused_and_its_target_is_not_made() {
 fn a_regular_lock_file_is_locked_with_mode_0600() {
     let scratch = Scratch::new();
     let path = scratch.path().join("deadband.sock.lock");
-    let lock = take_lock(&path).expect("the lock is free");
+    let lock = PathLock::acquire(&path, Instant::now()).expect("the lock is free");
     assert_eq!(
         fs::metadata(&path).expect("the lock exists").mode() & 0o777,
         0o600
     );
     drop(lock);
-}
-
-#[test]
-fn a_lock_file_of_another_user_is_refused() {
-    let scratch = Scratch::new();
-    let path = scratch.path().join("deadband.sock.lock");
-    drop(take_lock(&path).expect("the lock is made"));
-    let refused = take_lock_as(&path, own() + 1).expect_err("another owner is refused");
-    assert!(
-        matches!(
-            refused,
-            std::fs::TryLockError::Error(ref error)
-                if error.kind() == std::io::ErrorKind::PermissionDenied
-        ),
-        "{refused:?}"
-    );
-    drop(take_lock_as(&path, own()).expect("the twin: the owner locks it"));
 }

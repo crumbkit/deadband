@@ -126,7 +126,7 @@ impl<P: Probe + Clone + Send + 'static> Test<P> {
         thread::spawn(move || {
             let bound = bound;
             let settings = Settings::new(max_jobs, NonZeroUsize::new(4), None, None);
-            serve(&bound.listener, probe, settings, &log)
+            serve(&bound, probe, settings, &log)
         });
     }
 
@@ -749,7 +749,7 @@ fn start_watching(test: &Test<QuietTree>) {
         settings.reclaim.stuck.after = Some(Duration::from_millis(30));
         settings.watching.every = Duration::from_millis(5);
         settings.watching.census = crate::job::CommandLine::of(&["/bin/sh", "-c", "exit 1"]);
-        serve(&bound.listener, probe, settings, &log)
+        serve(&bound, probe, settings, &log)
     });
     while !test.machine.socket.exists() {
         thread::yield_now();

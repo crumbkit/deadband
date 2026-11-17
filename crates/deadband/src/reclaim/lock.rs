@@ -1,10 +1,12 @@
 //! The lock that keeps reclaims to one at a time for a user, whichever
 //! daemons are up.
 
-use std::fs::{File, TryLockError};
 use std::path::Path;
+use std::time::Instant;
 
-use crate::daemon::{make_state_dir, take_lock};
+use crumbkit_durable::{LockError, PathLock};
+
+use crate::daemon::make_state_dir;
 
 /// The name of the lock file in the state directory that one reclaim holds.
 const LOCK_FILE: &str = "reclaim.lock";
@@ -13,8 +15,9 @@ const LOCK_FILE: &str = "reclaim.lock";
 /// is dropped.
 #[derive(Debug)]
 pub struct ReclaimLock {
-    /// The open lock file, which holds the lock until it is closed.
-    _file: Option<File>,
+    /// The lock, which holds until it drops, or `None` when the reclaim
+    /// runs without one.
+    _lock: Option<PathLock>,
 }
 
 impl ReclaimLock {
@@ -25,17 +28,18 @@ impl ReclaimLock {
     /// file that cannot be made or locked, the lock holds nothing and the
     /// reclaim runs without one.
     pub fn take(directory: Option<&Path>) -> Option<Self> {
-        let free = Some(Self { _file: None });
+        let free = Some(Self { _lock: None });
         let Some(directory) = directory else {
             return free;
         };
         if make_state_dir(directory).is_err() {
             return free;
         }
-        match take_lock(&directory.join(LOCK_FILE)) {
-            Ok(file) => Some(Self { _file: Some(file) }),
-            Err(TryLockError::WouldBlock) => None,
-            Err(TryLockError::Error(_)) => free,
+        // A deadline that has passed tries the lock once.
+        match PathLock::acquire(&directory.join(LOCK_FILE), Instant::now()) {
+            Ok(lock) => Some(Self { _lock: Some(lock) }),
+            Err(LockError::Busy { .. }) => None,
+            Err(_) => free,
         }
     }
 }
@@ -75,7 +79,7 @@ mod tests {
         let home = crate::testing::TestHome::new();
         let directory = home.join("state/deadband");
         let lock = ReclaimLock::take(Some(&directory)).expect("the reclaim takes the lock");
-        assert!(lock._file.is_some(), "the lock file is made and held");
+        assert!(lock._lock.is_some(), "the lock file is made and held");
         assert_eq!(mode(&directory), 0o700);
     }
 

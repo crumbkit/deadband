@@ -149,7 +149,7 @@ fn start_with(
     // daemon's thread.
     thread::spawn(move || {
         let bound = bound;
-        serve(&bound.listener, probe, settings, &log)
+        serve(&bound, probe, settings, &log)
     });
     (path, written)
 }
@@ -518,7 +518,7 @@ fn with_an_active_priority_file_a_fast_job_takes_the_place_that_normal_jobs_leav
     let probe = Dial::new(Pressure::Normal);
     thread::spawn(move || {
         let bound = bound;
-        serve(&bound.listener, probe, settings, &log)
+        serve(&bound, probe, settings, &log)
     });
     let mut first = Client::ask(&path, "a");
     assert_eq!(first.reply(), granted(2));

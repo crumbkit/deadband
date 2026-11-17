@@ -1014,10 +1014,11 @@ fn the_counts_line_of_a_dry_run_says_what_would_happen() {
 }
 
 /// Takes the service lock under `home` as another service command would,
-/// and returns the open file that holds it.
-fn hold_lock(home: &Path) -> std::fs::File {
+/// and returns the lock, which holds until it drops.
+fn hold_lock(home: &Path) -> crumbkit_durable::PathLock {
     std::fs::create_dir_all(state_dir(home)).expect("the state directory is made");
-    crate::daemon::take_lock(&state_dir(home).join(LOCK_FILE)).expect("the lock is free")
+    crumbkit_durable::PathLock::acquire(&state_dir(home).join(LOCK_FILE), Instant::now())
+        .expect("the lock is free")
 }
 
 /// Returns how many times `launchd` paused.

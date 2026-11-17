@@ -158,9 +158,9 @@ dependencies = [
 
 [[package]]
 name = "crumbkit"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b71ce9d40bdf7fe4e04521e05c33642b61fd967ef4cfc1ff115d1eed2b7e5313"
+checksum = "a01ecadff28092b8e74e0a98482d44dec657ab7fecf0b8110b8802a497e0225e"
 dependencies = [
  "clap",
  "clap_complete",
@@ -176,9 +176,9 @@ dependencies = [
 
 [[package]]
 name = "crumbkit-derive"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b628234d56544dc3e900a19591b05e0a746b501b991f32158b028f6d894474a"
+checksum = "2d4b3aaae0a7b7e499c3f34d78ad6c7a95040fb0aa2abc33ea8ee8eae147f004"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -187,18 +187,18 @@ dependencies = [
 
 [[package]]
 name = "crumbkit-durable"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d80551b03aac1261b394355c02cded2bdb2ccc51ff338a735b74c67c74c8bdc"
+checksum = "7b5db8612f0f8d22b55b6d73e532df31a16d82e37073ac7e7c362c2932f6a23e"
 dependencies = [
  "rustix",
 ]
 
 [[package]]
 name = "crumbkit-markdown"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "155895de507fc0780b81b58074330ed8ddf2e251ab5c6c09fe36196aff123b81"
+checksum = "a311133bd372053c067e3a21ea2d96e91293bc17de9e09d1d8f658d59134030d"
 dependencies = [
  "crumbkit",
  "serde",
@@ -207,9 +207,9 @@ dependencies = [
 
 [[package]]
 name = "crumbkit-skills"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c20b2b253f2b1d73a084084bae7bce94dba83862deb4f5dcef27bb62f28a0113"
+checksum = "df6ea4a1074e3c1b25647607a7f39f1b257bbb25cea369d7cbacfac7f22dc366"
 dependencies = [
  "clap",
  "crumbkit",
@@ -220,9 +220,9 @@ dependencies = [
 
 [[package]]
 name = "crumbkit-test"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5abeb4104155100f352cd0610bc3779d3b2cfea67d2054c72b9e6c66136ffa8"
+checksum = "30534f502b182a8a46e988544fc857479b47574997abcf246d44fe3a035c4b65"
 dependencies = [
  "clap",
  "crumbkit",

@@ -2,15 +2,13 @@
 # durable-state profiles of the Rust standards. Each effect belongs to one
 # owning module, which suppresses the lint with #[expect] and a reason
 # (BASE-5). The environment, process, priority and entry-point effects have
-# owning modules now, and their reasons name them. The DUR-1 and DUR-2
-# entries have no atomic writer and no lock module yet. Their uses are in
-# crates/deadband/src/daemon/bind.rs, whose take_lock creates an empty lock
-# file and locks it without waiting for both the daemon's socket and the
-# job history's writer, and in
-# crates/deadband/src/history/writer.rs, which appends to the job history
-# under the DUR-1 exception in rust-standards.toml. Each #[expect] reason says
-# so. The change that adds a writer or lock module names its path in the
-# reason.
+# owning modules now, and their reasons name them. The DUR-1 entries have no
+# atomic writer in deadband: crumbkit-durable writes the launchd plist, and
+# crates/deadband/src/history/writer.rs appends to the job history under the
+# DUR-1 exception in rust-standards.toml, which its #[expect] reasons say.
+# The DUR-2 entries have no use in deadband: every lock file, the daemon's
+# socket lock, the service lock, the reclaim lock and the job history's lock,
+# is locked through crumbkit-durable's PathLock, which owns the deadline.
 
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
@@ -66,10 +64,10 @@ disallowed-methods = [
     { path = "std::fs::File::create", reason = "write through the atomic writer" },
     { path = "std::fs::OpenOptions::new", reason = "write through the atomic writer" },
     # DUR-2
-    { path = "std::fs::File::lock", reason = "lock through the lock module, which owns the deadline" },
-    { path = "std::fs::File::try_lock", reason = "lock through the lock module, which owns the deadline" },
-    { path = "std::fs::File::lock_shared", reason = "lock through the lock module, which owns the deadline" },
-    { path = "std::fs::File::try_lock_shared", reason = "lock through the lock module, which owns the deadline" },
+    { path = "std::fs::File::lock", reason = "lock through crumbkit_durable::PathLock, which owns the deadline" },
+    { path = "std::fs::File::try_lock", reason = "lock through crumbkit_durable::PathLock, which owns the deadline" },
+    { path = "std::fs::File::lock_shared", reason = "lock through crumbkit_durable::PathLock, which owns the deadline" },
+    { path = "std::fs::File::try_lock_shared", reason = "lock through crumbkit_durable::PathLock, which owns the deadline" },
 ]
 
 disallowed-types = [

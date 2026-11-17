@@ -14,7 +14,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -45,13 +45,13 @@ mod tests;
 mod timeline;
 mod watch;
 
+#[cfg(test)]
+pub(crate) use self::bind::private_directory_as;
 pub use self::bind::{
     Bound, DAEMON_RUNNING, DirectoryFault, SOCKET_DIRECTORY, SOCKET_UNUSABLE, Unbound, bind,
     lock_path, raise_descriptor_limit,
 };
-pub(crate) use self::bind::{make_state_dir, private_directory, take_lock};
-#[cfg(test)]
-pub(crate) use self::bind::{private_directory_as, take_lock_as};
+pub(crate) use self::bind::{make_state_dir, private_directory};
 pub use self::settings::{Settings, Watching, default_max_jobs};
 
 /// How often the daemon samples the probe.
@@ -200,9 +200,9 @@ pub fn note(log: &Log, line: fmt::Arguments<'_>) {
     let _ = writeln!(log, "deadband: {line}");
 }
 
-/// Serves clients on `listener` until accepting a connection fails in a way
-/// that another try cannot fix, the socket file at the listener's path or
-/// its lock file is gone or replaced, the sampler panics, or the operating
+/// Serves clients on the listener of `bound` until accepting a connection
+/// fails in a way that another try cannot fix, the socket file at the
+/// listener's path or the lock file that `bound` holds is gone or replaced, the sampler panics, or the operating
 /// system refuses the sampler's, the watchdog's or a connection's thread,
 /// and returns the reason as an error. It samples `probe` every
 /// `settings.sample_every`, and checks the socket file and the lock file
@@ -213,11 +213,12 @@ pub fn note(log: &Log, line: fmt::Arguments<'_>) {
 /// client that gave up while it connected, is logged, and the daemon
 /// accepts again after 100 ms.
 pub fn serve<P: Probe + Clone + Send + 'static>(
-    listener: &UnixListener,
+    bound: &Bound,
     probe: P,
     settings: Settings,
     log: &Log,
 ) -> io::Error {
+    let listener = &bound.listener;
     let reading = read_machine(&probe, &settings, log, None);
     let reserve_lanes = priority_active(settings.priority_file.as_deref());
     let recorder = settings
@@ -234,8 +235,8 @@ pub fn serve<P: Probe + Clone + Send + 'static>(
     let (_watching, watch_stopped) = mpsc::channel::<()>();
     watch::start(&shared, probe.clone(), watch_stopped, log);
     let (reason, ends) = mpsc::channel::<String>();
-    let watchdog_ending = Ending::new(listener, reason.clone());
-    let ending = Ending::new(listener, reason).trimming(log);
+    let watchdog_ending = Ending::new(listener, Some(Arc::clone(&bound.lock)), reason.clone());
+    let ending = Ending::new(listener, Some(Arc::clone(&bound.lock)), reason).trimming(log);
     let sampling = spawn::thread("deadband-sampler", move || {
         sample(&sampler, &probe, &stopped, &sampler_log, ending);
     });

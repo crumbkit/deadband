@@ -23,12 +23,13 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crumbkit_durable::PathLock;
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fs::{OFlags, fcntl_getfl};
 use rustix::io::Errno;
 
 use super::reply::{Replies, deliver};
-use super::{Log, Shared, State, lock, lock_path, note};
+use super::{Log, Shared, State, lock, note};
 use crate::admit::Reading;
 use crate::file_id::FileId;
 use crate::reclaim::ShownAge;
@@ -152,8 +153,7 @@ pub(super) fn wait_for_connection(listener: &UnixListener, within: Duration) -> 
     poll(&mut fds, Some(&timeout)).map_or(true, |ready| ready > 0)
 }
 
-/// A file that the daemon depends on, its socket or its lock file, named by
-/// its device and inode.
+/// The daemon's socket file, named by its device and inode.
 #[derive(Debug)]
 struct HeldFile {
     /// The file's path.
@@ -166,12 +166,7 @@ impl HeldFile {
     /// Names the file that `listener` is bound to, or returns `None` when
     /// the socket has no path or its file cannot be read.
     fn of(listener: &UnixListener) -> Option<Self> {
-        Self::at(listener.local_addr().ok()?.as_pathname()?.to_owned())
-    }
-
-    /// Names the file at `path` now, or returns `None` when it cannot be
-    /// read.
-    fn at(path: PathBuf) -> Option<Self> {
+        let path = listener.local_addr().ok()?.as_pathname()?.to_owned();
         let metadata = std::fs::symlink_metadata(&path).ok()?;
         Some(Self {
             path,
@@ -189,15 +184,22 @@ impl HeldFile {
     }
 }
 
+/// Reports whether the file that `lock` locked is no longer the file at its
+/// path. A path that cannot be read for another reason counts as still
+/// naming the file, as [`HeldFile::gone`] counts the socket.
+fn replaced(lock: &PathLock) -> bool {
+    lock.still_current().is_ok_and(|current| !current)
+}
+
 /// What the sampler tells the accept loop when the daemon should stop. The
 /// loop stops and `serve` returns the reason.
 #[derive(Debug)]
 pub(super) struct Ending {
     /// The daemon's socket file, or `None` when it has no path to check.
     socket: Option<HeldFile>,
-    /// The lock file next to the socket that keeps a second daemon off it,
-    /// or `None` when the daemon took no lock.
-    lock: Option<HeldFile>,
+    /// The lock on the file next to the socket that keeps a second daemon
+    /// off it, or `None` when the daemon took no lock.
+    lock: Option<Arc<PathLock>>,
     /// The samples since the last check of the socket file.
     since_check: u32,
     /// The daemon's standard error, which the alive check empties past
@@ -208,18 +210,15 @@ pub(super) struct Ending {
 }
 
 impl Ending {
-    /// Returns the ending for the daemon that serves `listener`. It names
-    /// the lock file by a stat of the lock path when `serve` builds its
-    /// endings, not from the file the daemon locked. Soft limit: a lock file
-    /// replaced between `bind` and that stat is recorded as the daemon's own,
-    /// and the daemon never notices the replacement.
-    pub(super) fn new(listener: &UnixListener, reason: Sender<String>) -> Self {
-        let socket = HeldFile::of(listener);
-        let lock = socket
-            .as_ref()
-            .and_then(|socket| HeldFile::at(lock_path(&socket.path)));
+    /// Returns the ending for the daemon that serves `listener` and holds
+    /// `lock`, the lock on the file next to its socket.
+    pub(super) fn new(
+        listener: &UnixListener,
+        lock: Option<Arc<PathLock>>,
+        reason: Sender<String>,
+    ) -> Self {
         Self {
-            socket,
+            socket: HeldFile::of(listener),
             lock,
             since_check: 0,
             log_file: None,
@@ -264,7 +263,7 @@ impl Ending {
     pub(super) fn check(&self) -> bool {
         let gone = if self.socket.as_ref().is_some_and(HeldFile::gone) {
             "socket file"
-        } else if self.lock.as_ref().is_some_and(HeldFile::gone) {
+        } else if self.lock.as_deref().is_some_and(replaced) {
             "lock file"
         } else {
             return false;
