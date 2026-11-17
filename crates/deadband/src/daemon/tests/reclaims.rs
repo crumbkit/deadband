@@ -9,7 +9,8 @@ use crate::history::tests::{Scratch, write_file};
 use crate::job::CommandLine;
 use crate::probe::Pressure;
 use crate::protocol::{ReclaimRun, ReclaimRunState, ReclaimerRow};
-use crate::reclaim::{Config, Kept, Reclaimed, Reclaimer, Report};
+use crate::reclaim::tests::Left;
+use crate::reclaim::{Config, Kept, ReclaimLock, Reclaimed, Reclaimer, Report};
 
 fn secs(seconds: u64) -> Duration {
     Duration::from_secs(seconds)
@@ -254,4 +255,57 @@ fn a_daemon_that_reclaims_shows_the_reclaimer_and_its_ended_run_on_the_timeline(
             ..
         }
     ));
+}
+
+#[test]
+fn a_reclaimer_past_its_ceiling_stops_blocking_reclaims_and_is_left_running() {
+    let scratch = Scratch::new();
+    let script = scratch.path().join("tool.sh");
+    let pid = scratch.path().join("pid");
+    write_file(
+        &script,
+        format!(
+            "if [ ! -e '{marker}' ]; then : > '{marker}'; echo $$ > '{pid}'; exec sleep 30; fi\n\
+             echo '{{\"data\":[{{\"name\":\"w\",\"freed\":1048576}}]}}'\n",
+            marker = scratch.path().join("hung").display(),
+            pid = pid.display(),
+        ),
+    )
+    .expect("the script writes");
+    let state = scratch.path().join("state");
+    let lock_directory = state.clone();
+    let left = Left::new(&[&pid]);
+    let (path, _) = start_with(1, &Dial::new(Pressure::Warn), |settings| {
+        settings.history = Some(lock_directory);
+        settings.reclaim = Config {
+            reclaimers: vec![Reclaimer {
+                name: "workspaces".to_owned(),
+                command: CommandLine::of(&["/bin/sh", &script.display().to_string()]),
+            }],
+            after: Duration::from_millis(30),
+            timeout: Duration::from_millis(20),
+            ..Config::default()
+        };
+    });
+    let shown = timeline_until(&path, |timeline| {
+        timeline.reclaimers.first().is_some_and(|row| {
+            row.runs
+                .iter()
+                .any(|run| matches!(run.state, ReclaimRunState::Ended { failed: None, .. }))
+        })
+    });
+    let runs = &shown.reclaimers[0].runs;
+    assert!(matches!(
+        &runs[0].state,
+        ReclaimRunState::Ended { failed: Some(why), .. } if why.as_str() == "ran past its ceiling of 200ms"
+    ));
+    assert!(left.alive(0), "deadband never ends a reclaimer");
+    let begun = Instant::now();
+    while ReclaimLock::take(Some(&state)).is_none() {
+        assert!(
+            begun.elapsed() < Duration::from_secs(10),
+            "the lock stays held"
+        );
+        std::thread::yield_now();
+    }
 }

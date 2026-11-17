@@ -47,6 +47,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A reclaimer that never exits no longer stops every reclaim for good.
+  After 10 times `reclaim_timeout`, its ceiling, the daemon logs one line
+  that names the reclaimer and its process ID, leaves it running, and lets
+  the next reclaim start; `status` and `top` show the reclaim as failed with
+  `ran past its ceiling of <ceiling>` instead of a reclaim in progress. If
+  the reclaimer exits later, its output is discarded and its exit is logged
+  once. In the library, `job::reclaimer::run` takes the ceiling and a
+  callback for such a late exit, and `Ended` has an `Abandoned` variant.
 - The daemon writes no log line and checks no file while it holds its queue
   lock. The watchdog used to check the socket file and write the line about
   a stale reading with the lock held, and a line that found the history

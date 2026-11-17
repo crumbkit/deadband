@@ -1,10 +1,12 @@
 //! Tests of the reclaim config, the rule that says when to reclaim, and the
 //! reading of a reclaimer's report.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 
 use super::{Config, Kept, Reclaimed, Reclaimer, Report, Resource, Watch, reclaim, size_bytes};
 use crate::admit::GIB;
@@ -399,13 +401,18 @@ impl Scripts {
     /// to `calls`, prints `dry` on a dry run, and otherwise prints `real`
     /// and exits with `code`.
     fn reclaimer(&self, name: &str, dry: u64, real: u64, code: i32) -> Reclaimer {
-        let script = self.0.join(format!("{name}.sh"));
         let body = format!(
             "echo \"{name} $*\" >> '{calls}'\n\
              case \"$*\" in *--dry-run*) echo '{{\"data\":[{{\"name\":\"w\",\"freed\":{dry}}}]}}'; exit 0;; esac\n\
              echo '{{\"data\":[{{\"name\":\"w\",\"freed\":{real}}}]}}'\nexit {code}\n",
             calls = self.0.join("calls").display()
         );
+        self.script(name, &body)
+    }
+
+    /// Returns a reclaimer named `name` that runs `body` as a shell script.
+    fn script(&self, name: &str, body: &str) -> Reclaimer {
+        let script = self.0.join(format!("{name}.sh"));
         #[expect(
             clippy::disallowed_methods,
             reason = "the test writes the script a person would configure"
@@ -431,23 +438,177 @@ impl Drop for Scripts {
 /// Runs one memory reclaim with `reclaimers`, and returns the bytes it
 /// freed, the records and the log.
 fn run(reclaimers: Vec<Reclaimer>, quiet: bool) -> (u64, Vec<Reclaimed>, String) {
-    let written = Arc::new(Mutex::new(Vec::new()));
-    let log: Log = written.clone();
     let config = Config {
         reclaimers,
         ..Config::default()
     };
+    let (freed, records, written) = run_with(&config, quiet);
+    (freed, records, text(&written))
+}
+
+/// Runs one memory reclaim with `config`, and returns the bytes it freed,
+/// the records and the log, which a reclaimer left running may still write.
+fn run_with(config: &Config, quiet: bool) -> (u64, Vec<Reclaimed>, Arc<Mutex<Vec<u8>>>) {
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let log: Log = written.clone();
     let mut records = Vec::new();
     let freed = reclaim(
-        &config,
+        config,
         Resource::Memory,
         quiet,
         &log,
         &mut |each| records.push(each),
         &mut |_, _| {},
     );
-    let log = String::from_utf8(written.lock().expect("locks").clone()).expect("UTF-8");
-    (freed, records, log)
+    (freed, records, written)
+}
+
+/// Returns what `written` holds as text.
+fn text(written: &Mutex<Vec<u8>>) -> String {
+    String::from_utf8(written.lock().expect("locks").clone()).expect("UTF-8")
+}
+
+/// The reclaimers that a test leaves running, read from the files their
+/// scripts write their process IDs to. Dropping it ends those not marked
+/// as exited, so none outlives the test.
+pub(crate) struct Left(Vec<Option<PathBuf>>);
+
+impl Left {
+    /// Watches the process IDs that scripts write to `files`.
+    pub(crate) fn new(files: &[&Path]) -> Self {
+        Self(files.iter().map(|file| Some(file.to_path_buf())).collect())
+    }
+
+    /// Returns the process ID in the file at `place`, once a script wrote it
+    /// and while it is not marked as exited.
+    pub(crate) fn pid(&self, place: usize) -> Option<Pid> {
+        let text = std::fs::read_to_string(self.0.get(place)?.as_ref()?).ok()?;
+        Pid::from_raw(text.trim().parse().ok()?)
+    }
+
+    /// Marks the process at `place` as exited and reaped, so the drop never
+    /// signals its process ID, which another process may now hold.
+    pub(crate) fn exited(&mut self, place: usize) {
+        if let Some(file) = self.0.get_mut(place) {
+            *file = None;
+        }
+    }
+
+    /// Reports whether the process in the file at `place` still runs.
+    pub(crate) fn alive(&self, place: usize) -> bool {
+        self.pid(place)
+            .is_some_and(|pid| test_kill_process(pid).is_ok())
+    }
+}
+
+impl Drop for Left {
+    fn drop(&mut self) {
+        for place in 0..self.0.len() {
+            if let Some(pid) = self.pid(place) {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "the test ends the reclaimer that deadband left running"
+                )]
+                let _ = kill_process(pid, Signal::KILL);
+            }
+        }
+    }
+}
+
+/// The reclaim timeout of the tests of a reclaimer that runs too long, and
+/// the ceiling ten times it.
+const SHORT: Duration = Duration::from_millis(20);
+
+#[test]
+fn a_reclaimer_past_its_ceiling_is_left_running_and_its_reclaim_ends_as_failed() {
+    let scripts = Scripts::new();
+    let pid = scripts.0.join("pid");
+    let hung = scripts.script(
+        "hung",
+        &format!("echo $$ > '{}'\nexec sleep 30\n", pid.display()),
+    );
+    let config = Config {
+        reclaimers: vec![hung, scripts.reclaimer("b", 5 * GIB, 5 * GIB, 0)],
+        timeout: SHORT,
+        ..Config::default()
+    };
+    let begun = Instant::now();
+    let (freed, records, written) = run_with(&config, false);
+    let left = Left::new(&[&pid]);
+    assert!(begun.elapsed() >= SHORT * 10, "{:?}", begun.elapsed());
+    assert!(left.alive(0), "deadband never ends a reclaimer");
+    assert_eq!(freed, 0);
+    assert_eq!(scripts.calls(), "", "no other reclaimer is asked");
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].failed.as_deref(),
+        Some("ran past its ceiling of 200ms")
+    );
+    let pid = left.pid(0).expect("the script wrote its process ID");
+    let log = text(&written);
+    assert!(
+        log.contains(&format!(
+            "the reclaimer hung (process {}) ran past its ceiling of 200ms",
+            pid.as_raw_nonzero()
+        )),
+        "{log}"
+    );
+}
+
+#[test]
+fn a_reclaimer_that_exits_after_its_timeout_but_before_its_ceiling_is_waited_for() {
+    let scripts = Scripts::new();
+    let config = Config {
+        reclaimers: vec![scripts.script("slow", "sleep 0.3\n")],
+        timeout: Duration::from_millis(100),
+        ..Config::default()
+    };
+    let begun = Instant::now();
+    let (_, records, written) = run_with(&config, false);
+    assert!(begun.elapsed() >= Duration::from_millis(300));
+    assert_eq!(
+        records[0].failed.as_deref(),
+        Some("ran past its timeout of 100ms")
+    );
+    assert!(!text(&written).contains("ran past its ceiling"));
+}
+
+#[test]
+fn a_reclaimer_that_exits_after_the_daemon_left_it_changes_nothing_but_one_log_line() {
+    let scripts = Scripts::new();
+    let pid = scripts.0.join("pid");
+    let late = scripts.script(
+        "late",
+        &format!(
+            "echo $$ > '{}'\nsleep 0.5\necho '{{\"data\":[{{\"name\":\"w\",\"freed\":1}}]}}'\n",
+            pid.display()
+        ),
+    );
+    let config = Config {
+        reclaimers: vec![late],
+        timeout: SHORT,
+        ..Config::default()
+    };
+    let (freed, records, written) = run_with(&config, false);
+    let mut left = Left::new(&[&pid]);
+    let pid = left.pid(0).expect("the script wrote its process ID");
+    let exited = format!(
+        "the reclaimer late (process {}) exited with code 0 after the daemon stopped waiting for it, so its output is discarded",
+        pid.as_raw_nonzero()
+    );
+    let begun = Instant::now();
+    while !text(&written).contains(&exited) {
+        assert!(
+            begun.elapsed() < Duration::from_secs(10),
+            "{}",
+            text(&written)
+        );
+        std::thread::yield_now();
+    }
+    left.exited(0);
+    assert_eq!(freed, 0);
+    assert_eq!(records.len(), 1);
+    assert_eq!(text(&written).matches("exited with code").count(), 1);
 }
 
 #[test]

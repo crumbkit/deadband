@@ -2,6 +2,7 @@
 //! plan the log shows in one line, then for real, until the bytes freed
 //! cover the need.
 
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use super::{Bytes, Config, Reclaimed, Reclaimer, Report, Resource};
@@ -17,11 +18,14 @@ struct Run {
     failed: Option<String>,
     /// Whether the log already said why it failed.
     logged: bool,
+    /// Whether it ran past its ceiling and was left running.
+    abandoned: bool,
 }
 
 /// Asks each reclaimer of `config` in turn to free `resource`: a dry run
 /// first, then, when the dry run plans to free any bytes, the real run. It
-/// stops once the bytes freed cover the need, and returns the bytes the
+/// stops once the bytes freed cover the need or a reclaimer runs past its
+/// ceiling and is left running, and returns the bytes the
 /// real runs reported freeing. Each reclaimer's outcome goes to `record`,
 /// and each failure to `log` in one line; a failure moves on to the next
 /// reclaimer. Each dry run's plan goes to `planned` with its reclaimer
@@ -52,6 +56,9 @@ pub fn reclaim(
                 );
             }
             record(outcome(reclaimer, &need, None, Some(failed)));
+            if dry.abandoned {
+                return freed;
+            }
             continue;
         };
         if plan.freed_bytes == 0 && quiet {
@@ -98,7 +105,7 @@ pub fn reclaim(
         }
         record(outcome(reclaimer, &need, reported, real.failed));
         freed = freed.saturating_add(reported.unwrap_or(0));
-        if freed >= resource.need_bytes(config) {
+        if real.abandoned || freed >= resource.need_bytes(config) {
             return freed;
         }
     }
@@ -107,7 +114,10 @@ pub fn reclaim(
 
 /// Runs `reclaimer` once with `--need need`, and `--dry-run` when `dry`
 /// holds. When it runs past the config's timeout, the log says so at once,
-/// and the run waits until the reclaimer exits.
+/// and the run waits until the reclaimer exits or the config's ceiling
+/// passes. Past the ceiling, the log names the reclaimer and its process
+/// ID, the run fails and the reclaimer is left running; when it exits
+/// later, the log says so once.
 fn run_once(config: &Config, reclaimer: &Reclaimer, need: &str, dry: bool, log: &Log) -> Run {
     let mut args = vec!["--need", need];
     if dry {
@@ -117,16 +127,44 @@ fn run_once(config: &Config, reclaimer: &Reclaimer, need: &str, dry: bool, log: 
         "ran past its timeout of {}",
         humantime::format_duration(config.timeout)
     );
+    let ceiling = humantime::format_duration(config.ceiling());
     let on_timeout = || {
         note(
             log,
             format_args!(
-                "the reclaimer {} {timed_out}, so the daemon stops waiting for it and starts no other reclaim until it exits",
+                "the reclaimer {} {timed_out}, so the daemon starts no other reclaim until it exits or runs past its ceiling of {ceiling}",
                 reclaimer.name
             ),
         );
     };
-    match reclaimer::run(&reclaimer.command, &args, config.timeout, on_timeout) {
+    let (late_log, name) = (Arc::clone(log), reclaimer.name.clone());
+    let on_late_exit = move |pid: u32, code: Option<i32>| {
+        let how = code.map_or_else(
+            || "on a signal".to_owned(),
+            |code| format!("with code {code}"),
+        );
+        note(
+            &late_log,
+            format_args!(
+                "the reclaimer {name} (process {pid}) exited {how} after the daemon stopped waiting for it, so its output is discarded"
+            ),
+        );
+    };
+    let ended = reclaimer::run(
+        &reclaimer.command,
+        &args,
+        config.timeout,
+        config.ceiling(),
+        on_timeout,
+        on_late_exit,
+    );
+    let failed = |why: String, logged: bool| Run {
+        report: None,
+        failed: Some(why),
+        logged,
+        abandoned: false,
+    };
+    match ended {
         Ok(Ended::Exited { code, stdout }) => {
             let parsed = Report::parse(&stdout);
             let failed = match (code, &parsed) {
@@ -139,21 +177,27 @@ fn run_once(config: &Config, reclaimer: &Reclaimer, need: &str, dry: bool, log: 
                 report: parsed.ok(),
                 failed,
                 logged: false,
+                abandoned: false,
             }
         }
-        Ok(Ended::TimedOut) => Run {
-            report: None,
-            failed: Some(timed_out),
-            logged: true,
-        },
-        Err(error) => Run {
-            report: None,
-            failed: Some(format!(
-                "it could not start {}: {error}",
-                reclaimer.command.program
-            )),
-            logged: false,
-        },
+        Ok(Ended::TimedOut) => failed(timed_out, true),
+        Ok(Ended::Abandoned { pid }) => {
+            note(
+                log,
+                format_args!(
+                    "the reclaimer {} (process {pid}) ran past its ceiling of {ceiling}, so the daemon leaves it running and other reclaims may start",
+                    reclaimer.name
+                ),
+            );
+            Run {
+                abandoned: true,
+                ..failed(format!("ran past its ceiling of {ceiling}"), true)
+            }
+        }
+        Err(error) => failed(
+            format!("it could not start {}: {error}", reclaimer.command.program),
+            false,
+        ),
     }
 }
 

@@ -17,6 +17,7 @@ use crate::cli::{Machine, run_to};
 use crate::daemon::{Settings, bind, serve};
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::Reply;
+use crate::reclaim::tests::Left;
 use crate::reclaim::{CONFIG_FILE, Config};
 
 /// A probe whose memory pressure is always warn, the test hook that forces
@@ -203,7 +204,7 @@ fn under_warn_pressure_the_daemon_runs_the_reclaimer_dry_then_for_real_and_statu
 
 #[test]
 fn a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues() {
-    let reclaimer = Reclaimer::with("100ms", "exec sleep 3");
+    let reclaimer = Reclaimer::with("100ms", "exec sleep 0.4");
     let test = Test::new(Warn);
     start_daemon(&test, &reclaimer);
     let out = status_until(&test, |out| out.contains("ran past its timeout"));
@@ -220,6 +221,26 @@ fn a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues() {
             threads: Threads::new(2)
         }
     );
+}
+
+#[test]
+fn a_reclaimer_past_its_ceiling_shows_as_failed_and_no_reclaim_in_progress() {
+    // Only the first run hangs, so a later reclaim ends at once and leaves
+    // no second process behind.
+    let reclaimer = Reclaimer::with(
+        "20ms",
+        "d=\"$(dirname \"$0\")\"\n\
+         if [ ! -e \"$d/hung\" ]; then : > \"$d/hung\"; echo $$ > \"$d/pid\"; exec sleep 30; fi\n\
+         echo '{\"data\":[]}'",
+    );
+    let left = Left::new(&[&reclaimer.0.join("pid")]);
+    let test = Test::new(Warn);
+    start_daemon(&test, &reclaimer);
+    let out = status_until(&test, |out| {
+        out.contains("ran past its ceiling of 200ms") && out.contains(r#""reclaiming":null"#)
+    });
+    assert!(out.contains(r#""reclaimer":"workspaces""#), "{out}");
+    assert!(left.alive(0), "deadband never ends a reclaimer");
 }
 
 #[test]
