@@ -11,6 +11,15 @@
       "budget": null
     },
     {
+      "rule": "exit-codes/shared-exit",
+      "applies_to": "deadband status",
+      "reason": "status exits 1 with deadband::job::stuck when it lists a stuck job and with deadband::job::unreadable when the daemon could not read the jobs' processes, and declares both so an agent can tell them from a crash",
+      "costs": [
+        "The exit code has two meanings, so an agent must read the failure's code to learn which one applies."
+      ],
+      "budget": null
+    },
+    {
       "rule": "suite/skip",
       "applies_to": "Check::PathWeights",
       "reason": "The help paths have no weight budget yet; a later change measures them and sets one.",

@@ -8,7 +8,7 @@ use crumbkit::schemas::{SCHEMAS_LIST, SCHEMAS_SHOW};
 use crumbkit::tool::{Exit, Failures};
 use crumbkit_skills::{check_leaf, install_leaf, print_leaf};
 
-use super::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED};
+use super::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED, JOB_STUCK, JOB_UNREADABLE};
 use super::service::{
     SERVICE_INSTALL, SERVICE_LAUNCHCTL_FAILED, SERVICE_LOCKED, SERVICE_PLIST_UNREADABLE,
     SERVICE_UNINSTALL, SERVICE_UNLOCATED, SERVICE_UNSUPPORTED, SERVICE_WRITE_FAILED,
@@ -161,7 +161,21 @@ pub const TOOL: Tool = Tool::new()
     )
     .failures(
         Failures::new().exits(&[
+            // `status` exits with crumbkit's default failure code for these.
+            Exit::new(
+                1,
+                "`status` lists a stuck job (`deadband::job::stuck`), or the daemon could not read the jobs' processes (`deadband::job::unreadable`).",
+            )
+            .commands(&[&["status"]])
+            .failures(&[JOB_STUCK, JOB_UNREADABLE]),
             Exit::new(EXIT_MACHINE, "deadband could not read the machine.")
+                .commands(&[
+                    &["status"],
+                    &["run"],
+                    &["daemon"],
+                    #[cfg(feature = "tui")]
+                    &["top"],
+                ])
                 .failures(&[MACHINE_UNREADABLE, MACHINE_UNSUPPORTED]),
             Exit::new(
                 EXIT_DAEMON,

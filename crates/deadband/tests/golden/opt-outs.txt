@@ -1,8 +1,12 @@
-deadband has 4 opt-outs from the conventions.
+deadband has 5 opt-outs from the conventions.
 
 exit-codes/shell-code: deadband run
   Reason: run exits with 126 when the job's program is found but cannot start and with 127 when it is not found, the meanings that env and timeout give these codes
   Cost: An agent cannot tell the code from the one a shell reports, such as 126 when the shell cannot run the tool or 127 when it cannot find it.
+
+exit-codes/shared-exit: deadband status
+  Reason: status exits 1 with deadband::job::stuck when it lists a stuck job and with deadband::job::unreadable when the daemon could not read the jobs' processes, and declares both so an agent can tell them from a crash
+  Cost: The exit code has two meanings, so an agent must read the failure's code to learn which one applies.
 
 suite/skip: Check::PathWeights
   Reason: The help paths have no weight budget yet; a later change measures them and sets one.

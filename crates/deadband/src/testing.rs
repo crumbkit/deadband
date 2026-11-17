@@ -2,7 +2,9 @@
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::daemon::lock_path;
 
@@ -40,7 +42,9 @@ pub(crate) fn socket_path() -> TestSocket {
 }
 
 /// A launchd that records each call in `calls`, answers `is_loaded` from
-/// `loaded`, and fails the call whose first word is `fail`.
+/// `loaded`, and fails the call whose first word is `fail`. Its clock moves
+/// only when a call moves it: each `pause` by
+/// [`PAUSE`](crate::job::launchd::PAUSE) and each `print` by `slow`.
 #[derive(Debug, Default)]
 pub(crate) struct FakeLaunchd {
     /// Whether launchd has loaded the agent.
@@ -57,6 +61,10 @@ pub(crate) struct FakeLaunchd {
     pub(crate) linger: u32,
     /// The per-user temporary directory, or the default when `None`.
     pub(crate) temp: Option<PathBuf>,
+    /// How far each `print` call moves the clock, as a slow launchctl takes.
+    pub(crate) slow: Duration,
+    /// How far the clock has moved since the first fake launchd started it.
+    pub(crate) elapsed: std::sync::Mutex<Duration>,
 }
 
 impl FakeLaunchd {
@@ -88,6 +96,16 @@ impl FakeLaunchd {
             .collect()
     }
 
+    /// Moves the clock forward by `by`, as a slow call does.
+    pub(crate) fn advance(&self, by: Duration) {
+        *self.elapsed.lock().expect("the clock lock") += by;
+    }
+
+    /// Returns how far the clock has moved.
+    pub(crate) fn elapsed(&self) -> Duration {
+        *self.elapsed.lock().expect("the clock lock")
+    }
+
     fn call(&self, line: String) -> Result<(), crate::job::launchd::Failed> {
         let word = line.split(' ').next().unwrap_or_default().to_owned();
         self.calls
@@ -114,6 +132,7 @@ impl crate::job::launchd::Launchd for FakeLaunchd {
 
     fn is_loaded(&self, target: &str) -> Result<bool, crate::job::launchd::Failed> {
         self.call(format!("print {target}"))?;
+        self.advance(self.slow);
         let mut lingering = self.lingering.lock().expect("the lingering lock");
         if *lingering > 0 {
             *lingering -= 1;
@@ -151,6 +170,12 @@ impl crate::job::launchd::Launchd for FakeLaunchd {
             .lock()
             .expect("the calls lock")
             .push("pause".to_owned());
+        self.advance(crate::job::launchd::PAUSE);
+    }
+
+    fn now(&self) -> Instant {
+        static START: OnceLock<Instant> = OnceLock::new();
+        *START.get_or_init(Instant::now) + self.elapsed()
     }
 }
 
