@@ -83,7 +83,7 @@ impl Limits {
     #[must_use]
     pub fn parallelism(&self, lane: Lane) -> Threads {
         let cores = self.cores.map_or(1, NonZeroUsize::get);
-        let normal = (cores / self.max_jobs.get()).max(1);
+        let normal = (cores / self.max_jobs).max(1);
         Threads::new(match lane {
             Lane::Fast => normal.saturating_add(1),
             Lane::Normal => normal,
