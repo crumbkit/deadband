@@ -12,8 +12,9 @@
 //! `jobs.lock` in the state directory and holds it for its life, so one
 //! writer exists per state directory even when two daemons listen on
 //! different sockets. A writer that finds the lock held records nothing and
-//! logs one line. If the writer thread stops, the first line that cannot
-//! reach it is logged once.
+//! logs one line. If the writer thread stops, a line that cannot reach it
+//! marks it stopped, and the daemon's watchdog logs that once after it
+//! releases the queue lock.
 //!
 //! Before each line, the writer checks by device and inode that the lock
 //! and the open file are still the files at their paths. A lock file that
@@ -52,6 +53,8 @@ pub struct Recorder {
     dropped: Arc<AtomicU64>,
     /// Where the recorder says that the writer has stopped.
     log: Log,
+    /// Whether a line has found the writer stopped.
+    stopped: Arc<AtomicBool>,
     /// Whether the log has said so.
     told: Arc<AtomicBool>,
 }
@@ -89,27 +92,38 @@ impl Recorder {
 
     /// Returns a recorder and the end of its channel, which holds at most
     /// `capacity` lines.
-    pub(super) fn channel(capacity: usize, log: Log) -> (Self, Receiver<Line>) {
+    pub(crate) fn channel(capacity: usize, log: Log) -> (Self, Receiver<Line>) {
         let (sender, lines) = mpsc::sync_channel(capacity);
         let recorder = Self {
             sender,
             dropped: Arc::new(AtomicU64::new(0)),
             log,
+            stopped: Arc::new(AtomicBool::new(false)),
             told: Arc::new(AtomicBool::new(false)),
         };
         (recorder, lines)
     }
 
     /// Hands `line` to the writer without waiting. A line that cannot wait
-    /// in the channel is dropped and counted.
+    /// in the channel is dropped and counted. A line that finds the writer
+    /// stopped marks it stopped for [`say_stopped`](Self::say_stopped), and
+    /// writes no log line, because the caller holds the queue lock.
     pub fn send(&self, line: Line) {
         let Err(error) = self.sender.try_send(line) else {
             return;
         };
         self.dropped.fetch_add(1, Ordering::Relaxed);
-        if matches!(error, TrySendError::Disconnected(_))
-            && !self.told.swap(true, Ordering::Relaxed)
-        {
+        if matches!(error, TrySendError::Disconnected(_)) {
+            self.stopped.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Logs once that the writer thread has stopped, when a line has found
+    /// it stopped. [`send`](Self::send) runs with the queue lock held and
+    /// writes no log line, so the daemon's watchdog calls this after it
+    /// releases the lock.
+    pub fn say_stopped(&self) {
+        if self.stopped.load(Ordering::Relaxed) && !self.told.swap(true, Ordering::Relaxed) {
             note(
                 &self.log,
                 format_args!(

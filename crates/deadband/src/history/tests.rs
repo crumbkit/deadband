@@ -888,6 +888,7 @@ fn a_recorder_whose_writer_is_gone_counts_each_line_as_dropped_and_logs_one_line
     recorder.send(machine(1));
     recorder.clone().send(machine(2));
     assert_eq!(recorder.dropped(), 2);
+    recorder.say_stopped();
     let lines = logged(&log);
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].contains("stopped"), "{lines:?}");

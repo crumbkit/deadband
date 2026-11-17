@@ -1,19 +1,26 @@
 //! The daemon ends when its socket file is gone or replaced or when its
-//! sampler panics, and it admits on a reading that has gone stale.
+//! sampler panics, and it admits on a reading that has gone stale. It
+//! writes no log line with the queue lock held, and it empties a standard
+//! error file that has grown past its limit.
 
-use std::io;
+use std::fs::File;
+use std::io::{self, Read as _, Write};
 use std::num::NonZeroUsize;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use super::super::{Log, Settings, bind, serve};
+use super::super::alive::{Ending, LOG_LIMIT, age, standard_error_as, trim};
+use super::super::{Log, Settings, Shared, bind, lock, serve};
+use super::timeline::shared;
 use super::{CORES, Client, Dial, REPLY_WITHIN, SAMPLE_EVERY, granted, jobs, start};
 use crate::admit::Hold;
+use crate::history::Recorder;
+use crate::history::tests::Scratch;
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
 use crate::testing::{TestSocket, socket_path};
 
@@ -60,8 +67,19 @@ fn serving_refusing(
     probe: impl Probe + Clone + Send + 'static,
     refused: Option<&'static str>,
 ) -> Receiver<io::Error> {
+    serving_logged(path, probe, refused, Arc::new(Mutex::new(Vec::new())), None)
+}
+
+/// Starts a daemon as [`serving_refusing`] does, which writes its log lines
+/// to `log` and takes `standard_error` as its standard error.
+fn serving_logged(
+    path: &Path,
+    probe: impl Probe + Clone + Send + 'static,
+    refused: Option<&'static str>,
+    log: Log,
+    standard_error: Option<File>,
+) -> Receiver<io::Error> {
     let bound = bind(path).expect("the test socket binds");
-    let log: Log = Arc::new(Mutex::new(Vec::new()));
     let settings = Settings {
         sample_every: SAMPLE_EVERY,
         ..Settings::new(
@@ -76,6 +94,9 @@ fn serving_refusing(
         let bound = bound;
         if let Some(name) = refused {
             crate::spawn::refuse(name);
+        }
+        if let Some(file) = standard_error {
+            standard_error_as(file);
         }
         let _ = ended.send(serve(&bound.listener, probe, settings, &log));
     });
@@ -262,4 +283,252 @@ fn a_job_starts_when_the_sampler_stalls_and_its_last_reading_holds_the_job() {
     );
     let _stalled = dial.stall();
     assert_eq!(first.reply(), granted(2));
+}
+
+/// A log that sends each line to the test, with whether the queue lock of
+/// `queue` was held when the line was written.
+struct Lines {
+    /// Where each line goes.
+    sent: Sender<(String, bool)>,
+    /// The queue whose lock the log checks, or `None` to check none.
+    queue: Option<Shared>,
+    /// The part of the line written so far.
+    partial: Vec<u8>,
+}
+
+impl Lines {
+    /// Returns a log that checks the lock of `queue`, and the end of the
+    /// channel that its lines arrive on.
+    fn log(queue: Option<Shared>) -> (Log, Receiver<(String, bool)>) {
+        let (sent, lines) = mpsc::channel();
+        let log: Log = Arc::new(Mutex::new(Self {
+            sent,
+            queue,
+            partial: Vec::new(),
+        }));
+        (log, lines)
+    }
+}
+
+impl Write for Lines {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.partial.extend_from_slice(buf);
+        while let Some(end) = self.partial.iter().position(|&byte| byte == b'\n') {
+            let line: Vec<u8> = self.partial.drain(..=end).collect();
+            let held = self
+                .queue
+                .as_ref()
+                .is_some_and(|queue| queue.try_lock().is_err());
+            let _ = self
+                .sent
+                .send((String::from_utf8_lossy(&line).into_owned(), held));
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Waits for the first line of `lines` that contains `text`, and returns
+/// whether the queue lock was held when it was written.
+fn line_with(lines: &Receiver<(String, bool)>, text: &str) -> bool {
+    let until = Instant::now() + REPLY_WITHIN;
+    loop {
+        let left = until.saturating_duration_since(Instant::now());
+        let (line, held) = lines
+            .recv_timeout(left)
+            .unwrap_or_else(|_| panic!("the log says {text:?}"));
+        if line.contains(text) {
+            return held;
+        }
+    }
+}
+
+/// Whether a [`Gated`] log holds its writes, and how many writes wait.
+#[derive(Default)]
+struct GateState {
+    closed: bool,
+    waiting: usize,
+}
+
+/// A gate that holds every write to a [`Gated`] log while it is closed, as
+/// a stopped terminal or an unread pipe does.
+#[derive(Clone, Default)]
+struct Gate(Arc<(Mutex<GateState>, Condvar)>);
+
+impl Gate {
+    fn set(&self, closed: bool) {
+        let (state, changed) = &*self.0;
+        state.lock().unwrap_or_else(PoisonError::into_inner).closed = closed;
+        changed.notify_all();
+    }
+
+    /// Reports whether a write waits at the closed gate within `within`.
+    fn holds_a_write(&self, within: Duration) -> bool {
+        let (state, changed) = &*self.0;
+        let state = state.lock().unwrap_or_else(PoisonError::into_inner);
+        let (state, _) = changed
+            .wait_timeout_while(state, within, |state| state.waiting == 0)
+            .unwrap_or_else(PoisonError::into_inner);
+        state.waiting > 0
+    }
+}
+
+/// A log whose writes wait while its [`Gate`] is closed.
+struct Gated(Gate);
+
+impl Write for Gated {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let (state, changed) = &*self.0.0;
+        let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.waiting += 1;
+        changed.notify_all();
+        while state.closed {
+            state = changed.wait(state).unwrap_or_else(PoisonError::into_inner);
+        }
+        state.waiting -= 1;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn status_and_a_grant_complete_while_the_stale_reading_line_cannot_be_written() {
+    let dial = Dial::new(Pressure::Normal);
+    let gate = Gate::default();
+    let path = socket_path();
+    let log: Log = Arc::new(Mutex::new(Gated(gate.clone())));
+    let _ends = serving_logged(&path, dial.clone(), None, log, None);
+    let _ = jobs(&path);
+    gate.set(true);
+    let stalled = dial.stall();
+    assert!(
+        gate.holds_a_write(REPLY_WITHIN),
+        "the watchdog writes that the reading is stale"
+    );
+    assert!(jobs(&path).waiting.is_empty());
+    assert_eq!(Client::ask(&path, "a").reply(), granted(2));
+    gate.set(false);
+    drop(stalled);
+}
+
+#[test]
+fn the_line_that_the_history_thread_stopped_is_written_with_the_queue_lock_released() {
+    let shared = shared(1);
+    let (log, lines) = Lines::log(Some(Arc::clone(&shared)));
+    let (recorder, writer_end) = Recorder::channel(1, Arc::clone(&log));
+    drop(writer_end);
+    {
+        let mut state = lock(&shared);
+        state.settings.sample_every = SAMPLE_EVERY;
+        state.settings.machine_every = Duration::ZERO;
+        state.recorder = Some(recorder);
+        state.write_machine(Instant::now());
+    }
+    let path = socket_path();
+    let listener = UnixListener::bind(&*path).expect("the test socket binds");
+    let (reason, _ends) = mpsc::channel();
+    let ending = Ending::new(&listener, reason);
+    let (_stop, stopped) = mpsc::channel::<()>();
+    let watchdog = Arc::clone(&shared);
+    thread::spawn(move || age(&watchdog, &stopped, &log, ending));
+    assert!(
+        !line_with(&lines, "job history has stopped"),
+        "the line was written with the queue lock held"
+    );
+}
+
+/// Opens the log file at `path`, for appending when `append` and for
+/// writing in place otherwise.
+fn open_log(path: &Path, append: bool) -> File {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test makes the log file that launchd would open for appending"
+    )]
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(!append)
+        .append(append)
+        .open(path)
+        .expect("the log file opens");
+    file
+}
+
+/// Returns a file in `scratch` opened for appending, as launchd opens the
+/// daemon's log, that is `len` bytes long, and a second handle on it that
+/// writes in place.
+fn appended(scratch: &Scratch, len: u64) -> (File, File) {
+    let path = scratch.path().join("deadband.log");
+    let file = open_log(&path, true);
+    file.set_len(len).expect("the log file grows");
+    (file, open_log(&path, false))
+}
+
+#[test]
+fn a_standard_error_file_over_the_limit_is_emptied_at_start_and_at_the_alive_check() {
+    let scratch = Scratch::new();
+    let (file, other) = appended(&scratch, LOG_LIMIT + 1);
+    let (log, lines) = Lines::log(None);
+    let path = socket_path();
+    let _ends = serving_logged(&path, Dial::new(Pressure::Normal), None, log, Some(file));
+    let _ = line_with(&lines, "emptied");
+    assert_eq!(other.metadata().expect("the file reads").len(), 0);
+    other.set_len(LOG_LIMIT + 1).expect("the log file grows");
+    let _ = line_with(&lines, "emptied");
+    assert_eq!(other.metadata().expect("the file reads").len(), 0);
+}
+
+#[test]
+fn a_standard_error_file_at_the_limit_is_left_alone() {
+    let scratch = Scratch::new();
+    let (file, other) = appended(&scratch, LOG_LIMIT);
+    let (log, lines) = Lines::log(None);
+    let path = socket_path();
+    let _ends = serving_logged(&path, Dial::new(Pressure::Normal), None, log, Some(file));
+    let _ = jobs(&path);
+    // Two alive checks pass in this time, at 60 samples of 10 ms each.
+    let quiet = Instant::now() + Duration::from_millis(1500);
+    while let Ok((line, _)) = lines.recv_timeout(quiet.saturating_duration_since(Instant::now())) {
+        assert!(!line.contains("emptied"), "{line}");
+    }
+    assert_eq!(other.metadata().expect("the file reads").len(), LOG_LIMIT);
+}
+
+#[test]
+fn a_pipe_as_standard_error_is_never_emptied() {
+    let (mut reader, mut writer) = io::pipe().expect("the pipe opens");
+    writer.write_all(b"kept\n").expect("the pipe takes a line");
+    let (log, lines) = Lines::log(None);
+    trim(&File::from(std::os::fd::OwnedFd::from(writer)), 0, &log);
+    let mut kept = [0_u8; 5];
+    reader
+        .read_exact(&mut kept)
+        .expect("the line is still there");
+    assert_eq!(&kept, b"kept\n");
+    assert!(lines.try_recv().is_err(), "the daemon logs nothing");
+}
+
+#[test]
+fn a_regular_file_as_standard_error_is_emptied_past_its_limit() {
+    let scratch = Scratch::new();
+    let (file, other) = appended(&scratch, 1);
+    let (log, lines) = Lines::log(None);
+    trim(&file, 0, &log);
+    assert_eq!(other.metadata().expect("the file reads").len(), 0);
+    let _ = line_with(&lines, "emptied");
+}
+
+#[test]
+fn a_file_not_opened_for_appending_is_never_emptied() {
+    let scratch = Scratch::new();
+    let (_appending, other) = appended(&scratch, 1);
+    let (log, lines) = Lines::log(None);
+    trim(&other, 0, &log);
+    assert_eq!(other.metadata().expect("the file reads").len(), 1);
+    assert!(lines.try_recv().is_err(), "the daemon logs nothing");
 }
