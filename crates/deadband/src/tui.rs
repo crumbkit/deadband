@@ -30,10 +30,10 @@ use self::guard::{Guard, Modes};
 use self::model::Model;
 
 /// The code of `deadband top` that has no terminal to draw on.
-pub const TOP_NOT_A_TERMINAL: Code = Code::new("deadband", "top", "not_a_terminal");
+pub const TOP_NOT_A_TERMINAL: Code = Code::from_spelling("deadband::top::not_a_terminal");
 
 /// The code of a terminal that `deadband top` could not use.
-pub const TOP_TERMINAL_FAILED: Code = Code::new("deadband", "top", "terminal_failed");
+pub const TOP_TERMINAL_FAILED: Code = Code::from_spelling("deadband::top::terminal_failed");
 
 /// How long one poll waits for the daemon. Keys wait at most this long.
 const POLL_WITHIN: Duration = Duration::from_millis(500);

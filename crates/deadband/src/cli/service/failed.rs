@@ -9,25 +9,27 @@ use crumbkit::{Code, Failure};
 use crate::job::launchd::Failed;
 
 /// The code of a `service` command on a platform that has no launchd.
-pub const SERVICE_UNSUPPORTED: Code = Code::new("deadband", "service", "unsupported");
+pub const SERVICE_UNSUPPORTED: Code = Code::from_spelling("deadband::service::unsupported");
 
 /// The code of a `service` command that found no home directory or no path
 /// to its own binary.
-pub const SERVICE_UNLOCATED: Code = Code::new("deadband", "service", "unlocated");
+pub const SERVICE_UNLOCATED: Code = Code::from_spelling("deadband::service::unlocated");
 
 /// The code of an install that found a file it cannot read as a plist.
-pub const SERVICE_PLIST_UNREADABLE: Code = Code::new("deadband", "service", "plist_unreadable");
+pub const SERVICE_PLIST_UNREADABLE: Code =
+    Code::from_spelling("deadband::service::plist_unreadable");
 
 /// The code of a `service` command that could not write or delete the plist,
 /// or make or lock its lock file.
-pub const SERVICE_WRITE_FAILED: Code = Code::new("deadband", "service", "write_failed");
+pub const SERVICE_WRITE_FAILED: Code = Code::from_spelling("deadband::service::write_failed");
 
 /// The code of a `service` command whose launchctl or getconf run failed.
-pub const SERVICE_LAUNCHCTL_FAILED: Code = Code::new("deadband", "service", "launchctl_failed");
+pub const SERVICE_LAUNCHCTL_FAILED: Code =
+    Code::from_spelling("deadband::service::launchctl_failed");
 
 /// The code of a `service` command that waited for another one to finish
 /// and gave up.
-pub const SERVICE_LOCKED: Code = Code::new("deadband", "service", "locked");
+pub const SERVICE_LOCKED: Code = Code::from_spelling("deadband::service::locked");
 
 /// Why a `service` command changed nothing, or stopped part way.
 #[derive(Debug, Failure)]

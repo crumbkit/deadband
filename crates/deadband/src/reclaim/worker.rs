@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use super::{Bytes, Config, Reclaimed, Reclaimer, Report, Resource};
+use super::{Bytes, Config, Reclaimed, Reclaimer, Report, Resource, ShownAge};
 use crate::daemon::{Log, note};
 use crate::job::reclaimer::{self, Ended};
 
@@ -123,11 +123,8 @@ fn run_once(config: &Config, reclaimer: &Reclaimer, need: &str, dry: bool, log: 
     if dry {
         args.push("--dry-run");
     }
-    let timed_out = format!(
-        "ran past its timeout of {}",
-        humantime::format_duration(config.timeout)
-    );
-    let ceiling = humantime::format_duration(config.ceiling());
+    let timed_out = format!("ran past its timeout of {}", ShownAge(config.timeout));
+    let ceiling = ShownAge(config.ceiling());
     let on_timeout = || {
         note(
             log,

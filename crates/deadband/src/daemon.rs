@@ -15,7 +15,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -49,7 +49,7 @@ pub use self::bind::{
     Bound, DAEMON_RUNNING, DirectoryFault, SOCKET_DIRECTORY, SOCKET_UNUSABLE, Unbound, bind,
     lock_path, raise_descriptor_limit,
 };
-pub(crate) use self::bind::{private_directory, take_lock};
+pub(crate) use self::bind::{make_state_dir, private_directory, take_lock};
 #[cfg(test)]
 pub(crate) use self::bind::{private_directory_as, take_lock_as};
 pub use self::settings::{Settings, Watching, default_max_jobs};
@@ -62,8 +62,7 @@ pub const SAMPLE_EVERY: Duration = Duration::from_secs(1);
 /// released, so this wait never holds the lock.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// How long the daemon waits for a new connection's first line before it
-/// closes the connection.
+/// How long the daemon waits for a connection's first line before it closes it.
 pub const FIRST_LINE_WITHIN: Duration = Duration::from_secs(2);
 
 /// How long the daemon waits after a failed accept before it accepts
@@ -189,8 +188,7 @@ impl State {
 type Shared = Arc<Mutex<State>>;
 
 /// Locks `shared`. A thread that panicked while it held the lock left the
-/// queue whole, because every change to it is one call, so the daemon
-/// keeps using it.
+/// queue whole, because every change to it is one call, so the daemon uses it.
 fn lock(shared: &Shared) -> MutexGuard<'_, State> {
     shared.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -398,25 +396,4 @@ fn start_reclaim(
         );
         lock(shared).skip_reclaim();
     }
-}
-
-/// The mode of the state directory: only its owner may enter it.
-const STATE_DIR_MODE: u32 = 0o700;
-
-/// Makes the state directory `directory` with mode 0700 when it does not
-/// exist, and sets that mode when it does. The history writer, the reclaim
-/// lock and the service lock each call it before they open a file there, so
-/// whichever runs first leaves the directory private.
-///
-/// # Errors
-///
-/// Returns the error of making the directory or of setting its mode.
-pub(crate) fn make_state_dir(directory: &Path) -> io::Result<()> {
-    use std::fs::{self, DirBuilder, Permissions};
-    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
-    DirBuilder::new()
-        .recursive(true)
-        .mode(STATE_DIR_MODE)
-        .create(directory)?;
-    fs::set_permissions(directory, Permissions::from_mode(STATE_DIR_MODE))
 }

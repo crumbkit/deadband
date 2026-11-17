@@ -7,6 +7,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use super::size_bytes;
+use super::text::parse_age;
 
 /// One reclaimer: a name for the log and `deadband status`, and the command
 /// that the daemon runs with `--need` added.
@@ -70,7 +71,7 @@ pub(crate) struct File {
 /// Returns the age that `value` gives, or `default` when it is `None`.
 pub(super) fn age(value: Option<String>, default: Duration) -> Result<Duration, String> {
     value.map_or(Ok(default), |value| {
-        humantime::parse_duration(&value)
+        parse_age(&value)
             .map_err(|error| format!("{value:?} is not an age such as \"60s\": {error}"))
     })
 }

@@ -59,6 +59,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `beats` field, `Reply` has a `Beat` variant and `client::Unasked` has a
   `Hung` variant. `admission::admit` always asks for beats. On the wire both
   fields are left out when false, so an older peer reads the same lines.
+- deadband reads and prints ages with jiff in place of humantime, which
+  RUSTSEC-2026-0542 marks unmaintained. Every age that the docs use, such as
+  `"60s"`, `"5m"`, `"1h 30m"`, `"2 hours"` and `"1d"`, reads as before, and
+  log and status text prints ages as before, such as `1m`, `50m`, `1h 30m`
+  and `1day 2h`. Config ages now also accept a fraction such as `"1.5m"`, a
+  comma between units such as `"1h, 30m"`, and a leading `+` such as
+  `"+5m"`. Config ages in months or years, such as `"1M"` or `"1y"`, are now
+  refused. A refused age keeps its message's start and gives jiff's reason.
+- `deadband skills install`, `check` and `print` name deadband in their help
+  and examples, such as "Install deadband's skills into each agent skills
+  directory that exists", in place of "this tool's skills".
+- The failure in the JSON documents of `deadband status`, `service install`
+  and `service uninstall` may hold crumbkit 0.6.0's new recovery steps, a
+  `program` step and an `after` step, and a `causes` list. Their schemas
+  gain these as options and drop nothing.
 
 ### Fixed
 
