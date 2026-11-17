@@ -90,8 +90,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `commands list` and `docs/commands.md` give `deadband status` its exit 1,
   with `deadband::job::stuck` and `deadband::job::unreadable`, so an agent
   can tell a stuck job from a crash. They list exit 3, which says deadband
-  could not read the machine, only for `status`, `run`, `daemon` and `top`,
-  where they used to list it for every command.
+  could not read the machine, only for `status`, the one command that exits
+  with it, where they used to list it for every command.
 - The waits of `deadband service install` and `uninstall` end at a time:
   two seconds for the new daemon to answer, five seconds for launchd to
   unload the old one and ten seconds for another service command's lock.

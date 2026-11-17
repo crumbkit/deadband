@@ -77,7 +77,6 @@ Writes: applies all items or none.
 
 ### Exit codes
 
-- `3`: deadband could not read the machine.
 - `126`: the program given to `run` was found but could not start.
 - `127`: the program given to `run` was not found.
 
@@ -103,7 +102,6 @@ Effects: additive, not idempotent, closed-world.
 
 ### Exit codes
 
-- `3`: deadband could not read the machine.
 - `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband service`
@@ -184,7 +182,6 @@ Effects: read-only, closed-world.
 
 ### Exit codes
 
-- `3`: deadband could not read the machine.
 - `5`: `top` has no terminal to draw on, or lost it.
 - `130`: the person pressed Ctrl-C in `top`.
 

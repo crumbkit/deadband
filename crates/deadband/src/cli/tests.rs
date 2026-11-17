@@ -1129,19 +1129,19 @@ fn commands_list_gives_status_exit_1_with_the_stuck_and_unreadable_codes() {
 }
 
 #[test]
-fn commands_list_gives_exit_3_only_to_the_commands_that_read_the_machine() {
-    let mut reading = vec!["deadband status", "deadband run", "deadband daemon"];
-    if cfg!(feature = "tui") {
-        reading.push("deadband top");
-    }
-    for path in reading {
-        assert!(meaning(&exits_of(path), 3).is_some(), "{path}");
-    }
+fn commands_list_gives_exit_3_to_status_alone() {
+    assert!(meaning(&exits_of("deadband status"), 3).is_some());
     for path in [
+        "deadband run",
+        "deadband daemon",
+        "deadband top",
         "deadband completion print",
         "deadband commands list",
         "deadband service install",
     ] {
+        if path == "deadband top" && !cfg!(feature = "tui") {
+            continue;
+        }
         assert_eq!(meaning(&exits_of(path), 3), None, "{path}");
     }
 }

@@ -169,13 +169,7 @@ pub const TOOL: Tool = Tool::new()
             .commands(&[&["status"]])
             .failures(&[JOB_STUCK, JOB_UNREADABLE]),
             Exit::new(EXIT_MACHINE, "deadband could not read the machine.")
-                .commands(&[
-                    &["status"],
-                    &["run"],
-                    &["daemon"],
-                    #[cfg(feature = "tui")]
-                    &["top"],
-                ])
+                .commands(&[&["status"]])
                 .failures(&[MACHINE_UNREADABLE, MACHINE_UNSUPPORTED]),
             Exit::new(
                 EXIT_DAEMON,

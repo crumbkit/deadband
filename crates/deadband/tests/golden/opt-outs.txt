@@ -5,7 +5,7 @@ exit-codes/shell-code: deadband run
   Cost: An agent cannot tell the code from the one a shell reports, such as 126 when the shell cannot run the tool or 127 when it cannot find it.
 
 exit-codes/shared-exit: deadband status
-  Reason: status exits 1 with deadband::job::stuck when it lists a stuck job and with deadband::job::unreadable when the daemon could not read the jobs' processes, and declares both so an agent can tell them from a crash
+  Reason: status already exits 1 with deadband::job::stuck when it lists a stuck job and with deadband::job::unreadable when the daemon could not read the jobs' processes, a contract that docs/running.md and docs/architecture.md document, so moving them to a code of their own would break callers. The tool record declares both so an agent can tell them from a crash.
   Cost: The exit code has two meanings, so an agent must read the failure's code to learn which one applies.
 
 suite/skip: Check::PathWeights

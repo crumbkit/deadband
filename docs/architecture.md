@@ -378,7 +378,7 @@ again every 100 ms, about ten seconds in all, and then refuses with
 or waiting jobs, or that does not answer, unless `--restart` is given. With
 `--restart`, and on uninstall, the report gives the running and waiting jobs
 the daemon held, or says that it did not answer. After `bootstrap`, install
-asks the socket up to 20 times and reports whether the new daemon answers.
+asks the socket for two seconds and reports whether the new daemon answers.
 It says so when a daemon that launchd did not start already holds the
 socket. The plist's `KeepAlive` sets `SuccessfulExit` to false, so launchd
 restarts a daemon that exits nonzero or by a signal and leaves one that
