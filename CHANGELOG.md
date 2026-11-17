@@ -55,6 +55,22 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the reclaimer exits later, its output is discarded and its exit is logged
   once. In the library, `job::reclaimer::run` takes the ceiling and a
   callback for such a late exit, and `Ended` has an `Abandoned` variant.
+- The daemon writes no log line and checks no file while it holds its queue
+  lock. The watchdog used to check the socket file and write the line about
+  a stale reading with the lock held, and a line that found the history
+  thread stopped was written the same way. When the daemon's standard error
+  blocked, as a stopped terminal or an unread pipe does, no job was granted
+  or queued and `deadband status` got no reply. The watchdog now writes both
+  lines after it releases the lock, and it may now grant the jobs that a
+  stale reading lets start in the same pass that finds the socket file gone.
+  In the library, `history::Recorder::send` no longer writes a log line, and
+  the new `Recorder::say_stopped` writes the line that the writer has
+  stopped, once, when a line has found it stopped.
+- The daemon keeps its log file under 8 MiB. When its standard error is a
+  regular file opened for appending, as launchd opens
+  `~/Library/Logs/deadband.log`, and that file is longer than 8 MiB at start
+  or at the check once a minute, the daemon empties it and logs one line
+  saying so. The log used to grow without limit.
 - The daemon keeps a reclaimer's whole report when the machine runs the
   thread that reads it late. Once the reclaimer exits, the daemon reads what
   its standard output already holds, where it used to stop reading 250 ms

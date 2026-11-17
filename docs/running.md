@@ -774,6 +774,14 @@ agent and does not wait for an answer. After you stop that daemon, run
 `deadband service install --restart` and launchd starts its own daemon;
 otherwise launchd starts it at the next login.
 
+launchd appends the daemon's standard error to
+`~/Library/Logs/deadband.log`. When that file is longer than 8 MiB at start,
+or at the check the daemon makes once a minute, the daemon empties it and
+logs one line saying so, and launchd keeps writing to the same file. The
+daemon empties only a regular file opened for appending, so a daemon run by
+hand with its standard error on a terminal, a pipe or a file opened with
+`2>` (which does not append) leaves it alone; use `2>>` to have it limited.
+
 When no daemon answers, `deadband status` says
 `daemon: not installed; run deadband service install` when the plist is
 missing, and `daemon: installed but not loaded; run deadband service
