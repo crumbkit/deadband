@@ -370,7 +370,10 @@ impl fmt::Display for Reclaimed {
 /// and measures its age now, when the client reads the daemon's answer.
 fn ended_at<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Age, D::Error> {
     let text = String::deserialize(deserializer)?;
-    let at = humantime::parse_rfc3339_weak(&text).map_err(serde::de::Error::custom)?;
+    let at = text
+        .parse::<jiff::Timestamp>()
+        .and_then(SystemTime::try_from)
+        .map_err(serde::de::Error::custom)?;
     Ok(Age::since(at, SystemTime::now()))
 }
 

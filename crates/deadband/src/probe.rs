@@ -41,11 +41,11 @@ mod tests;
 
 /// The code of a failure to read the machine on a platform that deadband
 /// reads.
-pub const MACHINE_UNREADABLE: Code = Code::new("deadband", "machine", "unreadable");
+pub const MACHINE_UNREADABLE: Code = Code::from_spelling("deadband::machine::unreadable");
 
 /// The code of a failure to read the machine on a platform that deadband
 /// does not read yet.
-pub const MACHINE_UNSUPPORTED: Code = Code::new("deadband", "machine", "unsupported");
+pub const MACHINE_UNSUPPORTED: Code = Code::from_spelling("deadband::machine::unsupported");
 
 /// Something that takes one sample of the machine.
 pub trait Probe {

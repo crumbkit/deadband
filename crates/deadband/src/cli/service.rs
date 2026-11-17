@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use clap::{Args, Subcommand};
 use crumbkit::{Document, DryRun, Prose, Yes};
+use crumbkit_durable::{Mode, WriteStep};
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -374,7 +375,13 @@ fn write(path: &Path, text: &str) -> Result<(), ServiceFailed> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(failed)?;
     }
-    crumbkit::files::write_atomically(path, text).map_err(failed)
+    // The plist is written with the umask's mode, as `File::create` makes a
+    // file. A failed sync of the directory after the rename leaves the new
+    // plist in place, so it counts as written.
+    match crumbkit_durable::write_atomically(path, text.as_bytes(), Mode::Umask) {
+        Err(error) if error.step != WriteStep::SyncDirectory => Err(failed(error.source)),
+        _ => Ok(()),
+    }
 }
 
 /// The document that `deadband service install` prints.

@@ -1,4 +1,4 @@
-Print this tool's skill
+Print deadband's skill
 
 Usage: deadband skills print [OPTIONS]
 
@@ -14,6 +14,6 @@ Options:
 
 Examples:
   deadband skills print
-          Print the skill
+          Print deadband's skill
 
 Effects: read-only, closed-world.

@@ -6,8 +6,8 @@ use crumbkit::completion::{COMPLETION_CHECK, COMPLETION_INSTALL, COMPLETION_PRIN
 use crumbkit::help::{Effects, Example, FileFormat, Goal, Group, Help, Leaf};
 use crumbkit::schemas::{SCHEMAS_LIST, SCHEMAS_SHOW};
 use crumbkit::tool::{Exit, Failures};
-use crumbkit_skills::{check_leaf, install_leaf, print_leaf};
 
+use super::SkillsCommand;
 use super::commands::{JOB_NOT_FOUND, JOB_NOT_STARTED, JOB_STUCK, JOB_UNREADABLE};
 use super::service::{
     SERVICE_INSTALL, SERVICE_LAUNCHCTL_FAILED, SERVICE_LOCKED, SERVICE_PLIST_UNREADABLE,
@@ -132,9 +132,9 @@ pub const TOOL: Tool = Tool::new()
                     )])
                     .document(SCHEMAS_SHOW)
                     .effects(Effects::read_only()),
-                install_leaf(&["skills", "install"]),
-                check_leaf(&["skills", "check"]),
-                print_leaf(&["skills", "print"]),
+                SkillsCommand::install_leaf(&["skills", "install"]),
+                SkillsCommand::check_leaf(&["skills", "check"]),
+                SkillsCommand::print_leaf(&["skills", "print"]),
                 Leaf::new(&["completion", "install"])
                     .examples(&[
                         Example::new(&["--shell", "fish"], "Install deadband's completion for fish"),

@@ -14,13 +14,13 @@ use rustix::process::{Resource, Rlimit, getrlimit, getuid, setrlimit, umask};
 
 /// The code of a refusal to start a daemon while another one holds the
 /// same socket.
-pub const DAEMON_RUNNING: Code = Code::new("deadband", "daemon", "running");
+pub const DAEMON_RUNNING: Code = Code::from_spelling("deadband::daemon::running");
 
 /// The code of a socket that the daemon could not listen on.
-pub const SOCKET_UNUSABLE: Code = Code::new("deadband", "socket", "unusable");
+pub const SOCKET_UNUSABLE: Code = Code::from_spelling("deadband::socket::unusable");
 
 /// The code of a socket directory that deadband refuses to listen in.
-pub const SOCKET_DIRECTORY: Code = Code::new("deadband", "socket", "directory");
+pub const SOCKET_DIRECTORY: Code = Code::from_spelling("deadband::socket::directory");
 
 /// The file mode bits that the umask clears while the daemon makes its
 /// socket and lock file: every bit for the group and for others.
