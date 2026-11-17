@@ -382,6 +382,9 @@ mod reclaimer {
     use crate::job::CommandLine;
     use crate::job::reclaimer::{Ended, delay_reading, run};
 
+    /// A ceiling that no test's reclaimer reaches.
+    const CEILING: Duration = Duration::from_secs(60);
+
     fn sh(script: &str) -> CommandLine {
         CommandLine::of(&["/bin/sh", "-c", script])
     }
@@ -421,7 +424,14 @@ mod reclaimer {
      {
         let command = sh("head -c 65536 /dev/zero | tr '\\0' a");
         delay_reading(Duration::from_secs(1));
-        let ended = run(&command, &[], Duration::from_secs(30), || {});
+        let ended = run(
+            &command,
+            &[],
+            Duration::from_secs(30),
+            CEILING,
+            || {},
+            |_, _| {},
+        );
         delay_reading(Duration::ZERO);
         let Ended::Exited { code, stdout } = ended.expect("the reclaimer starts and is waited for")
         else {
@@ -434,7 +444,14 @@ mod reclaimer {
 
     #[test]
     fn a_reclaimer_whose_output_is_read_on_time_yields_its_whole_report() {
-        let ended = run(&sh("echo kept"), &[], Duration::from_secs(30), || {});
+        let ended = run(
+            &sh("echo kept"),
+            &[],
+            Duration::from_secs(30),
+            CEILING,
+            || {},
+            |_, _| {},
+        );
         assert_eq!(
             ended.expect("the reclaimer starts and is waited for"),
             Ended::Exited {
@@ -451,8 +468,15 @@ mod reclaimer {
             "sleep 60 & echo $! > '{}'; echo kept",
             background.0.display()
         );
-        let ended = run(&sh(&script), &[], Duration::from_secs(120), || {})
-            .expect("the reclaimer starts and is waited for");
+        let ended = run(
+            &sh(&script),
+            &[],
+            Duration::from_secs(120),
+            CEILING,
+            || {},
+            |_, _| {},
+        )
+        .expect("the reclaimer starts and is waited for");
         let pid = background
             .pid()
             .expect("the script wrote the background ID");
@@ -472,9 +496,16 @@ mod reclaimer {
     #[test]
     fn a_reclaimer_past_its_deadline_calls_on_timeout_once_and_is_waited_for() {
         let mut calls = 0;
-        let ended = run(&sh("sleep 0.3"), &[], Duration::from_millis(20), || {
-            calls += 1;
-        });
+        let ended = run(
+            &sh("sleep 0.3"),
+            &[],
+            Duration::from_millis(20),
+            CEILING,
+            || {
+                calls += 1;
+            },
+            |_, _| {},
+        );
         assert_eq!(calls, 1);
         assert_eq!(
             ended.expect("the reclaimer starts and is waited for"),
@@ -489,7 +520,9 @@ mod reclaimer {
             &CommandLine::of(&["true"]),
             &[],
             Duration::from_secs(30),
+            CEILING,
             || {},
+            |_, _| {},
         );
         crate::spawn::allow();
         assert!(ended.is_err(), "{ended:?}");
@@ -500,7 +533,14 @@ mod reclaimer {
         let started = Background::new();
         let script = format!("touch '{}'", started.0.display());
         crate::spawn::refuse("deadband-reclaimer-read");
-        let ended = run(&sh(&script), &[], Duration::from_secs(30), || {});
+        let ended = run(
+            &sh(&script),
+            &[],
+            Duration::from_secs(30),
+            CEILING,
+            || {},
+            |_, _| {},
+        );
         crate::spawn::allow();
         assert!(ended.is_err(), "{ended:?}");
         assert!(!started.0.exists(), "the reclaimer started");

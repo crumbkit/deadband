@@ -531,8 +531,15 @@ A reclaimer that cannot start, exits with a code other than 0, prints
 something other than its report, or runs past `reclaim_timeout` counts as
 failed. The daemon logs the failure in one line and moves on to the next
 reclaimer. A failed reclaimer holds no job. deadband never signals or
-stops a reclaimer. When one runs past its timeout, the daemon stops
-waiting for it and starts no other reclaim until it exits.
+stops a reclaimer. When one runs past its timeout, the daemon logs that
+and keeps waiting for it, and starts no other reclaim, until it exits or
+runs for 10 times `reclaim_timeout` (50 minutes with the default), its
+ceiling. Past the ceiling, the daemon logs one line that names the
+reclaimer and its process ID, stops waiting for it and leaves it running.
+The reclaim ends there and counts as failed with `ran past its ceiling of
+<ceiling>`, which `status` and `top` show, and the next reclaim may start,
+from this daemon or another. If the reclaimer exits later, the daemon
+discards its output and logs its exit in one line.
 
 The reclaimer reads nothing on standard input, and the daemon discards its
 standard error. Once the reclaimer exits, the daemon reads what its standard

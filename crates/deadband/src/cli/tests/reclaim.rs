@@ -203,7 +203,7 @@ fn under_warn_pressure_the_daemon_runs_the_reclaimer_dry_then_for_real_and_statu
 
 #[test]
 fn a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues() {
-    let reclaimer = Reclaimer::with("100ms", "exec sleep 3");
+    let reclaimer = Reclaimer::with("100ms", "exec sleep 0.4");
     let test = Test::new(Warn);
     start_daemon(&test, &reclaimer);
     let out = status_until(&test, |out| out.contains("ran past its timeout"));

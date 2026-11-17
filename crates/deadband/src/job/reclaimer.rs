@@ -15,7 +15,7 @@
 //! - Streams and deadline: the reclaimer reads nothing on standard input,
 //!   deadband keeps the first [`MAX_OUTPUT`] bytes of its standard output
 //!   and drops the rest, and discards its standard error. The deadline is
-//!   the timeout the caller passes. When it passes, [`run_until`] calls the
+//!   the timeout the caller passes. When it passes, [`run`] calls the
 //!   caller's `on_timeout` and keeps waiting until the reclaimer exits or
 //!   the caller's ceiling passes, so the daemon runs no second reclaimer
 //!   before then. Past the ceiling it stops waiting and returns
@@ -124,24 +124,6 @@ impl Reader {
 }
 
 /// Runs `command` with `args` added, and waits for it. When `timeout`
-/// passes first, it calls `on_timeout`, waits until the reclaimer exits,
-/// and returns [`Ended::TimedOut`].
-///
-/// # Errors
-///
-/// Returns the operating system's error when it refuses the reading or the
-/// waiting thread, and the error of a program that could not start or be
-/// waited for.
-pub fn run(
-    command: &CommandLine,
-    args: &[&str],
-    timeout: Duration,
-    on_timeout: impl FnOnce(),
-) -> io::Result<Ended> {
-    run_until(command, args, timeout, Duration::MAX, on_timeout, |_, _| {})
-}
-
-/// Runs `command` with `args` added, and waits for it. When `timeout`
 /// passes first, it calls `on_timeout` and waits until the reclaimer exits,
 /// which returns [`Ended::TimedOut`], or until `ceiling`, counted from the
 /// start, passes. Then it returns [`Ended::Abandoned`] and leaves the
@@ -154,7 +136,7 @@ pub fn run(
 /// Returns the operating system's error when it refuses the reading or the
 /// waiting thread, and the error of a program that could not start or be
 /// waited for.
-pub fn run_until(
+pub fn run(
     command: &CommandLine,
     args: &[&str],
     timeout: Duration,

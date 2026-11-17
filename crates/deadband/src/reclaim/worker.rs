@@ -150,7 +150,7 @@ fn run_once(config: &Config, reclaimer: &Reclaimer, need: &str, dry: bool, log: 
             ),
         );
     };
-    let ended = reclaimer::run_until(
+    let ended = reclaimer::run(
         &reclaimer.command,
         &args,
         config.timeout,
