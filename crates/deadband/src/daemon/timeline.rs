@@ -4,10 +4,12 @@
 use std::time::{Instant, SystemTime};
 
 use super::{State, Waiter};
-use crate::admit::{JobId, Lane};
+use crate::admit::{JobId, Lane, Threads};
 use crate::history::{Departure, JobLine, Line, MachineLine, Tally, VERSION, now_ms};
 use crate::probe::ChildUsage;
-use crate::protocol::{Ago, Exit, JobRecord, JobState, Jobs, Label, Short, StuckPeriod, Timeline};
+use crate::protocol::{
+    Ago, Ahead, Exit, Job, JobRecord, JobState, Jobs, Label, Short, StuckPeriod, Timeline,
+};
 use crate::stuck::Period;
 
 /// The most ended jobs that the daemon remembers. The 65th evicts the
@@ -83,7 +85,7 @@ impl Waiter {
     /// Returns the row at `now` of the job while it waits or runs.
     fn row(&self, now: Instant, state: JobState) -> JobRecord {
         JobRecord {
-            label: self.label.clone(),
+            label: self.job.label.clone(),
             workspace: self.job.workspace.clone(),
             short: self.job.short.clone(),
             lane: self.job.lane,
@@ -95,13 +97,25 @@ impl Waiter {
 }
 
 impl State {
-    /// Returns the running and waiting jobs.
+    /// Returns the running and waiting jobs, each with its number.
     pub(super) fn jobs(&self) -> Jobs {
         let now = Instant::now();
+        let listed = |id: JobId, each: &Waiter| Job {
+            id: Some(id),
+            ..each.job.clone()
+        };
         Jobs {
             max_jobs: self.settings.max_jobs.get(),
-            running: self.queue.running().map(|each| each.job.clone()).collect(),
-            waiting: self.queue.waiting().map(|each| each.job.clone()).collect(),
+            running: self
+                .queue
+                .running_since()
+                .map(|(id, each, _)| listed(id, each))
+                .collect(),
+            waiting: self
+                .queue
+                .waiting_numbered()
+                .map(|(id, each)| listed(*id, each))
+                .collect(),
             held: self.queue.held(),
             reclaim: self.reclaimed.clone(),
             reclaiming: self
@@ -119,19 +133,19 @@ impl State {
     /// when the job's client could not take its grant. A job that the queue
     /// no longer holds is recorded already, so nothing happens.
     pub(super) fn record(&mut self, id: JobId, exit: Option<Exit>, usage: Option<ChildUsage>) {
-        let threads = self.queue.threads_of(id);
         let Some((waiter, started)) = self.queue.remove(id) else {
             return;
         };
         let tally = self.tallies.remove(&id);
         let ended = Instant::now();
-        let run = started.zip(exit);
+        let threads = started.map(|(_, threads)| threads);
+        let run = started.map(|(at, _)| at).zip(exit);
         if let (Some(recorder), Some(arrival)) = (&self.recorder, waiter.arrival) {
             let departure = Departure {
-                label: waiter.label.clone(),
+                label: waiter.job.label.clone(),
                 lane: waiter.job.lane,
                 ahead: waiter.ahead,
-                threads: run.and(threads),
+                threads: run.and(threads).map(Threads::get),
                 ran: run.map(|(at, _)| ended.saturating_duration_since(at)),
                 exit: run.map(|(_, exit)| exit),
                 usage,
@@ -145,8 +159,8 @@ impl State {
         }
         self.ended.push_back(Ended {
             lane: waiter.job.lane,
-            stuck: self.stuck.end(waiter.job.pid),
-            label: waiter.label,
+            stuck: self.stuck.end(id),
+            label: waiter.job.label,
             workspace: waiter.job.workspace,
             short: waiter.job.short,
             queued: waiter.queued,
@@ -212,12 +226,12 @@ impl State {
     /// running ones, then the waiting ones, then the ended ones, the
     /// newest first.
     pub(super) fn timeline(&self, now: Instant) -> Timeline {
-        let running = self.queue.running_since().map(|(waiter, started)| {
+        let running = self.queue.running_since().map(|(id, waiter, started)| {
             let started = Ago::between(started, now);
             let mut row = waiter.row(now, JobState::Running { started });
             row.stuck = self
                 .stuck
-                .periods(waiter.job.pid)
+                .periods(id)
                 .iter()
                 .map(|period| stuck_period(period, None, now))
                 .collect();
@@ -236,6 +250,12 @@ impl State {
             held: self.queue.held(),
             busiest: self.stuck.busiest().cloned(),
             unreadable: self.stuck.unreadable(),
+            reclaimers: self.reclaims.rows(&self.settings.reclaim, now),
+            plan: self.reclaims.plan(),
+            next_reclaim: self
+                .watch
+                .next_in(&self.settings.reclaim, now)
+                .map(Ahead::from_duration),
         }
     }
 }

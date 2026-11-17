@@ -47,10 +47,10 @@ status.
 | client | Asks the daemon to admit a job or to list its jobs, and gives the reason to start at once when the daemon cannot be asked. A granted job's lease has one thread that tells the next daemon the job still runs when the connection closes. |
 | protocol | The messages over the socket, one JSON object per line. |
 | name | The rule that names a job in `status` and `top` from its workspace, its label and its short command, and leaves the label out when it repeats the workspace or the command's first word. |
-| socket | Finds the socket's path from the environment, and lists the variables deadband reads. On macOS the default socket is in the directory that `getconf DARWIN_USER_TEMP_DIR` names, so `run`, `status` and the launchd daemon find the same socket whatever `TMPDIR` each caller has. |
+| socket | Finds the socket's path from the environment, and lists the variables deadband reads. On macOS the default socket is in the directory that `getconf DARWIN_USER_TEMP_DIR` names, so `run`, `status` and the launchd daemon find the same socket whatever `TMPDIR` each caller has. Without a variable, the socket is in a directory with mode 0700 that the daemon makes and checks, `$XDG_RUNTIME_DIR/deadband` or `/tmp/deadband-<uid>`. |
 | spawn | Starts every thread of the daemon and hands back the operating system's refusal of a thread as an error, so the caller decides what a missing thread means. Its tests can refuse a named thread. |
-| job | The only module that starts a process: the job that `deadband run` was given, the reclaimers and the `on_stuck` command that the daemon's config file names, `/bin/ps`, which names the busiest process outside the jobs, and `launchctl`, behind a trait so tests use a fake launchd. |
-| reclaim | Reads the daemon's config file, decides when to reclaim memory or disk, runs the reclaimers on a thread of their own, holds the per-user `reclaim.lock` while a reclaim runs, and keeps the running and the last reclaim for `deadband status`. |
+| job | The only module that starts a process: the job that `deadband run` was given, the reclaimers and the `on_stuck` command that the daemon's config file names, `/bin/ps`, which names the busiest process outside the jobs, and `launchctl`, behind a trait so tests use a fake launchd. A `CommandLine` holds a program and its arguments, so a command is checked for a program once, where it is read. The reclaimers, `on_stuck` and `/bin/ps` share one start-and-wait body in `job/wait.rs`, which starts the waiting thread before the program. |
+| reclaim | Reads the daemon's config file, decides when to reclaim memory or disk, runs the reclaimers on a thread of their own, holds the per-user `reclaim.lock` while a reclaim runs, and keeps the running and the last reclaim for `deadband status`. The daemon's `reclaims` module also remembers each reclaimer's runs of the last ten minutes and the plan of the reclaim that runs, which `deadband top` draws. |
 | environment | Reads the variables that `deadband run` uses, and gives a granted job its parallelism variables. |
 | priority | Chooses a job's lane from the priority file. |
 | throttle | The only module that changes the priority of a job. `deadband run` lowers its own priority to nice 5 before it starts a normal-lane job, and the job inherits it. |
@@ -63,9 +63,10 @@ status.
   `disallowed-methods` refuses those calls everywhere else.
 - deadband never ends a job of its own choosing and sends no signal of its own
   choosing to one. The one exception, decided by the owner on 2026-11-13, is that
-  `deadband run` passes a SIGTERM or SIGINT it received on to its job,
-  unchanged, and only the job module (`job/forward.rs`) does it. clippy's
-  `disallowed-methods` refuses `kill_process` everywhere else.
+  `deadband run` passes a SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 or
+  SIGUSR2 it received on to its job, unchanged, unless it inherited that
+  signal as ignored, and only the job module (`job/forward.rs`) does it.
+  clippy's `disallowed-methods` refuses `kill_process` everywhere else.
 - When the daemon cannot be reached or does not answer, the job runs at once
   and `deadband run` says why in one line on standard error. When a daemon
   closes the connection of a queued job, `deadband run` asks again for 5
@@ -137,11 +138,11 @@ reclaimer that fails or runs past its timeout is logged in one line and
 holds no job. deadband never signals or stops a reclaimer. Past its
 timeout the daemon logs that and starts no other reclaim until the
 reclaimer exits. A reclaimer's run ends when the reclaimer process exits:
-the daemon then waits at most 250 ms for the rest of its standard output, so
-a background process that the reclaimer left holding standard output does
-not hold the reclaim. While a reclaim runs, `deadband status` shows its need
-and when it started. [running.md](running.md) gives the config and the
-JSON a reclaimer prints.
+the daemon then reads what the pipe of its standard output already holds,
+without waiting for more, so a background process that the reclaimer left
+holding standard output does not hold the reclaim. While a reclaim runs,
+`deadband status` shows its need and when it started.
+[running.md](running.md) gives the config and the JSON a reclaimer prints.
 
 ## Detecting stuck jobs
 
@@ -193,7 +194,14 @@ passes no notices and its job is not watched. A daemon restart keeps
 | Stuck | The tree has shown no activity for `stuck_after` | Watching passes `stuck_after` | Activity goes to Watching; `Done` or a closed connection ends the record |
 
 A job that a client does not mark `watched`, or whose command matches
-`stuck_ignore`, has no record. A waiting job has no record.
+`stuck_ignore`, has no record. A waiting job has no record. The daemon
+keys each record by the number its queue gave the job, and the record ends
+when that job leaves the queue. Two jobs that report one process ID, as
+every job of a program that embeds deadband does, each have their own
+record and notice, and a waiting job that leaves ends no other job's record. The
+tests are `two_watched_jobs_reported_with_one_pid_each_get_their_own_stuck_notice`
+and `a_waiting_job_with_the_same_pid_that_leaves_keeps_the_running_jobs_stuck_period`
+in `src/daemon/tests/watch.rs`.
 
 | Crash or fault | Result |
 | --- | --- |
@@ -261,11 +269,6 @@ newline, and a reader skips a line it cannot parse.
 
 ## Lifecycles and crash points
 
-[LIFECYCLE.md](../LIFECYCLE.md) at the repository root and the files under
-[lifecycles/](../lifecycles/) list every store, lock, timeout, transition and
-crash point in the lifecycle registry format; the tables below summarise the
-four main lifecycles.
-
 The tables below give the states of a job, the daemon, the launch agent and
 a reclaim, as the source implements them, and what each crash or fault
 leaves behind. deadband stores none of these states on disk. Job states
@@ -280,9 +283,9 @@ that embeds deadband.
 
 | State | Meaning | Enters when | Leaves when |
 | --- | --- | --- | --- |
-| Asked | The client has sent `Ask` and waits up to 2 seconds for the first answer | The client connects to the socket | `Granted` goes to Running; `Queued` goes to Waiting; no daemon on the socket, a connection that fails, no answer within 2 seconds, a closed connection or an unreadable answer goes to Open |
-| Waiting | The daemon holds the job in its queue and the client waits with no deadline | The daemon replies `Queued` | `Granted` goes to Running; a closed connection goes to Asking again |
-| Asking again | The client asks again every 100 ms, so a restarted daemon queues or grants it | The connection of a queued job closes | A daemon grants the job, which goes to Running, or queues it, which goes to Waiting; 5 seconds after the first loss with no grant, the job goes to Open |
+| Asked | The client sends `Ask` with `beats` set, and the daemon has 2 seconds in all to take the line and send its whole first answer | The client connects to the socket | `Granted` goes to Running; `Queued` goes to Waiting; no daemon on the socket, a connection that fails, a line not taken or an answer not read within the 2 seconds, a closed connection or an unreadable answer goes to Open |
+| Waiting | The daemon holds the job in its queue. When its `Queued` reply promised beats, the watchdog sends `Beat` every five sampling intervals (5 seconds), and the client waits for at most 16 seconds between two lines; otherwise it waits with no deadline | The daemon replies `Queued` | `Granted` goes to Running; a beat stays in Waiting and clears the first loss; 16 seconds with no line goes to Open; a closed connection goes to Asking again |
+| Asking again | The client asks again every 100 ms, so a restarted daemon queues or grants it | The connection of a queued job closes | A daemon grants the job, which goes to Running, or queues it, which goes to Waiting; 5 seconds after the first loss that no beat has cleared, with no grant, the job goes to Open |
 | Running | The job runs and the daemon counts its place; the lease's watcher thread reads the connection | The daemon grants the job | The job ends and the client sends `Done`, which goes to Ended; the connection closes while the client lives, which goes to Reseating |
 | Reseating | The lease has lost its daemon and tries to connect and send `Seat` every 100 ms | The daemon stops or closes the connection while the job runs | A daemon accepts the seat and counts the job at once, which goes to Running; the job ends first, and no daemon is told |
 | Open | The job starts at once without a lease, and `deadband run` says why in one line | The daemon could not be asked or did not keep the job, or `DEADBAND_HELD` or `DEADBAND_BYPASS` is set, in which case nothing is asked and nothing is said | The job starts, which goes to Uncounted |
@@ -300,10 +303,30 @@ shuts that connection down after it has released the lock. The client then
 goes to Open if it had read no `Queued` line, or only part of one, and to
 Asking again if it had read `Queued`.
 
+The watchdog thread (`daemon/alive.rs`) decides the beats under the lock and
+writes them with the same `deliver`, so a daemon that is stopped, or whose
+threads block or deadlock while they hold the queue lock, sends none. A
+stalled sampler does not hold the lock, so the watchdog keeps beating and
+keeps admitting jobs on the stale reading. The client skips a beat that
+arrives before its `Queued` reply, and the lease's watcher ignores one that
+arrives after the grant. A queued job's loss counts from the latest daemon
+that queued it and sent a beat, so each restart of a daemon that served the
+job gets the full 5 seconds, and a daemon that queues the job and closes
+before it beats leaves the earlier loss in place.
+
 The tests are `a_queued_client_asks_a_restarted_daemon_again_before_it_starts_the_job`,
 `a_queued_client_starts_the_job_when_no_daemon_returns_within_the_bound` and
 `a_queued_client_stops_asking_at_the_bound_when_every_daemon_queues_it_and_closes`
-in `src/client/tests.rs`; `admit_without_a_daemon_starts_the_job_with_capped_threads_and_says_why`
+in `src/client/tests.rs`;
+`a_queued_client_whose_daemon_promised_beats_and_went_silent_starts_its_job`,
+`a_queued_client_whose_daemon_keeps_beating_waits_past_the_silence_for_its_grant`,
+`a_queued_client_waits_with_no_deadline_on_a_daemon_that_promised_no_beats`,
+`a_daemon_that_queues_the_job_again_and_beats_gives_its_next_loss_a_window_of_its_own`,
+`an_ask_that_the_daemon_never_reads_gives_up_when_the_first_answer_is_due` and
+`an_ask_whose_daemon_drips_its_first_answer_gives_up_at_the_deadline` in
+`src/client/tests/beats.rs`;
+`a_daemon_beats_to_a_waiting_client_that_asked_for_beats_and_to_no_other` in
+`src/daemon/tests/reply.rs`; `admit_without_a_daemon_starts_the_job_with_capped_threads_and_says_why`
 and `admit_with_bypass_asks_nothing` in `src/admission/tests.rs`;
 `a_job_that_runs_when_its_daemon_is_killed_counts_on_the_next_daemon` and
 `a_run_inside_the_job_that_holds_the_only_place_runs_at_once` in
@@ -393,11 +416,12 @@ in `src/cli/tests/reclaim.rs`.
 | --- | --- | --- |
 | The sampler panics | The sampler's ending sends its reason, the daemon stops serving and the process ends. Waiting clients ask again for 5 seconds and then start, and running jobs reseat on the next daemon | `a_daemon_stops_serving_when_its_sampler_panics` in `src/daemon/tests/alive.rs` |
 | The sampler blocks | After five sampling intervals the watchdog counts the reading as stale, so the jobs it held start once a place is free, and it keeps checking the socket and lock files | `a_job_starts_when_the_sampler_stalls_and_its_last_reading_holds_the_job` and `a_daemon_whose_sampler_is_stalled_stops_serving_when_its_socket_file_is_removed` in `src/daemon/tests/alive.rs` |
-| The daemon hangs after it sent `Queued`, with the connection open | The client keeps waiting with no deadline, because fail-open applies only to a closed connection or a missing first answer. A stalled sampler is the case above; a daemon whose every thread hangs keeps its waiting jobs waiting until it is stopped | No test injects a whole-daemon hang |
+| The daemon hangs after it sent `Queued`, with the connection open | The client reads no beat for 16 seconds, closes the connection, says the daemon queued the job and then sent nothing, and starts the job uncounted. A client of a daemon that promised no beats, which is a daemon of an earlier release, keeps waiting with no deadline | `a_queued_client_whose_daemon_promised_beats_and_went_silent_starts_its_job` and its twin `a_queued_client_whose_daemon_keeps_beating_waits_past_the_silence_for_its_grant` in `src/client/tests/beats.rs`; no test hangs a real daemon |
+| The daemon stops reading, or sends its first answer a byte at a time | The `Ask` line and the first answer share the 2-second deadline, so the client gives up when it ends and starts the job | `an_ask_that_the_daemon_never_reads_gives_up_when_the_first_answer_is_due` and `an_ask_whose_daemon_drips_its_first_answer_gives_up_at_the_deadline` in `src/client/tests/beats.rs` |
 | A client never reads its reply | The daemon writes the reply after it releases the queue lock, so the client never holds the lock. The write fails after 1 second. A grant that fails frees the job's place and is recorded once as Left, and the daemon shuts that connection down | `a_client_that_never_reads_its_grant_does_not_delay_the_next_grant`, `a_grant_that_cannot_be_written_frees_its_place_once_and_closes_the_connection` and `a_queued_reply_that_waits_on_its_client_leaves_the_queue_lock_free` in `src/daemon/tests/reply.rs` |
 | The daemon stops or is killed | Waiting clients ask again for 5 seconds, so a restarted daemon queues them again, and start only if no daemon answers. Running jobs keep running, and each lease seats its job on the next daemon | `a_queued_client_asks_a_restarted_daemon_again_before_it_starts_the_job` in `src/client/tests.rs`; `a_job_that_runs_when_its_daemon_is_killed_counts_on_the_next_daemon` in `tests/run.rs` |
 | A reclaimer hangs | The daemon logs that it ran past its timeout, keeps waiting for it, and starts no other reclaim until it exits; admission continues, and `deadband status` shows the reclaim in progress | `a_reclaimer_that_runs_past_its_timeout_is_logged_and_admission_continues` in `src/cli/tests/reclaim.rs`; `status_prints_a_reclaim_in_progress_after_the_jobs` in `src/cli/tests.rs` |
-| A reclaimer exits and leaves a background process holding its standard output | The run ends when the reclaimer exits, after at most 250 ms for its output | `a_background_child_that_holds_stdout_does_not_hold_the_reclaim_after_the_reclaimer_exits` in `src/job/reclaimer.rs` |
+| A reclaimer exits and leaves a background process holding its standard output | The run ends when the reclaimer exits, once the daemon has read what the pipe already holds, so the report is whole even when the reading thread runs late | `a_background_child_that_holds_stdout_does_not_hold_the_reclaim_after_the_reclaimer_exits` and `a_reclaimer_that_writes_64_kib_and_exits_at_once_yields_its_whole_report_when_reading_runs_late` in `src/job/tests.rs` |
 | A reclaimer names a program that is missing | The daemon logs the program at start, the reclaim records the failure, and `deadband status` names the program | `the_daemon_says_at_start_that_a_reclaimer_names_a_program_that_does_not_exist` and `a_reclaimer_whose_program_is_missing_fails_and_status_names_the_program` in `src/cli/tests/reclaim.rs` |
 | The socket file is deleted or replaced | The daemon stops serving within 60 samples, and under launchd a new daemon binds a new socket | `a_daemon_stops_serving_when_its_socket_file_is_removed` and `a_daemon_stops_serving_when_another_socket_replaces_its_file` in `src/daemon/tests/alive.rs` |
 | The lock file is deleted or replaced | The daemon stops serving within 60 samples, because a second daemon could take a new lock, remove its socket and bind its own | `a_daemon_stops_serving_when_its_lock_file_is_removed` and `a_daemon_stops_serving_when_another_file_replaces_its_lock_file` in `src/daemon/tests/alive.rs` |
@@ -405,7 +429,8 @@ in `src/cli/tests/reclaim.rs`.
 | `jobs.jsonl` is deleted or replaced | The writer opens the file at the path again before the next line, so later lines are recorded there | `a_writer_whose_file_is_unlinked_opens_a_new_file_at_the_path_and_records_later_lines` and `a_writer_whose_file_is_replaced_appends_to_the_file_now_at_the_path` in `src/history/tests.rs` |
 | `jobs.lock` is deleted or replaced | The writer releases its lock and takes it again before the next line. When another daemon took the new lock first, the writer logs one line and records nothing while that daemon holds the lock | `a_writer_whose_lock_is_removed_while_another_writer_takes_a_new_one_records_nothing_and_logs_once` and `a_writer_whose_lock_is_removed_with_no_other_writer_takes_a_new_lock_and_keeps_recording` in `src/history/tests.rs` |
 | Two daemons on different sockets want to reclaim | A daemon on its own `DEADBAND_SOCKET` runs no reclaimer. Two daemons that both read the config share `reclaim.lock`, so the second starts no reclaim while the first runs | `a_daemon_started_with_its_own_socket_runs_no_reclaimer_from_the_config_file` in `tests/run.rs`; `a_second_reclaim_finds_the_lock_held_until_the_first_ends` in `src/reclaim/lock.rs` |
-| `deadband run` receives SIGTERM or SIGINT alone | It passes the signal on to its job unchanged and keeps waiting, so the job decides how to end and the daemon receives `Done` with the signal | `a_signal_the_caller_sent_ends_a_sleeping_job_and_the_exit_code_follows_it` and `the_job_receives_the_signal_unchanged_and_decides_its_own_exit_code` in `src/job/tests.rs` |
+| `deadband run` receives SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 or SIGUSR2 alone | It passes the signal on to its job unchanged and keeps waiting, so the job decides how to end and the daemon receives `Done` with the signal | `a_signal_the_caller_sent_ends_a_sleeping_job_and_the_exit_code_follows_it` and `the_job_receives_the_signal_unchanged_and_decides_its_own_exit_code` in `src/job/tests.rs`; one test per signal in the `forwarding` module of `tests/run.rs`; `after_a_sighup_to_deadband_run_the_daemon_records_the_job_as_ended_by_sighup` in `tests/run.rs` |
+| `deadband run` inherited one of those signals as ignored, as SIGHUP is under `nohup` | It does not register the signal, so the signal stays ignored for it and for the job, and it passes on the others | `under_nohup_a_sighup_to_deadband_run_or_its_job_leaves_the_job_running_until_a_sigterm` and its twin `without_nohup_a_sighup_to_the_job_ends_it_before_a_sigterm_to_deadband_run` in `tests/run.rs` |
 | `deadband run` is killed alone with SIGKILL | The connection closes, the daemon records the job as lost and frees its place, and the job keeps running uncounted. A signal to the process group reaches the job too | `a_running_job_whose_client_is_killed_is_lost` in `src/daemon/tests/timeline.rs` covers the daemon's side; no test covers the job that keeps running |
 | The operating system refuses a daemon thread | A refused sampler, watchdog or connection thread stops the daemon; a refused connection thread also closes that connection, so its client starts its job. A refused reclaim thread starts no reclaim now. A refused watch, history or `on_stuck` thread is one log line | `a_daemon_that_cannot_start_its_sampler_stops_serving`, `a_daemon_that_cannot_start_its_watchdog_stops_serving` and `a_daemon_that_cannot_start_a_connections_thread_stops_serving_and_closes_it` in `src/daemon/tests/alive.rs`; `an_on_stuck_whose_thread_cannot_start_is_one_log_line_and_frees_its_place` in `src/daemon/watch/hook.rs`; the reclaim thread is not tested, as the soft limits below say |
 | `service install` races `service uninstall` | The second command waits for `service.lock`, so the plist exists only while launchd has the agent loaded | `an_install_racing_an_uninstall_leaves_the_plist_only_while_launchd_has_it_loaded` and `two_concurrent_installs_load_the_agent_once_and_leave_the_rendered_plist` in `src/cli/service/tests.rs` |

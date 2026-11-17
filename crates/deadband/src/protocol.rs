@@ -4,7 +4,9 @@
 //! A client opens one connection per request. `run` sends [`Request::Ask`],
 //! reads [`Reply::Granted`] or [`Reply::Queued`] and then, if it waited,
 //! [`Reply::Granted`], which carries the job's threads, keeps the connection open while its job runs, and
-//! sends [`Request::Done`] when the job ends. The daemon counts the job as
+//! sends [`Request::Done`] when the job ends. While the job waits, a daemon
+//! sends [`Reply::Beat`] every five sampling intervals to a client whose
+//! `Ask` set `beats`, and says so in its `Queued` reply. The daemon counts the job as
 //! running until that line arrives or the connection closes. When that
 //! connection closes while the job runs, `run` connects again every 100 ms
 //! and sends [`Request::Seat`], and the daemon that reads it counts the job
@@ -18,19 +20,24 @@
 use std::fmt;
 use std::io::{self, BufRead, Read, Write};
 use std::path::Path;
+use std::time::Duration;
 
 use schemars::JsonSchema;
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::de::{DeserializeOwned, Error as _};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::admit::{Hold, Lane};
+use crate::admit::{Hold, JobId, Lane, Threads};
 use crate::probe::ChildUsage;
 use crate::reclaim::{Reclaimed, Reclaiming};
 
+mod reclaims;
 #[cfg(test)]
 mod tests;
 mod timeline;
 
+pub use self::reclaims::{
+    Ahead, KeptItem, PLAN_ITEMS, ReclaimPlan, ReclaimRun, ReclaimRunState, ReclaimerRow,
+};
 pub use self::timeline::{
     Ago, Exit, JobRecord, JobState, LABEL_BYTES, Label, SHORT_BYTES, Short, StuckPeriod, Timeline,
 };
@@ -40,11 +47,25 @@ pub use self::timeline::{
 /// line in memory.
 pub const MAX_LINE: u64 = 64 * 1024;
 
+/// Reads a job's label, and refuses one that holds a control character, so
+/// the line that carries it is malformed. A daemon closes the connection of
+/// a malformed first line, and the client then starts its job at once.
+fn checked_label<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Label, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    if text.chars().any(char::is_control) {
+        return Err(D::Error::custom("a job's label holds a control character"));
+    }
+    Ok(Label::new(&text))
+}
+
 /// A job, as a client describes it and the daemon lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Job {
-    /// The label that `--label` gave, or the program's name.
-    pub label: String,
+    /// The label that `--label` gave, or the program's name. A line whose
+    /// label holds a control character, such as a line feed, is refused.
+    #[serde(deserialize_with = "checked_label")]
+    #[schemars(with = "String")]
+    pub label: Label,
     /// The process ID of the `deadband run` that asked for the job.
     pub pid: u32,
     /// The job's command line, with its words joined by spaces.
@@ -72,6 +93,17 @@ pub struct Job {
     /// daemon sends none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short: Option<Short>,
+    /// The job's number in the daemon's queue, which tells apart two jobs
+    /// that report one `pid`. The daemon sets it when it lists the job and
+    /// ignores whatever a client sent. A client and an older daemon send
+    /// none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<u64>")]
+    pub id: Option<JobId>,
+    /// Whether the client reads [`Reply::Beat`] while the job waits. A
+    /// client that names none, as an older client does, gets no beats.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub beats: bool,
 }
 
 /// What the daemon knows of the processes outside the jobs when a job is
@@ -161,9 +193,11 @@ pub enum Request {
         /// The job as its client described it.
         job: Job,
         /// The threads of the job's grant.
-        jobs: usize,
-        /// How long the job has run, in milliseconds.
-        ran_ms: u64,
+        #[serde(rename = "jobs")]
+        threads: Threads,
+        /// How long ago the job started, in milliseconds.
+        #[serde(rename = "ran_ms")]
+        ran: Ago,
     },
 }
 
@@ -171,11 +205,12 @@ pub enum Request {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reply {
-    /// The job may start now, with `jobs` threads.
+    /// The job may start now, with `threads` threads.
     Granted {
         /// The threads the job may use, which `run` gives the job in its
         /// parallelism variables.
-        jobs: usize,
+        #[serde(rename = "jobs")]
+        threads: Threads,
     },
     /// The job waits, and `ahead` jobs start before it.
     Queued {
@@ -184,7 +219,15 @@ pub enum Reply {
         /// Why the first waiting job does not start yet, or `None` when the
         /// daemon does not know.
         held: Option<Hold>,
+        /// Whether the daemon sends [`Reply::Beat`] while the job waits,
+        /// which it does when the job's client asked for beats. An older
+        /// daemon sends none, and its client then waits with no deadline.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        beats: bool,
     },
+    /// The daemon still serves its queue. It goes to each waiting job whose
+    /// client asked for beats once per five sampling intervals.
+    Beat,
     /// The running and waiting jobs.
     Jobs(Jobs),
     /// The jobs that `deadband top` draws.
@@ -264,12 +307,40 @@ impl<J> Jobs<J> {
 /// A job that has shown no activity for the configured time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StuckJob {
+    /// The number of the running job that is stuck, which that job's row
+    /// also carries. An older daemon sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<u64>")]
+    pub id: Option<JobId>,
     /// The job's label.
-    pub label: String,
+    #[schemars(with = "String")]
+    pub label: Label,
     /// The process ID of the `deadband run` that asked for the job.
     pub pid: u32,
     /// How long the job has shown no activity, in seconds.
-    pub quiet_seconds: u64,
+    #[serde(rename = "quiet_seconds", with = "whole_seconds")]
+    #[schemars(with = "u64")]
+    pub quiet: Duration,
+}
+
+/// Writes a duration as its whole seconds and reads it back from them.
+mod whole_seconds {
+    use super::{Deserialize, Deserializer, Duration, Serializer};
+
+    /// Writes `duration` as its whole seconds.
+    pub(super) fn serialize<S: Serializer>(
+        duration: &Duration,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(duration.as_secs())
+    }
+
+    /// Reads a duration from its whole seconds.
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Duration, D::Error> {
+        u64::deserialize(deserializer).map(Duration::from_secs)
+    }
 }
 
 /// Writes `message` to `writer` as one JSON line and flushes it.

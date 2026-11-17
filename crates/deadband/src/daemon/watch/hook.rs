@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::super::{Log, note};
+use crate::job::CommandLine;
 use crate::job::on_stuck::{self, Ended};
 use crate::protocol::OutsideJobs;
 use crate::spawn;
@@ -27,10 +28,29 @@ struct Input<'a> {
     busiest: Option<&'a OutsideJobs>,
 }
 
+/// One of the [`MAX_ON_STUCK`] places, which it frees when it is dropped,
+/// so a run that ends and a thread that is refused each free their place.
+struct Place(Arc<AtomicUsize>);
+
+impl Place {
+    /// Takes a place, or returns `None` when all are taken.
+    fn take(running: &Arc<AtomicUsize>) -> Option<Self> {
+        let taken = running.fetch_add(1, Ordering::SeqCst);
+        let place = Self(Arc::clone(running));
+        (taken < MAX_ON_STUCK).then_some(place)
+    }
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// Starts `on_stuck`, at most [`MAX_ON_STUCK`] at once.
 pub(super) struct Hooks {
-    /// The command, which is empty when the config names none.
-    command: Vec<String>,
+    /// The command, or `None` when the config names none.
+    command: Option<CommandLine>,
     /// How long one run may take before the log says it is late.
     within: Duration,
     /// The daemon's log.
@@ -41,7 +61,7 @@ pub(super) struct Hooks {
 
 impl Hooks {
     /// Returns the hooks that run `command`.
-    pub(super) fn new(command: Vec<String>, within: Duration, log: &Log) -> Self {
+    pub(super) fn new(command: Option<CommandLine>, within: Duration, log: &Log) -> Self {
         Self {
             command,
             within,
@@ -53,11 +73,10 @@ impl Hooks {
     /// Runs the command on a thread of its own, so a slow command holds up
     /// no sample. Its failure is one log line, and deadband never signals it.
     pub(super) fn run(&self, label: &str, quiet: Duration, busiest: Option<&OutsideJobs>) {
-        if self.command.is_empty() {
+        let Some(command) = &self.command else {
             return;
-        }
-        if self.running.fetch_add(1, Ordering::SeqCst) >= MAX_ON_STUCK {
-            self.running.fetch_sub(1, Ordering::SeqCst);
+        };
+        let Some(place) = Place::take(&self.running) else {
             note(
                 &self.log,
                 format_args!(
@@ -65,18 +84,18 @@ impl Hooks {
                 ),
             );
             return;
-        }
+        };
         let input = serde_json::to_vec(&Input {
             label,
             quiet_seconds: quiet.as_secs(),
             busiest,
         })
         .unwrap_or_default();
-        let command = self.command.clone();
+        let command = command.clone();
         let within = self.within;
         let log = Arc::clone(&self.log);
-        let running = Arc::clone(&self.running);
         let started = spawn::thread("deadband-on-stuck", move || {
+            let _place = place;
             let late = Arc::clone(&log);
             let ended = on_stuck::run(&command, input, within, move || {
                 note(
@@ -96,14 +115,12 @@ impl Hooks {
                     &log,
                     format_args!(
                         "the on_stuck command {} could not start: {error}",
-                        command.first().map_or("", String::as_str)
+                        command.program
                     ),
                 ),
             }
-            running.fetch_sub(1, Ordering::SeqCst);
         });
         if let Err(error) = started {
-            self.running.fetch_sub(1, Ordering::SeqCst);
             note(
                 &self.log,
                 format_args!("the on_stuck command for {label} could not start: {error}"),
@@ -120,12 +137,17 @@ mod tests {
 
     use super::Hooks;
     use crate::daemon::Log;
+    use crate::job::CommandLine;
 
     #[test]
     fn an_on_stuck_whose_thread_cannot_start_is_one_log_line_and_frees_its_place() {
         let written = Arc::new(Mutex::new(Vec::new()));
         let log: Log = written.clone();
-        let hooks = Hooks::new(vec!["true".to_owned()], Duration::from_secs(5), &log);
+        let hooks = Hooks::new(
+            Some(CommandLine::of(&["true"])),
+            Duration::from_secs(5),
+            &log,
+        );
         crate::spawn::refuse("deadband-on-stuck");
         hooks.run("cargo", Duration::from_secs(300), None);
         crate::spawn::allow();
@@ -133,5 +155,25 @@ mod tests {
         assert_eq!(text.lines().count(), 1, "{text}");
         assert!(text.contains("could not start"), "{text}");
         assert_eq!(hooks.running.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn an_on_stuck_thread_that_ends_normally_frees_its_place() {
+        let log: Log = Arc::new(Mutex::new(Vec::new()));
+        let hooks = Hooks::new(
+            Some(CommandLine::of(&["true"])),
+            Duration::from_secs(5),
+            &log,
+        );
+        hooks.run("cargo", Duration::from_secs(300), None);
+        let (done, finished) = std::sync::mpsc::channel();
+        let running = Arc::clone(&hooks.running);
+        std::thread::spawn(move || {
+            while running.load(Ordering::SeqCst) != 0 {
+                std::thread::yield_now();
+            }
+            let _ = done.send(());
+        });
+        assert!(finished.recv_timeout(Duration::from_secs(10)).is_ok());
     }
 }

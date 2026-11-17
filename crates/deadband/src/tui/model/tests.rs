@@ -84,6 +84,9 @@ fn timeline(up: u64, jobs: Vec<JobRecord>) -> Timeline {
         held: None,
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     }
 }
 
@@ -514,6 +517,19 @@ fn a_garbled_reply_keeps_the_last_rows_and_gives_the_reason() {
         "{why}"
     );
     assert_eq!(model.rows(now + secs(1), AXIS, 3).rows.len(), 1);
+}
+
+#[test]
+fn a_daemon_of_another_user_before_any_reply_is_connecting_with_the_reason() {
+    let mut model = model();
+    let now = Instant::now();
+    let foreign = Unasked::Foreign {
+        path: PathBuf::from("/no"),
+        uid: 7,
+    };
+    let reason = foreign.to_string();
+    model.observe(now, Err(foreign), None);
+    assert_eq!(model.phase(now, 80, 16), Phase::Connecting(Some(reason)));
 }
 
 #[test]

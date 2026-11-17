@@ -953,7 +953,7 @@ fn install_refuses_while_another_service_command_holds_the_lock_and_changes_noth
     let lock = state_dir(&home).join(LOCK_FILE);
     match refused {
         Err(failed @ ServiceFailed::Locked { .. }) => {
-            assert_eq!(failed.code(), &SERVICE_LOCKED);
+            assert_eq!(failed.code(), SERVICE_LOCKED);
             assert!(
                 failed.to_string().contains(&lock.display().to_string()),
                 "{failed}"

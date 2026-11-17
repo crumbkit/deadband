@@ -12,7 +12,7 @@ use super::super::{Settings, Shared, State, Waiter, lock};
 use super::{Client, Dial, REPLY_WITHIN, granted, job, queued, start};
 use crate::admit::{Hold, JobId, Lane};
 use crate::probe::Pressure;
-use crate::protocol::{Exit, JobRecord, JobState, Label, Reply, Request, Timeline};
+use crate::protocol::{Exit, JobRecord, JobState, Reply, Request, Timeline};
 
 /// Asks the daemon at `path` for its timeline.
 pub(super) fn timeline(path: &Path) -> Timeline {
@@ -274,7 +274,6 @@ fn push(state: &mut State, label: &str, gone: bool) -> (JobId, Option<UnixStream
         Waiter {
             job: job(label),
             stream: ours.into(),
-            label: Label::new(label),
             queued: Instant::now(),
             arrival: None,
             ahead: 0,

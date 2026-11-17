@@ -14,7 +14,7 @@ use std::io::Read as _;
 use std::path::Path;
 
 use super::now_ms;
-use crate::protocol::{Job, Label};
+use crate::protocol::{Ago, Job, Label};
 
 /// The most bytes of a `.git` file that the daemon reads.
 const GIT_FILE_BYTES: u64 = 4096;
@@ -246,30 +246,25 @@ pub struct Arrival {
 }
 
 impl Arrival {
-    /// Returns what `job` tells at this moment. `ran_ms` says how long a
-    /// job that a new daemon takes over has already run, and it is `None`
-    /// for a job that asks to start. A job that has run has had the chance
-    /// to fill its own build directory, so its `warm` is `None`.
+    /// Returns what `job` tells at this moment. `ran` says how long ago a
+    /// job that a new daemon takes over started, and it is `None` for a job
+    /// that asks to start. A job that has run has had the chance to fill its
+    /// own build directory, so its `warm` is `None`.
     ///
     /// This call reads the disk, so the daemon makes it before it takes the
     /// queue lock.
     #[must_use]
-    pub fn read(
-        job: &Job,
-        warm_dirs: &[String],
-        kind_tools: &[String],
-        ran_ms: Option<u64>,
-    ) -> Self {
+    pub fn read(job: &Job, warm_dirs: &[String], kind_tools: &[String], ran: Option<Ago>) -> Self {
         let mut place = job
             .cwd
             .as_deref()
             .map_or_else(Place::default, |cwd| Place::find(Path::new(cwd), warm_dirs));
-        if ran_ms.is_some() {
+        if ran.is_some() {
             place.warm = None;
         }
         Self {
-            at_ms: now_ms().saturating_sub(ran_ms.unwrap_or(0)),
-            seated: ran_ms.is_some(),
+            at_ms: now_ms().saturating_sub(ran.map_or(0, Ago::as_millis)),
+            seated: ran.is_some(),
             kind: kind(&job.command, kind_tools),
             options: options(&job.command),
             place,

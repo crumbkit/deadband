@@ -88,7 +88,7 @@ fn the_view_refuses_a_pipe_on_either_stream_or_json() {
         (true, true, true),
     ] {
         let refused = opens(stdin, stdout, json).expect_err("the view refuses");
-        assert_eq!(refused.code(), &TOP_NOT_A_TERMINAL);
+        assert_eq!(refused.code(), TOP_NOT_A_TERMINAL);
     }
 }
 
@@ -177,6 +177,9 @@ fn reply_line(up: u64) -> Vec<u8> {
         held: None,
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     });
     write_line(&mut line, &reply).expect("the line writes");
     line

@@ -6,12 +6,12 @@
 //! gives the job's parallelism variables. When the daemon cannot be asked,
 //! the job starts at once with the default share of the cores, and the line
 //! passed to `notify` says why. A daemon that is missing, gone or slow to
-//! answer does not block a job: `admit` waits at most 2 seconds for the
-//! daemon's first answer. That limit does not cover sending the request, which
-//! has no deadline, so a daemon that has stopped reading can block `admit`
-//! when the command text is longer than the socket's send buffer (about
-//! 8 KiB on macOS). Once the daemon has queued a job, `admit` waits for the
-//! grant with no deadline, and the wait cannot be cancelled.
+//! answer does not block a job: the daemon has 2 seconds to take the request
+//! and send its whole first answer. Once the daemon has queued a job,
+//! `admit` asks for beats and waits for the grant while a line arrives at
+//! least every [`BEAT_SILENCE`](client::BEAT_SILENCE); a daemon of an
+//! earlier release sends none, and `admit` then waits with no deadline. The
+//! wait cannot be cancelled.
 //!
 //! The job's `pid` in the daemon's listing is the calling process's id
 //! (`std::process::id()`). A program that holds the lease for a child
@@ -216,7 +216,7 @@ pub fn admit(asked: &Asked<'_>, notify: &mut impl FnMut(&str)) -> Admitted {
     }
     let lane = lane_of(asked, notify);
     let job = Job {
-        label: asked.label.to_owned(),
+        label: Label::new(asked.label),
         pid: std::process::id(),
         command: asked.command.to_owned(),
         lane,
@@ -224,6 +224,8 @@ pub fn admit(asked: &Asked<'_>, notify: &mut impl FnMut(&str)) -> Admitted {
         cwd: environment.cwd.as_deref().map(job_cwd),
         workspace: asked.workspace.map(Label::new),
         short: None,
+        id: None,
+        beats: true,
     };
     let queued = |ahead: usize, held: Option<Hold>| notify(&waits(ahead, held));
     let lease = match client::ask_noticed(asked.socket, &job, ANSWER_WITHIN, queued, asked.notices)
@@ -235,14 +237,14 @@ pub fn admit(asked: &Asked<'_>, notify: &mut impl FnMut(&str)) -> Admitted {
         }
     };
     let variables = match &lease {
-        Some(lease) => environment.job_variables(lease.jobs(), true),
+        Some(lease) => environment.job_variables(lease.threads().get(), true),
         None => {
             let fallback = Limits {
                 max_jobs: daemon::default_max_jobs(asked.cores),
                 cores: asked.cores,
                 reserve_lanes: false,
             };
-            environment.job_variables(fallback.parallelism(lane), false)
+            environment.job_variables(fallback.parallelism(lane).get(), false)
         }
     };
     Admitted {

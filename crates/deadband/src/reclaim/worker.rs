@@ -24,14 +24,17 @@ struct Run {
 /// stops once the bytes freed cover the need, and returns the bytes the
 /// real runs reported freeing. Each reclaimer's outcome goes to `record`,
 /// and each failure to `log` in one line; a failure moves on to the next
-/// reclaimer. When `quiet` holds, the last reclaim of `resource` freed
-/// nothing, and a plan to free nothing is not logged again.
+/// reclaimer. Each dry run's plan goes to `planned` with its reclaimer
+/// before the real run starts. When `quiet` holds, the last reclaim of
+/// `resource` freed nothing, and a plan to free nothing is not logged
+/// again.
 pub fn reclaim(
     config: &Config,
     resource: Resource,
     quiet: bool,
     log: &Log,
     record: &mut dyn FnMut(Reclaimed),
+    planned: &mut dyn FnMut(&Reclaimer, &Report),
 ) -> u64 {
     let need = resource.need(config);
     let mut freed = 0_u64;
@@ -55,6 +58,7 @@ pub fn reclaim(
             record(outcome(reclaimer, &need, Some(0), None));
             continue;
         }
+        planned(reclaimer, &plan);
         note(
             log,
             format_args!(
@@ -146,7 +150,7 @@ fn run_once(config: &Config, reclaimer: &Reclaimer, need: &str, dry: bool, log: 
             report: None,
             failed: Some(format!(
                 "it could not start {}: {error}",
-                reclaimer.command.first().map_or("", String::as_str)
+                reclaimer.command.program
             )),
             logged: false,
         },

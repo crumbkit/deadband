@@ -10,10 +10,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::super::{Log, Settings, Watching, bind, serve};
+use super::timeline::{ended, row, timeline_until};
 use super::{Client, REPLY_WITHIN, SAMPLE_EVERY, job, jobs};
-use crate::admit::GIB;
+use crate::admit::{GIB, Threads};
+use crate::job::CommandLine;
 use crate::probe::{Disk, Pressure, Probe, ProcessUse, Sample, TreeUnreadable, Unreadable};
-use crate::protocol::{Exit, Job, JobState, Jobs, OutsideJobs, Reply, Request};
+use crate::protocol::{Ago, Exit, Job, JobState, Jobs, OutsideJobs, Reply, Request};
 use crate::reclaim::Config;
 use crate::stuck;
 use crate::testing::{TestSocket, socket_path};
@@ -99,7 +101,7 @@ impl Probe for Trees {
 /// What a test daemon uses.
 struct Options {
     stuck: stuck::Config,
-    census: Vec<String>,
+    census: CommandLine,
 }
 
 impl Default for Options {
@@ -114,8 +116,8 @@ impl Default for Options {
     }
 }
 
-fn sh(script: &str) -> Vec<String> {
-    vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()]
+fn sh(script: &str) -> CommandLine {
+    CommandLine::of(&["/bin/sh", "-c", script])
 }
 
 fn start(probe: &Trees, options: Options) -> (TestSocket, Arc<Mutex<Vec<u8>>>) {
@@ -197,7 +199,7 @@ fn a_quiet_watched_job_is_listed_as_stuck() {
     let (path, _log) = start(&probe, Options::default());
     let _client = ask(&path, watched("quiet", ROOT));
     let answer = jobs_until(&path, |jobs| !jobs.stuck.is_empty());
-    assert_eq!(answer.stuck[0].label, "quiet");
+    assert_eq!(answer.stuck[0].label.as_str(), "quiet");
     assert_eq!(answer.stuck[0].pid, ROOT);
 }
 
@@ -245,7 +247,7 @@ fn a_job_that_matches_no_stuck_ignore_is_flagged() {
     let (path, _log) = start(&probe, options);
     let _client = ask(&path, watched("other", ROOT));
     let answer = jobs_until(&path, |jobs| !jobs.stuck.is_empty());
-    assert_eq!(answer.stuck[0].label, "other");
+    assert_eq!(answer.stuck[0].label.as_str(), "other");
 }
 
 #[test]
@@ -388,11 +390,11 @@ fn a_seated_job_is_watched_again() {
     let mut client = Client::connect(&path);
     client.send(&Request::Seat {
         job: watched("seated", ROOT),
-        jobs: 4,
-        ran_ms: 60_000,
+        threads: Threads::new(4),
+        ran: Ago::from_millis(60_000),
     });
     let answer = jobs_until(&path, |jobs| !jobs.stuck.is_empty());
-    assert_eq!(answer.stuck[0].label, "seated");
+    assert_eq!(answer.stuck[0].label.as_str(), "seated");
 }
 
 #[test]
@@ -423,11 +425,11 @@ fn on_stuck_reads_the_job_as_json_and_runs_once() {
     let file = directory.join("input");
     let probe = Trees::new(QUIET);
     let mut options = Options::default();
-    options.stuck.on_stuck = sh(&format!(
+    options.stuck.on_stuck = Some(sh(&format!(
         "cat >> '{}'; echo >> '{}'",
         file.display(),
         file.display()
-    ));
+    )));
     let (path, _log) = start(&probe, options);
     let _client = ask(&path, watched("hooked", ROOT));
     let begun = Instant::now();
@@ -454,7 +456,7 @@ fn on_stuck_reads_the_job_as_json_and_runs_once() {
 fn a_failing_on_stuck_is_one_log_line_and_detection_goes_on() {
     let probe = Trees::new(QUIET);
     let mut options = Options::default();
-    options.stuck.on_stuck = sh("exit 9");
+    options.stuck.on_stuck = Some(sh("exit 9"));
     let (path, log) = start(&probe, options);
     let _client = ask(&path, watched("hook-fails", ROOT));
     let begun = Instant::now();
@@ -478,7 +480,7 @@ fn a_job_with_no_on_stuck_logs_nothing_when_it_becomes_stuck() {
 fn an_on_stuck_command_that_cannot_start_is_named_in_the_log_when_a_job_becomes_stuck() {
     let probe = Trees::new(QUIET);
     let mut options = Options::default();
-    options.stuck.on_stuck = vec!["/nonexistent/notify".to_owned()];
+    options.stuck.on_stuck = Some(CommandLine::of(&["/nonexistent/notify"]));
     let (path, log) = start(&probe, options);
     let _client = ask(&path, watched("hook-missing", ROOT));
     let begun = Instant::now();
@@ -556,4 +558,55 @@ fn a_job_that_ends_stops_being_read() {
         let _ = jobs(&path);
     }
     assert!(probe.reads() <= settled);
+}
+
+#[test]
+fn two_watched_jobs_reported_with_one_pid_each_get_their_own_stuck_notice() {
+    let probe = Trees::new(QUIET);
+    let (path, _log) = start(&probe, Options::default());
+    let mut first = ask(&path, watched("first", ROOT));
+    let mut second = ask(&path, watched("second", ROOT));
+    for client in [&mut first, &mut second] {
+        let reply = client.reply();
+        assert!(
+            matches!(reply, Reply::Stuck { again: false, .. }),
+            "{reply:?}"
+        );
+    }
+    let answer = jobs_until(&path, |jobs| jobs.stuck.len() == 2);
+    let running: Vec<_> = answer.running.iter().map(|job| job.id).collect();
+    let stuck: Vec<_> = answer.stuck.iter().map(|job| job.id).collect();
+    assert_eq!(stuck, running);
+    assert_ne!(stuck[0], stuck[1]);
+}
+
+#[test]
+fn a_waiting_job_with_the_same_pid_that_leaves_keeps_the_running_jobs_stuck_period() {
+    let probe = Trees::new(QUIET);
+    let (path, _log) = start(&probe, Options::default());
+    let _runs = ask(&path, watched("runs", ROOT));
+    let _others: Vec<Client> = ["b", "c", "d"]
+        .into_iter()
+        .map(|label| ask(&path, job(label)))
+        .collect();
+    // A period that began at least 200 ms ago cannot be a new track's,
+    // which needs 30 ms of quiet before it opens a period.
+    let old = |timeline: &crate::protocol::Timeline| {
+        row(timeline, "runs")
+            .stuck
+            .first()
+            .is_some_and(|period| period.since.as_millis() >= 200)
+    };
+    timeline_until(&path, old);
+    let mut leaves = Client::connect(&path);
+    leaves.send(&Request::Ask(Job {
+        pid: ROOT,
+        ..job("leaves")
+    }));
+    let reply = leaves.reply();
+    assert!(matches!(reply, Reply::Queued { .. }), "{reply:?}");
+    drop(leaves);
+    let after = timeline_until(&path, |timeline| ended(timeline, "leaves"));
+    assert!(old(&after), "{after:?}");
+    assert!(row(&after, "leaves").stuck.is_empty(), "{after:?}");
 }

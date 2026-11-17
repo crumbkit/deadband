@@ -1,6 +1,17 @@
 //! Tests of the rule that names a job by its workspace and its label.
 
 use super::{name, shows_label};
+use crate::protocol::{Label, Short};
+
+/// Returns the name of a job in `workspace`, labelled `label`, whose short
+/// command is `short`.
+fn named(workspace: Option<&str>, label: &str, short: Option<&str>) -> String {
+    name(
+        workspace.map(Label::new).as_ref(),
+        &Label::new(label),
+        short.map(Short::new).as_ref(),
+    )
+}
 
 #[test]
 fn a_label_that_equals_the_workspace_is_left_out() {
@@ -10,7 +21,7 @@ fn a_label_that_equals_the_workspace_is_left_out() {
         Some("cargo build")
     ));
     assert_eq!(
-        name(Some("reading-list"), "reading-list", Some("cargo build")),
+        named(Some("reading-list"), "reading-list", Some("cargo build")),
         "reading-list"
     );
 }
@@ -23,7 +34,7 @@ fn a_label_that_differs_from_the_workspace_and_the_command_shows_after_the_works
         Some("cargo nextest run")
     ));
     assert_eq!(
-        name(Some("triage"), "api-tests", Some("cargo nextest run")),
+        named(Some("triage"), "api-tests", Some("cargo nextest run")),
         "triage · api-tests"
     );
 }
@@ -36,7 +47,7 @@ fn a_label_that_equals_the_first_word_of_the_short_command_is_left_out() {
         Some("cargo test")
     ));
     assert_eq!(
-        name(Some("board-sync"), "cargo", Some("cargo test")),
+        named(Some("board-sync"), "cargo", Some("cargo test")),
         "board-sync"
     );
 }
@@ -49,10 +60,10 @@ fn a_label_that_only_starts_with_the_first_word_shows() {
 #[test]
 fn with_no_workspace_the_name_is_the_label_even_when_the_job_column_leaves_it_out() {
     assert!(!shows_label(None, "tool", Some("tool")));
-    assert_eq!(name(None, "tool", Some("tool")), "tool");
+    assert_eq!(named(None, "tool", Some("tool")), "tool");
     assert!(shows_label(None, "crumbkit-docs", Some("cargo doc")));
     assert_eq!(
-        name(None, "crumbkit-docs", Some("cargo doc")),
+        named(None, "crumbkit-docs", Some("cargo doc")),
         "crumbkit-docs"
     );
 }
@@ -61,11 +72,11 @@ fn with_no_workspace_the_name_is_the_label_even_when_the_job_column_leaves_it_ou
 fn with_no_short_command_the_label_shows() {
     assert!(shows_label(Some("triage"), "script", Some("")));
     assert!(shows_label(None, "build", None));
-    assert_eq!(name(Some("triage"), "script", Some("")), "triage · script");
-    assert_eq!(name(None, "build", None), "build");
+    assert_eq!(named(Some("triage"), "script", Some("")), "triage · script");
+    assert_eq!(named(None, "build", None), "build");
 }
 
 #[test]
 fn a_label_that_equals_the_workspace_is_named_once_even_with_no_short_command() {
-    assert_eq!(name(Some("triage"), "triage", Some("")), "triage");
+    assert_eq!(named(Some("triage"), "triage", Some("")), "triage");
 }

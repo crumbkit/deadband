@@ -35,19 +35,19 @@ const EXAMPLES: Examples<'_> = Examples::new(env!("CARGO_BIN_EXE_deadband"), "te
 /// deadband's declared codes, which no command line provokes on demand.
 const UNPROVOKED: &[Unprovoked<'_>] = &[
     Unprovoked::new(
-        &MACHINE_UNREADABLE,
+        MACHINE_UNREADABLE,
         "Only a failed call to the kernel provokes it, and no command line makes the kernel fail.",
     ),
     Unprovoked::new(
-        &MACHINE_UNSUPPORTED,
+        MACHINE_UNSUPPORTED,
         "Only a platform other than macOS provokes it, so whether `deadband status` provokes it depends on the machine the test runs on.",
     ),
     Unprovoked::new(
-        &TOP_NOT_A_TERMINAL,
+        TOP_NOT_A_TERMINAL,
         "Its recovery is `deadband status`, which succeeds only on macOS, so following it depends on the machine the test runs on. The refusal and the recovery it names are asserted in `cli/tests.rs` and `tests/run.rs`.",
     ),
     Unprovoked::new(
-        &TOP_TERMINAL_FAILED,
+        TOP_TERMINAL_FAILED,
         "Only a terminal that fails while the view draws provokes it, and no command line makes a terminal fail.",
     ),
 ];
@@ -56,8 +56,8 @@ const UNPROVOKED: &[Unprovoked<'_>] = &[
 const RECOVERIES: Recoveries<'_> = Recoveries::new(
     EXAMPLES,
     &[
-        &[&MACHINE_UNREADABLE, &MACHINE_UNSUPPORTED],
-        &[&TOP_NOT_A_TERMINAL, &TOP_TERMINAL_FAILED],
+        &[MACHINE_UNREADABLE, MACHINE_UNSUPPORTED],
+        &[TOP_NOT_A_TERMINAL, TOP_TERMINAL_FAILED],
     ],
 )
 .unprovoked(UNPROVOKED);

@@ -6,7 +6,124 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `deadband top` shows reclaims. A `reclaims` section holds one timeline row
+  for each configured reclaimer, the line above the rule gives the plan of a
+  running reclaim or the reason the last one failed, the header adds
+  `RECLAIMING` or `RECLAIM FAILED`, and the line that says why jobs wait
+  says when the next reclaim starts. The daemon keeps the runs of the last
+  ten minutes in memory. A reclaimer's report may mark an item `state:
+  "kept"` with a `reason`, and `top` lists it in the plan.
+
 ### Changed
+
+- In the library, a command is a `job::CommandLine` with a `program` and
+  `args`. `Reclaimer::command` and `Watching::census` are `CommandLine`,
+  `stuck::Config::on_stuck` is `Option<CommandLine>`, and `job::run`,
+  `reclaimer::run`, `on_stuck::run` and `Census::read` take one, so they no
+  longer return `InvalidInput` for an empty command. `busiest::PS_COMMAND`
+  is replaced by `busiest::ps_command()`. The config file is unchanged: an
+  empty `command` or `on_stuck` is still refused, and a config without
+  `on_stuck` still runs none.
+- In the library, `reclaim::Reclaimer` no longer derives `Deserialize` or
+  `JsonSchema`. The config file's own reclaimer form is private.
+- When the operating system refuses the thread that reads a reclaimer's
+  output, the reclaimer does not start and the reclaim fails with the
+  operating system's error, as it already did when the waiting thread was
+  refused. The waiting thread no longer reads the output itself in that case.
+- A SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 or SIGUSR2 that `deadband run`
+  inherited as ignored is no longer registered or passed on, so it stays
+  ignored and the job inherits the ignore. Under `nohup deadband run --
+  <job>`, the job survives a hangup. Before, `deadband run` replaced an
+  ignored SIGINT or SIGTERM with its own handler, so a background job of a
+  non-interactive shell script ended on a SIGINT that it would otherwise have
+  ignored; now a `kill -INT` of a `deadband run` that a script started in the
+  background no longer ends it.
+- In the library, `protocol::Job` has a `beats` field, `Reply::Queued` has a
+  `beats` field, `Reply` has a `Beat` variant and `client::Unasked` has a
+  `Hung` variant. `admission::admit` always asks for beats. On the wire both
+  fields are left out when false, so an older peer reads the same lines.
+
+### Fixed
+
+- The daemon keeps a reclaimer's whole report when the machine runs the
+  thread that reads it late. Once the reclaimer exits, the daemon reads what
+  its standard output already holds, where it used to stop reading 250 ms
+  after the exit and count a cut-off report as failed.
+- `deadband run` passes a SIGHUP, SIGQUIT, SIGUSR1 or SIGUSR2 that it
+  receives on to its job, as it already did for SIGTERM and SIGINT, and exits
+  with the job. A SIGHUP sent to the process of `deadband run` alone, such as
+  a `kill -HUP` from a harness, used to end `deadband run` and leave the job
+  running, so the daemon freed the job's place while the job ran uncounted.
+- A queued `deadband run` starts its job when its daemon stops sending
+  beats. The daemon sends a `beat` line every 5 seconds to each waiting job
+  whose `Ask` set `beats`, and says so in its `Queued` reply. When no line
+  arrives for 16 seconds, `deadband run` says that the daemon queued the job
+  and then sent nothing, and runs the job. A daemon that is stopped, or whose
+  threads block while they hold its queue, used to keep every queued run
+  waiting for ever. A daemon of an earlier release sends no beats, and a new
+  client waits on it with no deadline, as before.
+- The `Ask` line and the daemon's first answer share the 2-second deadline.
+  A daemon that stopped reading used to block a run whose command line was
+  longer than the socket's buffer, and a daemon that sent its answer a byte
+  at a time could keep a run waiting for minutes.
+- Each loss of a daemon that queued a job and sent it a beat gets its own
+  5-second window to ask again. A second daemon restart more than 5 seconds
+  after the first used to start every queued job at once.
+
+## [0.4.0-alpha.1] - 2026-11-14
+
+### Security
+
+- Without `DEADBAND_SOCKET`, `DEADBAND_SOCKET_DIR` or `TMPDIR`, the socket
+  moves from `/tmp/deadband-<USER>.sock`, where another user could listen
+  first, to `deadband.sock` in `$XDG_RUNTIME_DIR/deadband` or else
+  `/tmp/deadband-<uid>`. The daemon makes that directory with mode 0700 and
+  refuses to start with `deadband::socket::directory` when it is a symlink,
+  belongs to another user or has any group or other permission bit. `USER` is
+  no longer read. macOS keeps its per-user temporary directory.
+- `run`, `status` and `top` check that the process listening on the socket
+  belongs to the same user (`getpeereid` on macOS, `SO_PEERCRED` on Linux)
+  before they send anything. When it does not, they print one line and run the
+  job at once without sending its command line. The check applies to every
+  socket path.
+- Before connecting, `run`, `status` and `top` refuse a socket whose directory
+  belongs to another user or that others can write to (unless it is sticky),
+  and the connection no longer waits for a listener whose queue is full, so a
+  listener planted by another user cannot hold a job back.
+- The daemon, the history writer and the service commands open their lock
+  files without following a symlink and refuse a lock file that another user
+  owns.
+- The daemon refuses a job whose label holds a control character, such as a
+  line feed, and closes its connection, so the client runs the job at once.
+  `deadband run` and `admit` replace each control character in a label with
+  a space before they ask, so their jobs are still admitted. `status` prints
+  the command line that an older daemon sends with each control character
+  escaped, so a label or a command line can no longer add a forged row to
+  `status`. The daemon now keeps the first 64 bytes of a label, as `top` and
+  the history file already showed it, so `status` and the stuck hook see the
+  same label.
+
+### Changed
+
+- deadband depends on crumbkit, crumbkit-skills and crumbkit-test 0.5.0, and
+  CI installs cargo-crumbkit 0.5.0 and runs `tool-skill check` and
+  `tool-skill draft --check`. The `skills install`, `skills check` and
+  `skills print` commands come from crumbkit-skills, so their help text is
+  crumbkit-skills' generic wording, and the rows of `skills install --json`
+  and `skills check --json` gain a `skill` field. Their flags, effects and
+  exit codes are unchanged. In the library, `deadband::cli::SkillsCommand` is
+  crumbkit-skills' type, and its `Print` variant takes `SkillsPrint`.
+
+- In the library, `Job::label` and `StuckJob::label` are `Label`,
+  `StuckJob::quiet` is a `Duration`, `Reply::Granted`, `Request::Seat`,
+  `Limits::parallelism` and `Lease::threads` (which was `Lease::jobs`) use
+  `Threads`, `JobId` is its own type, and `name` takes `Label` and `Short`.
+  `Running::recent_jobs` is renamed `recent_threads`, and `Queue::remove`
+  returns a running job's threads, which replaces `Queue::threads_of`.
+  `Arrival::read` takes the seated job's age as an `Ago`. The JSON on the
+  socket and in `status --json` is unchanged.
 
 - `deadband daemon` now exits 0, where it exited 4, when another daemon
   already serves the socket. It still prints the `deadband::daemon::running`
@@ -19,6 +136,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Two watched jobs that report one process ID each get their own stuck
+  notice and stuck periods, where the first job's connection received both
+  notices. A waiting job that leaves no longer ends the stuck record of a
+  running job with the same process ID. `deadband status` names each stuck
+  job by its own running line. The daemon's list of jobs, and the running,
+  waiting and stuck rows of `status --json`, gain an `id` field with the
+  job's number in the daemon's queue. `status` matches a stuck row to its job
+  by that number, and by process ID for an older daemon that sends none.
 - Exit 4 is listed only for `deadband daemon` in `deadband help exit-codes`
   and `docs/commands.md`, where it repeated in every command's section.
 - `deadband status` says, when launchd has loaded the agent and no daemon

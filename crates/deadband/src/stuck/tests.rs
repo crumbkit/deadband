@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use super::{Change, Config, MAX_PERIODS, Track, active_line, quiet_text, still_line, stuck_line};
+use crate::job::CommandLine;
 use crate::probe::ProcessUse;
 use crate::protocol::OutsideJobs;
 
@@ -283,5 +284,5 @@ fn an_invalid_stuck_ignore_is_refused() {
 fn an_empty_on_stuck_is_refused() {
     assert!(Config::parse(None, &[], Some(Vec::new())).is_err());
     let config = Config::parse(None, &[], Some(vec!["notify".to_owned()])).expect("valid");
-    assert_eq!(config.on_stuck, vec!["notify".to_owned()]);
+    assert_eq!(config.on_stuck, Some(CommandLine::of(&["notify"])));
 }

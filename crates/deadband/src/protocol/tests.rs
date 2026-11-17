@@ -2,20 +2,22 @@
 
 use std::io::{BufReader, ErrorKind};
 use std::path::Path;
+use std::time::Duration;
 
 use serde::Deserialize;
 
 use super::{
     Ago, Exit, Job, JobRecord, JobState, Jobs, LABEL_BYTES, Label, MAX_CWD, MAX_LINE, OutsideJobs,
-    Reply, Request, SHORT_BYTES, Short, StuckPeriod, Timeline, job_cwd, read_line, write_line,
+    Reply, Request, SHORT_BYTES, Short, StuckJob, StuckPeriod, Timeline, job_cwd, read_line,
+    write_line,
 };
-use crate::admit::{Hold, Lane};
+use crate::admit::{Hold, JobId, Lane, Threads};
 use crate::probe::ChildUsage;
 
 /// A job that the tests send.
 fn job() -> Job {
     Job {
-        label: "tests".to_owned(),
+        label: Label::new("tests"),
         pid: 42,
         command: "cargo nextest run".to_owned(),
         lane: Lane::Fast,
@@ -23,6 +25,8 @@ fn job() -> Job {
         cwd: None,
         workspace: None,
         short: None,
+        id: None,
+        beats: false,
     }
 }
 
@@ -110,8 +114,8 @@ fn each_request_is_one_json_line() {
 fn a_seat_is_one_json_line_that_reads_back_as_itself() {
     let seat = Request::Seat {
         job: job(),
-        jobs: 3,
-        ran_ms: 1500,
+        threads: Threads::new(3),
+        ran: Ago::from_millis(1500),
     };
     let text = line(&seat);
     assert_eq!(
@@ -128,13 +132,16 @@ fn a_seat_is_one_json_line_that_reads_back_as_itself() {
 #[test]
 fn each_reply_is_one_json_line() {
     assert_eq!(
-        line(&Reply::Granted { jobs: 3 }),
+        line(&Reply::Granted {
+            threads: Threads::new(3)
+        }),
         "{\"granted\":{\"jobs\":3}}\n"
     );
     assert_eq!(
         line(&Reply::Queued {
             ahead: 2,
-            held: Some(Hold::Full { max_jobs: 1 })
+            held: Some(Hold::Full { max_jobs: 1 }),
+            beats: false,
         }),
         "{\"queued\":{\"ahead\":2,\"held\":{\"hold\":\"full\",\"max_jobs\":1}}}\n"
     );
@@ -184,6 +191,51 @@ fn read_line_refuses_a_line_that_is_not_a_message() {
     let mut reader = BufReader::new("{\"fly\":1}\n".as_bytes());
     let error = read_line::<Request>(&mut reader).expect_err("the line is refused");
     assert_eq!(error.kind(), ErrorKind::InvalidData);
+}
+
+#[test]
+fn a_job_line_whose_label_holds_a_newline_is_refused_as_malformed() {
+    let text =
+        "{\"ask\":{\"label\":\"x\\nrunning: forged (pid 1)\",\"pid\":42,\"command\":\"make\"}}\n";
+    let error = read_line::<Request>(&mut BufReader::new(text.as_bytes()))
+        .expect_err("the line is refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidData);
+}
+
+#[test]
+fn a_job_line_whose_label_holds_a_space_and_a_dash_is_read() {
+    let text = "{\"ask\":{\"label\":\"api tests - fast\",\"pid\":42,\"command\":\"make\"}}\n";
+    let Some(Request::Ask(job)) =
+        read_line::<Request>(&mut BufReader::new(text.as_bytes())).expect("the line reads")
+    else {
+        panic!("the line is an ask");
+    };
+    assert_eq!(job.label.as_str(), "api tests - fast");
+}
+
+#[test]
+fn a_jobs_reply_writes_its_ids_threads_and_quiet_seconds_as_the_same_json_numbers() {
+    let id = Some(JobId::default());
+    let jobs = Reply::Jobs(Jobs {
+        max_jobs: 2,
+        running: vec![Job { id, ..job() }],
+        waiting: Vec::new(),
+        held: None,
+        reclaim: None,
+        reclaiming: None,
+        stuck: vec![StuckJob {
+            id,
+            label: Label::new("tests"),
+            pid: 42,
+            quiet: Duration::from_secs(120),
+        }],
+        busiest: None,
+        unreadable: false,
+    });
+    assert_eq!(
+        line(&jobs),
+        "{\"jobs\":{\"max_jobs\":2,\"running\":[{\"label\":\"tests\",\"pid\":42,\"command\":\"cargo nextest run\",\"lane\":\"fast\",\"id\":0}],\"waiting\":[],\"held\":null,\"reclaim\":null,\"reclaiming\":null,\"stuck\":[{\"id\":0,\"label\":\"tests\",\"pid\":42,\"quiet_seconds\":120}],\"busiest\":null,\"unreadable\":false}}\n"
+    );
 }
 
 #[test]
@@ -406,6 +458,9 @@ fn timeline() -> Timeline {
         held: Some(Hold::Full { max_jobs: 1 }),
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     }
 }
 
@@ -487,6 +542,9 @@ fn the_largest_timeline_reply_leaves_out_its_oldest_rows_until_it_fits_in_one_li
             cpu_percent: u32::MAX,
         }),
         unreadable: true,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     }
     .fit();
     assert!(fitted.hidden > 0, "every row fits: {}", fitted.jobs.len());
@@ -566,6 +624,26 @@ fn a_watched_job_says_so_on_the_wire() {
     })
     .expect("a job serializes");
     assert!(line.contains("\"watched\":true"), "{line}");
+}
+
+#[test]
+fn an_ask_for_beats_a_queued_reply_that_promises_them_and_a_beat_have_their_wire_form() {
+    let asked = line(&Request::Ask(Job {
+        beats: true,
+        ..job()
+    }));
+    assert!(asked.contains("\"beats\":true"), "{asked}");
+    assert_eq!(
+        line(&Reply::Queued {
+            ahead: 1,
+            held: None,
+            beats: true,
+        }),
+        "{\"queued\":{\"ahead\":1,\"held\":null,\"beats\":true}}\n"
+    );
+    assert_eq!(line(&Reply::Beat), "\"beat\"\n");
+    let read = read_line::<Reply>(&mut BufReader::new("\"beat\"\n".as_bytes())).expect("reads");
+    assert_eq!(read, Some(Reply::Beat));
 }
 
 #[test]

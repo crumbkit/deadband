@@ -257,6 +257,153 @@ fn run_without_a_daemon_exits_with_the_command_and_says_in_one_line_that_the_dae
     assert!(err.contains("the daemon is not running"), "{err}");
 }
 
+/// Tests of the signals that `deadband run` passes on to its job. Each one
+/// runs without a daemon, so the job starts at once, and plays the caller
+/// that sends the signal to `deadband run` alone.
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test runs the built binary as a person would, and plays its caller, which sends the signal"
+)]
+mod forwarding {
+    use std::process::{Command, ExitStatus, Stdio};
+
+    use rustix::process::{Pid, Signal, kill_process, test_kill_process};
+
+    use super::{deadband, line, socket};
+
+    /// The process that a test sends a signal to.
+    #[derive(Clone, Copy)]
+    enum To {
+        /// `deadband run` alone.
+        Run,
+        /// The job alone.
+        Job,
+    }
+
+    /// Starts a `sleep` job under `command`, a `deadband run` without its
+    /// job, sends `signal` to `deadband run` alone once the job runs, and
+    /// returns how `deadband run` ended and whether the job still ran after
+    /// it. A job that still runs is killed, so a failing test leaves no
+    /// `sleep` behind.
+    pub(crate) fn signal_the_run(command: Command, signal: Signal) -> (ExitStatus, bool) {
+        send_in_order(command, &[(To::Run, signal)])
+    }
+
+    /// Starts a `sleep` job under `command`, as [`signal_the_run`] does,
+    /// sends each of `signals` in order once the job runs, and returns how
+    /// `deadband run` ended and whether the job still ran after it.
+    fn send_in_order(mut command: Command, signals: &[(To, Signal)]) -> (ExitStatus, bool) {
+        let mut run = command
+            .args(["--", "sh", "-c", "echo $$; exec sleep 30"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the run starts");
+        let job = line(run.stdout.take().expect("piped")).expect("reads");
+        let job: i32 = job.trim().parse().expect("the job prints its pid");
+        let job = Pid::from_raw(job).expect("a pid is positive");
+        let wrapper = i32::try_from(run.id()).expect("a pid fits in i32");
+        let wrapper = Pid::from_raw(wrapper).expect("a pid is positive");
+        for &(to, signal) in signals {
+            let pid = match to {
+                To::Run => wrapper,
+                To::Job => job,
+            };
+            kill_process(pid, signal).expect("the signal is sent");
+        }
+        let ended = run.wait().expect("the run ends");
+        let still_runs = test_kill_process(job).is_ok();
+        if still_runs {
+            let _ = kill_process(job, Signal::KILL);
+        }
+        (ended, still_runs)
+    }
+
+    /// Asserts that `signal`, sent to `deadband run` alone, ends its job and
+    /// that `deadband run` exits as the job did.
+    fn ends_the_job(name: &str, signal: Signal) {
+        let socket = socket(name);
+        let (ended, still_runs) = signal_the_run(deadband(&socket.0, &["run"]), signal);
+        assert!(
+            !still_runs,
+            "the job outlived deadband run after {signal:?}"
+        );
+        assert_eq!(ended.code(), Some(128 + signal.as_raw()), "{ended:?}");
+    }
+
+    #[test]
+    fn a_sighup_sent_to_deadband_run_ends_its_job_and_deadband_run_exits_129() {
+        ends_the_job("hup", Signal::HUP);
+    }
+
+    #[test]
+    fn a_sigquit_sent_to_deadband_run_ends_its_job_and_deadband_run_exits_131() {
+        ends_the_job("quit", Signal::QUIT);
+    }
+
+    #[test]
+    fn a_sigusr1_sent_to_deadband_run_ends_its_job_and_deadband_run_exits_with_its_number() {
+        ends_the_job("usr1", Signal::USR1);
+    }
+
+    #[test]
+    fn a_sigusr2_sent_to_deadband_run_ends_its_job_and_deadband_run_exits_with_its_number() {
+        ends_the_job("usr2", Signal::USR2);
+    }
+
+    #[test]
+    fn a_sigterm_sent_to_deadband_run_still_ends_its_job_and_deadband_run_exits_143() {
+        ends_the_job("term", Signal::TERM);
+    }
+
+    /// Returns `run`, the command of a `deadband run`, started through
+    /// `nohup`, which sets SIGHUP to ignored before it starts `deadband run`.
+    fn under_nohup(run: &Command) -> Command {
+        let mut command = Command::new("nohup");
+        command.arg(run.get_program()).args(run.get_args());
+        for (name, value) in run.get_envs() {
+            match value {
+                Some(value) => command.env(name, value),
+                None => command.env_remove(name),
+            };
+        }
+        command
+    }
+
+    /// The SIGHUP to the job comes before the SIGTERM to `deadband run`, so
+    /// a job that lost nohup's ignore ends with SIGHUP and exits 129. The
+    /// twin below runs the same signals without nohup.
+    #[test]
+    fn under_nohup_a_sighup_to_deadband_run_or_its_job_leaves_the_job_running_until_a_sigterm() {
+        let socket = socket("nohup");
+        let run = under_nohup(&deadband(&socket.0, &["run"]));
+        let signals = [
+            (To::Run, Signal::HUP),
+            (To::Job, Signal::HUP),
+            (To::Run, Signal::TERM),
+        ];
+        let (ended, still_runs) = send_in_order(run, &signals);
+        assert!(!still_runs, "the job outlived deadband run");
+        assert_eq!(ended.code(), Some(143), "{ended:?}");
+    }
+
+    #[test]
+    fn without_nohup_a_sighup_to_the_job_ends_it_before_a_sigterm_to_deadband_run() {
+        let socket = socket("no-nohup");
+        let run = deadband(&socket.0, &["run"]);
+        let signals = [(To::Job, Signal::HUP), (To::Run, Signal::TERM)];
+        let (ended, still_runs) = send_in_order(run, &signals);
+        assert!(!still_runs, "the job outlived deadband run");
+        assert_eq!(ended.code(), Some(129), "{ended:?}");
+    }
+
+    #[test]
+    fn a_sigint_sent_to_deadband_run_still_ends_its_job_and_deadband_run_exits_130() {
+        ends_the_job("int", Signal::INT);
+    }
+}
+
 /// This test kills a daemon while a job runs. It needs no probe, because it
 /// never asks `status`, and a daemon holds a job on the job count on every
 /// system.
@@ -641,6 +788,8 @@ mod history {
     use std::process::Command;
     use std::time::{Duration, Instant};
 
+    use rustix::process::Signal;
+
     use super::{Daemon, deadband, output, socket};
 
     /// A directory for the daemon's socket and state. Dropping it removes it.
@@ -681,6 +830,27 @@ mod history {
         }
     }
 
+    /// Reads the file at `path` until it holds a job's line, for at most ten
+    /// seconds, and returns the first one as JSON. A daemon that held the
+    /// job long enough also writes a line of the machine, which this skips.
+    fn first_job_line(path: &Path) -> serde_json::Value {
+        let begun = Instant::now();
+        loop {
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            let job = text
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .find(|line| line["type"] == "job");
+            if let Some(job) = job {
+                return job;
+            }
+            assert!(
+                begun.elapsed() < Duration::from_secs(10),
+                "no job line came"
+            );
+        }
+    }
+
     /// Reads the file at `path` until it holds a line, for at most ten
     /// seconds, and returns the first line as JSON.
     fn first_line(path: &Path) -> serde_json::Value {
@@ -700,7 +870,7 @@ mod history {
         let _daemon = Daemon::started(home.command(&["daemon", "--max-jobs", "1"]));
         let run = output(home.command(&["run", "--", "sh", "-c", "exit 3"]));
         assert_eq!(run.status.code(), Some(3), "{run:?}");
-        let line = first_line(&home.file());
+        let line = first_job_line(&home.file());
         assert_eq!(line["type"], "job");
         assert_eq!(line["kind"], "sh");
         assert_eq!(line["exit"]["exited"]["code"], 3);
@@ -710,6 +880,18 @@ mod history {
         } else {
             assert!(line["child_cpu_ms"].is_null(), "{line}");
         }
+    }
+
+    #[test]
+    fn after_a_sighup_to_deadband_run_the_daemon_records_the_job_as_ended_by_sighup() {
+        let home = Home::new("hup");
+        let _daemon = Daemon::started(home.command(&["daemon", "--max-jobs", "1"]));
+        let (ended, still_runs) =
+            super::forwarding::signal_the_run(home.command(&["run"]), Signal::HUP);
+        assert!(!still_runs, "the job outlived deadband run");
+        assert_eq!(ended.code(), Some(129), "{ended:?}");
+        let line = first_job_line(&home.file());
+        assert_eq!(line["exit"]["signalled"]["signal"], 1, "{line}");
     }
 
     #[test]

@@ -8,7 +8,11 @@
 //! `mach_timebase_info`, `getrusage` and `confstr` only read, and write only
 //! into a buffer that this module owns. `confstr` is first asked for the
 //! length with a null buffer of length 0, then fills a buffer of exactly that
-//! length.
+//! length. `getpeereid` receives a socket's descriptor and pointers to one
+//! `uid_t` and one `gid_t` that this module owns, and it only reads.
+//! `sigaction` receives a null new action, so it changes no signal's
+//! disposition, and a pointer to one `sigaction` that this module owns, which
+//! it fills with the current disposition.
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
@@ -76,6 +80,24 @@ pub(super) fn user_temp_dir() -> Option<std::path::PathBuf> {
     )))
 }
 
+/// Returns the effective uid of the process on the other end of `stream`,
+/// which `getpeereid` reads from the kernel.
+pub(super) fn peer_uid(stream: &std::os::unix::net::UnixStream) -> io::Result<u32> {
+    use std::os::fd::AsRawFd as _;
+
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+    // SAFETY: `uid` and `gid` are one `uid_t` and one `gid_t`, which is what
+    // getpeereid fills, and the descriptor stays open for the call because
+    // `stream` is borrowed.
+    let status = unsafe { libc::getpeereid(stream.as_raw_fd(), &raw mut uid, &raw mut gid) };
+    if status == 0 {
+        Ok(uid)
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// Returns what the kernel reports of this process's waited-for children,
 /// or `None` when the call fails or a value is negative.
 pub(super) fn child_usage() -> Option<ChildUsage> {
@@ -93,6 +115,24 @@ pub(super) fn child_usage() -> Option<ChildUsage> {
         cpu_ms: millis(usage.ru_utime)?.saturating_add(millis(usage.ru_stime)?),
         peak_rss_bytes: u64::try_from(usage.ru_maxrss).ok()?,
     })
+}
+
+/// Returns whether this process has `signal` set to ignored, or `None` when
+/// `sigaction` refuses the query, as it does for a number that names no
+/// signal.
+pub(super) fn signal_ignored(signal: libc::c_int) -> Option<bool> {
+    let mut current = MaybeUninit::<libc::sigaction>::zeroed();
+    // SAFETY: the new action is null, so sigaction changes nothing and only
+    // reads. `current` is writable for one `sigaction`, the only value that
+    // sigaction writes.
+    let status = unsafe { libc::sigaction(signal, std::ptr::null(), current.as_mut_ptr()) };
+    if status != 0 {
+        return None;
+    }
+    // SAFETY: sigaction returned 0, so it filled `current`, and a
+    // `sigaction` of zeroes was already a valid value of the plain C struct.
+    let current = unsafe { current.assume_init() };
+    Some(current.sa_sigaction == libc::SIG_IGN)
 }
 
 /// Returns `time` in whole milliseconds, or `None` when it is negative.

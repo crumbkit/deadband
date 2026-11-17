@@ -23,18 +23,20 @@ use std::time::{Duration, Instant};
 
 use self::alive::{Ending, age, passing, unstarted, wait_for_connection};
 use self::reading::{priority_active, read_machine};
+use self::reclaims::Reclaims;
 use self::reply::deliver;
 use self::timeline::Ended;
 use crate::admit::{Hold, JobId, Limits, Queue, Reading, disk_critical};
 use crate::history::{Arrival, Recorder, Tally};
 use crate::probe::{Pressure, Probe};
-use crate::protocol::{Job, Label};
+use crate::protocol::Job;
 use crate::reclaim::{self, ReclaimLock, Reclaimed, Resource, Watch};
 use crate::spawn;
 
 mod alive;
 mod bind;
 mod reading;
+mod reclaims;
 mod reply;
 mod seat;
 mod settings;
@@ -43,10 +45,13 @@ mod tests;
 mod timeline;
 mod watch;
 
-pub(crate) use self::bind::take_lock;
 pub use self::bind::{
-    Bound, DAEMON_RUNNING, SOCKET_UNUSABLE, Unbound, bind, lock_path, raise_descriptor_limit,
+    Bound, DAEMON_RUNNING, DirectoryFault, SOCKET_DIRECTORY, SOCKET_UNUSABLE, Unbound, bind,
+    lock_path, raise_descriptor_limit,
 };
+pub(crate) use self::bind::{private_directory, take_lock};
+#[cfg(test)]
+pub(crate) use self::bind::{private_directory_as, take_lock_as};
 pub use self::settings::{Settings, Watching, default_max_jobs};
 
 /// How often the daemon samples the probe.
@@ -77,8 +82,6 @@ struct Waiter {
     /// The connection that the daemon writes the grant to, which a
     /// delivery shares after the queue lock is released.
     stream: Arc<UnixStream>,
-    /// The job's label as `deadband top` shows it.
-    label: Label,
     /// When the job asked to start.
     queued: Instant,
     /// What the history line needs from the job's arrival, or `None` when
@@ -106,6 +109,8 @@ struct State {
     watch: Watch,
     /// The last reclaim, for `deadband status`.
     reclaimed: Option<Reclaimed>,
+    /// The reclaims of the last ten minutes, for `deadband top`.
+    reclaims: Reclaims,
     /// When the daemon started.
     up: Instant,
     /// The jobs that have ended, the oldest first.
@@ -134,6 +139,7 @@ impl State {
             settings,
             watch: Watch::default(),
             reclaimed: None,
+            reclaims: Reclaims::default(),
             up: now,
             ended: VecDeque::new(),
             stuck: watch::Watched::default(),
@@ -152,6 +158,13 @@ impl State {
         }
     }
 
+    /// Notes that the reclaim that began did not run, so the rule rests
+    /// the resource and the history shows nothing of it.
+    fn skip_reclaim(&mut self) {
+        self.watch.skipped(Instant::now());
+        self.reclaims.finish();
+    }
+
     /// Feeds the latest reading and hold to the reclaim rule, and returns
     /// what to reclaim now. Memory counts as short while pressure is above
     /// normal or a job waits for memory.
@@ -162,12 +175,13 @@ impl State {
         let disk_short = reading
             .and_then(|reading| reading.disk)
             .is_some_and(|disk| disk_critical(&disk));
-        self.watch.observe(
-            &self.settings.reclaim,
-            memory_short,
-            disk_short,
-            Instant::now(),
-        )
+        let now = Instant::now();
+        let resource = self
+            .watch
+            .observe(&self.settings.reclaim, memory_short, disk_short, now)?;
+        self.reclaims
+            .begin(resource.need(&self.settings.reclaim), now);
+        Some(resource)
     }
 }
 
@@ -356,13 +370,24 @@ fn start_reclaim(
                 &log,
                 format_args!("another daemon is reclaiming, so this daemon starts no reclaim now"),
             );
-            lock(&shared).watch.skipped(Instant::now());
+            lock(&shared).skip_reclaim();
             return;
         };
-        let freed = reclaim::reclaim(&config, resource, quiet, &log, &mut |reclaimed| {
-            lock(&shared).reclaimed = Some(reclaimed);
-        });
-        lock(&shared).watch.ended(freed, Instant::now());
+        let freed = reclaim::reclaim(
+            &config,
+            resource,
+            quiet,
+            &log,
+            &mut |reclaimed| {
+                let mut state = lock(&shared);
+                state.reclaims.ended(&reclaimed, Instant::now());
+                state.reclaimed = Some(reclaimed);
+            },
+            &mut |reclaimer, report| lock(&shared).reclaims.planned(reclaimer, report),
+        );
+        let mut state = lock(&shared);
+        state.watch.ended(freed, Instant::now());
+        state.reclaims.finish();
     });
     if let Err(error) = started {
         note(
@@ -371,7 +396,7 @@ fn start_reclaim(
                 "the reclaim thread could not start: {error}, so this daemon starts no reclaim now"
             ),
         );
-        lock(shared).watch.skipped(Instant::now());
+        lock(shared).skip_reclaim();
     }
 }
 

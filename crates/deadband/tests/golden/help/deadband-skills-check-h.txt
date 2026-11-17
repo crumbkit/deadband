@@ -1,4 +1,4 @@
-Check that each installed copy of deadband's skill matches this deadband
+Check that each installed copy of this tool's skills matches this build
 
 Usage: deadband skills check [OPTIONS]
 

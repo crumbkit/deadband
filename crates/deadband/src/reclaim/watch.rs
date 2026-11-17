@@ -66,15 +66,33 @@ impl Track {
             .is_some_and(|since| now.saturating_duration_since(since) >= lasted)
     }
 
-    /// Reports whether the rest after the last reclaim has passed at
-    /// `now`: `after`, doubled for each reclaim in a row that freed
-    /// nothing, up to [`MAX_REST`] or `after` when that is longer.
-    fn rested(&self, after: Duration, now: Instant) -> bool {
-        let rest = after
+    /// Returns the rest after the last reclaim: `after`, doubled for each
+    /// reclaim in a row that freed nothing, up to [`MAX_REST`] or `after`
+    /// when that is longer.
+    fn rest(&self, after: Duration) -> Duration {
+        after
             .saturating_mul(2_u32.saturating_pow(if self.skipped { 0 } else { self.fruitless }))
-            .min(MAX_REST.max(after));
+            .min(MAX_REST.max(after))
+    }
+
+    /// Reports whether the rest after the last reclaim has passed at
+    /// `now`.
+    fn rested(&self, after: Duration, now: Instant) -> bool {
+        let rest = self.rest(after);
         self.ended
             .is_none_or(|ended| now.saturating_duration_since(ended) >= rest)
+    }
+
+    /// Returns how long from `now` until the resource is short for
+    /// `lasted` and its rest has passed, or `None` when it is not short.
+    fn due_in(&self, lasted: Duration, after: Duration, now: Instant) -> Option<Duration> {
+        let since = self.short_since?;
+        let lasting = lasted.saturating_sub(now.saturating_duration_since(since));
+        let resting = self.ended.map_or(Duration::ZERO, |ended| {
+            self.rest(after)
+                .saturating_sub(now.saturating_duration_since(ended))
+        });
+        Some(lasting.max(resting))
     }
 }
 
@@ -125,6 +143,21 @@ impl Watch {
         };
         self.running = Some((resource, SystemTime::now()));
         Some(resource)
+    }
+
+    /// Returns how long from `now` until the rule starts its next reclaim,
+    /// or `None` when it starts none: no reclaimer is configured, a
+    /// reclaim runs, or neither resource is short. Of the two resources,
+    /// the nearer one counts.
+    #[must_use]
+    pub fn next_in(&self, config: &Config, now: Instant) -> Option<Duration> {
+        if config.reclaimers.is_empty() || self.running.is_some() {
+            return None;
+        }
+        let after = config.after;
+        let memory = self.memory.due_in(after, after, now);
+        let disk = self.disk.due_in(Duration::ZERO, after, now);
+        memory.into_iter().chain(disk).min()
     }
 
     /// Records that the running reclaim ended at `now` after it freed

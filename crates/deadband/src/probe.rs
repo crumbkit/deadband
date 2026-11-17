@@ -5,8 +5,10 @@
 //! fake one. [`System`] reads the machine deadband runs on.
 //! On macOS it calls `getloadavg` and `sysctlbyname` in the `macos` module,
 //! which is the only module with unsafe code, and [`child_usage`] calls
-//! `getrusage` there. [`user_temp_dir`] calls `confstr` there. The `sysctl` module
-//! parses each sysctl value in safe code that runs on every platform.
+//! `getrusage` there. [`user_temp_dir`] calls `confstr` there, and the job
+//! module reads an inherited signal disposition through `sigaction` there.
+//! The `sysctl` module parses each sysctl value in safe code that runs on
+//! every platform.
 
 use std::ffi::CStr;
 use std::fmt;
@@ -21,7 +23,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(target_os = "macos")]
 #[expect(
     unsafe_code,
-    reason = "crates/deadband/src/probe/macos.rs calls getloadavg, sysctlbyname, libproc and getrusage; rust-standards.toml's unsafe decision states its invariant"
+    reason = "crates/deadband/src/probe/macos.rs calls getloadavg, sysctlbyname, libproc, getrusage, confstr, getpeereid and sigaction; rust-standards.toml's unsafe decision states its invariant"
 )]
 mod macos;
 // The parsing of the sysctl values runs on every platform, so the tests
@@ -134,6 +136,23 @@ pub fn child_usage() -> Option<ChildUsage> {
 #[must_use]
 pub fn user_temp_dir() -> Option<std::path::PathBuf> {
     macos::user_temp_dir()
+}
+
+/// Returns the effective uid of the process on the other end of `stream`.
+///
+/// # Errors
+///
+/// Returns the error of `getpeereid`.
+#[cfg(target_os = "macos")]
+pub(crate) fn peer_uid(stream: &std::os::unix::net::UnixStream) -> io::Result<u32> {
+    macos::peer_uid(stream)
+}
+
+/// Returns whether this process has `signal` set to ignored, which
+/// `sigaction` reads without changing it, or `None` when the query fails.
+#[cfg(target_os = "macos")]
+pub(crate) fn signal_ignored(signal: std::ffi::c_int) -> Option<bool> {
+    macos::signal_ignored(signal)
 }
 
 /// Returns `None`, because only macOS has a per-user directory apart from

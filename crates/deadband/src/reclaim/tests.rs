@@ -6,9 +6,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::{Config, Reclaimed, Reclaimer, Report, Resource, Watch, reclaim, size_bytes};
+use super::{Config, Kept, Reclaimed, Reclaimer, Report, Resource, Watch, reclaim, size_bytes};
 use crate::admit::GIB;
 use crate::daemon::Log;
+use crate::job::CommandLine;
 
 const AFTER: Duration = Duration::from_secs(60);
 
@@ -16,7 +17,7 @@ fn one_reclaimer() -> Config {
     Config {
         reclaimers: vec![Reclaimer {
             name: "workspaces".to_owned(),
-            command: vec!["tool".to_owned(), "reclaim".to_owned()],
+            command: CommandLine::of(&["tool", "reclaim"]),
         }],
         ..Config::default()
     }
@@ -53,7 +54,7 @@ command = ["tool", "reclaim", "--json"]
         Config {
             reclaimers: vec![Reclaimer {
                 name: "workspaces".to_owned(),
-                command: vec!["tool".to_owned(), "reclaim".to_owned(), "--json".to_owned()],
+                command: CommandLine::of(&["tool", "reclaim", "--json"]),
             }],
             after: Duration::from_secs(120),
             timeout: Duration::from_secs(30),
@@ -240,8 +241,37 @@ fn a_report_adds_up_the_freed_bytes_and_names_the_items_that_free_any() {
         Ok(Report {
             freed_bytes: 3072,
             items: vec!["a".to_owned(), "c".to_owned()],
+            kept: vec![Kept {
+                name: "b".to_owned(),
+                why: String::new(),
+            }],
         })
     );
+}
+
+#[test]
+fn a_report_names_each_kept_item_with_its_reason() {
+    let stdout = br#"{"data":[
+        {"name":"a","state":"would_stop","freed":1024,"reason":"idle"},
+        {"name":"b","state":"kept","freed":0,"reason":"a job waits"},
+        {"name":"c","state":"kept","freed":0},
+        {"name":"d","freed":0,"reason":"no state"}
+    ]}"#;
+    let report = Report::parse(stdout).expect("a report");
+    assert_eq!(
+        report.kept,
+        vec![
+            Kept {
+                name: "b".to_owned(),
+                why: "a job waits".to_owned()
+            },
+            Kept {
+                name: "c".to_owned(),
+                why: String::new()
+            },
+        ]
+    );
+    assert_eq!(report.items, vec!["a".to_owned()]);
 }
 
 #[test]
@@ -383,7 +413,7 @@ impl Scripts {
         std::fs::write(&script, body).expect("the script writes");
         Reclaimer {
             name: name.to_owned(),
-            command: vec!["/bin/sh".to_owned(), script.display().to_string()],
+            command: CommandLine::of(&["/bin/sh", &script.display().to_string()]),
         }
     }
 
@@ -408,9 +438,14 @@ fn run(reclaimers: Vec<Reclaimer>, quiet: bool) -> (u64, Vec<Reclaimed>, String)
         ..Config::default()
     };
     let mut records = Vec::new();
-    let freed = reclaim(&config, Resource::Memory, quiet, &log, &mut |each| {
-        records.push(each);
-    });
+    let freed = reclaim(
+        &config,
+        Resource::Memory,
+        quiet,
+        &log,
+        &mut |each| records.push(each),
+        &mut |_, _| {},
+    );
     let log = String::from_utf8(written.lock().expect("locks").clone()).expect("UTF-8");
     (freed, records, log)
 }
@@ -425,6 +460,35 @@ fn a_dry_run_that_plans_nothing_skips_the_real_run() {
     assert!(
         log.contains("would free 0 MiB for memory=4G: nothing"),
         "{log}"
+    );
+}
+
+#[test]
+fn each_dry_run_hands_its_plan_to_the_daemon_before_the_real_run() {
+    let scripts = Scripts::new();
+    let config = Config {
+        reclaimers: vec![scripts.reclaimer("a", 5 * GIB, 5 * GIB, 0)],
+        ..Config::default()
+    };
+    let log: Log = Arc::new(Mutex::new(Vec::new()));
+    let mut seen = Vec::new();
+    reclaim(
+        &config,
+        Resource::Memory,
+        false,
+        &log,
+        &mut |_| {},
+        &mut |reclaimer, plan| {
+            seen.push((reclaimer.name.clone(), plan.freed_bytes, scripts.calls()));
+        },
+    );
+    assert_eq!(
+        seen,
+        vec![(
+            "a".to_owned(),
+            5 * GIB,
+            "a --need memory=4G --dry-run\n".to_owned()
+        )]
     );
 }
 
@@ -469,7 +533,7 @@ fn the_config_file_reads_the_stuck_keys() {
     assert!(config.stuck.ignores("docker compose up"));
     assert_eq!(
         config.stuck.on_stuck,
-        vec!["tell".to_owned(), "me".to_owned()]
+        Some(CommandLine::of(&["tell", "me"]))
     );
 }
 
@@ -477,7 +541,7 @@ fn the_config_file_reads_the_stuck_keys() {
 fn a_config_with_no_stuck_keys_detects_after_five_minutes() {
     let config = Config::parse("").expect("an empty file parses");
     assert_eq!(config.stuck.after, Some(Duration::from_secs(300)));
-    assert!(config.stuck.on_stuck.is_empty());
+    assert_eq!(config.stuck.on_stuck, None);
 }
 
 #[test]
@@ -544,4 +608,71 @@ fn a_reclaim_time_that_is_not_rfc_3339_is_refused() {
     let mut json = serde_json::to_value(reclaimed(at, at)).expect("the reclaim serializes");
     json["at"] = "yesterday".into();
     assert!(serde_json::from_value::<Reclaimed>(json).is_err());
+}
+
+#[test]
+fn the_next_reclaim_starts_when_memory_has_been_short_for_the_wait() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let start = Instant::now();
+    assert_eq!(watch.next_in(&config, start), None);
+    assert_eq!(watch.observe(&config, true, false, start), None);
+    assert_eq!(
+        watch.next_in(&config, start + AFTER / 3),
+        Some(AFTER * 2 / 3)
+    );
+    assert_eq!(
+        watch.next_in(&config, start + AFTER * 2),
+        Some(Duration::ZERO)
+    );
+}
+
+#[test]
+fn no_reclaim_is_due_while_memory_is_not_short_or_a_reclaim_runs() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let start = Instant::now();
+    assert_eq!(watch.observe(&config, false, false, start), None);
+    assert_eq!(watch.next_in(&config, start), None);
+    assert_eq!(watch.observe(&config, true, false, start), None);
+    assert_eq!(
+        watch.observe(&config, true, false, start + AFTER),
+        Some(Resource::Memory)
+    );
+    assert_eq!(watch.next_in(&config, start + AFTER), None);
+}
+
+#[test]
+fn the_next_reclaim_waits_out_the_rest_after_reclaims_that_freed_nothing() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let start = Instant::now();
+    watch.observe(&config, true, false, start);
+    watch.observe(&config, true, false, start + AFTER);
+    watch.ended(0, start + AFTER);
+    let later = start + AFTER + Duration::from_secs(10);
+    watch.observe(&config, true, false, later);
+    // The rest after one empty reclaim is twice the wait, and it began at
+    // the reclaim's end, so 110 s remain after 10 s of it.
+    assert_eq!(
+        watch.next_in(&config, later),
+        Some(AFTER * 2 - Duration::from_secs(10))
+    );
+}
+
+#[test]
+fn the_nearer_of_the_memory_and_disk_starts_is_the_next_reclaim() {
+    let config = one_reclaimer();
+    let mut watch = Watch::default();
+    let start = Instant::now();
+    assert_eq!(
+        watch.observe(&config, false, true, start),
+        Some(Resource::Disk)
+    );
+    watch.ended(0, start);
+    let later = start + Duration::from_secs(5);
+    watch.observe(&config, true, true, later);
+    // Disk rests for twice the wait after one empty reclaim; memory has to
+    // stay short for the wait, which ends sooner.
+    assert_eq!(watch.next_in(&config, later), Some(AFTER));
 }

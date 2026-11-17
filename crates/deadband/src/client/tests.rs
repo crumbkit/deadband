@@ -10,14 +10,17 @@ use std::time::Duration;
 
 use super::lease::Seat;
 use super::{
-    Admission, Lease, Notices, REASK_FOR, Unasked, ask, ask_noticed, ask_reasking, jobs, reply,
-    timeline,
+    Admission, BEAT_SILENCE, Lease, Notices, REASK_FOR, Unasked, Waits, ask, ask_noticed,
+    ask_reasking, jobs, reply, timeline,
 };
-use crate::admit::{Hold, Lane};
+use crate::admit::{Hold, Lane, Threads};
 use crate::protocol::{
-    Ago, Job, Jobs, OutsideJobs, Reply, Request, Timeline, read_line, write_line,
+    Ago, Job, Jobs, Label, OutsideJobs, Reply, Request, Timeline, read_line, write_line,
 };
 use crate::testing::{TestSocket, socket_path};
+
+mod beats;
+mod peer;
 
 /// How long the tests let a scripted daemon take to answer.
 const ANSWER_WITHIN: Duration = Duration::from_secs(10);
@@ -27,7 +30,7 @@ const SHORT_WAIT: Duration = Duration::from_millis(50);
 
 fn job() -> Job {
     Job {
-        label: "build".to_owned(),
+        label: Label::new("build"),
         pid: 9,
         command: "make".to_owned(),
         lane: Lane::Normal,
@@ -35,6 +38,18 @@ fn job() -> Job {
         cwd: None,
         workspace: None,
         short: None,
+        id: None,
+        beats: false,
+    }
+}
+
+/// Returns the waits of a test client that keeps asking for `reask` after
+/// it loses a daemon that queued it.
+const fn reasking(reask: Duration) -> Waits {
+    Waits {
+        answer: ANSWER_WITHIN,
+        reask,
+        silence: BEAT_SILENCE,
     }
 }
 
@@ -130,13 +145,13 @@ fn ask_starts_the_job_when_the_daemon_closes_the_connection_while_it_waits() {
     let (path, received) = scripted(vec![Reply::Queued {
         ahead: 2,
         held: Some(held),
+        beats: false,
     }]);
     let mut queued = None;
     let admission = ask_reasking(
         &path,
         &job(),
-        ANSWER_WITHIN,
-        Duration::from_millis(300),
+        reasking(Duration::from_millis(300)),
         |n, why| queued = Some((n, why)),
         None,
     );
@@ -169,8 +184,7 @@ fn queued_then_lost(
         ask_reasking(
             &asked,
             &job(),
-            ANSWER_WITHIN,
-            reask_for,
+            reasking(reask_for),
             |ahead, _| reports.send(ahead).expect("the test receives"),
             None,
         )
@@ -182,6 +196,7 @@ fn queued_then_lost(
         &Reply::Queued {
             ahead: 3,
             held: None,
+            beats: false,
         },
     )
     .expect("the queue place writes");
@@ -196,11 +211,17 @@ fn a_queued_client_asks_a_restarted_daemon_again_before_it_starts_the_job() {
     let (listener, asking, reported) = queued_then_lost(&path, REASK_FOR);
     let mut peer = next_connection(&listener, ANSWER_WITHIN).expect("the client asks again");
     assert_eq!(peer.request(), Request::Ask(job()));
-    write_line(&mut peer.stream, &Reply::Granted { jobs: 4 }).expect("the grant writes");
+    write_line(
+        &mut peer.stream,
+        &Reply::Granted {
+            threads: Threads::new(4),
+        },
+    )
+    .expect("the grant writes");
     let Admission::Granted(lease) = asking.join().expect("the ask ends") else {
         panic!("the client started the job instead of asking the new daemon");
     };
-    assert_eq!(lease.jobs(), 4);
+    assert_eq!(lease.threads(), Threads::new(4));
     assert!(reported.try_recv().is_err(), "the place was reported twice");
 }
 
@@ -217,6 +238,14 @@ fn a_queued_client_starts_the_job_when_no_daemon_returns_within_the_bound() {
     );
 }
 
+/// A job that asks the daemon for beats while it waits.
+fn beating() -> Job {
+    Job {
+        beats: true,
+        ..job()
+    }
+}
+
 #[test]
 fn a_queued_client_stops_asking_at_the_bound_when_every_daemon_queues_it_and_closes() {
     let path = socket_path();
@@ -224,17 +253,12 @@ fn a_queued_client_stops_asking_at_the_bound_when_every_daemon_queues_it_and_clo
     let (done, finished) = mpsc::channel();
     let asked = path.to_path_buf();
     thread::spawn(move || {
-        let admission = ask_reasking(
-            &asked,
-            &job(),
-            ANSWER_WITHIN,
-            Duration::from_millis(300),
-            |_, _| {},
-            None,
-        );
+        let waits = reasking(Duration::from_millis(300));
+        let admission = ask_reasking(&asked, &beating(), waits, |_, _| {}, None);
         let _ = done.send(admission);
     });
-    // The daemon queues each try and closes it. It ends with the process.
+    // The daemon queues each try, promises beats and closes before it sends
+    // one, so no try clears the first loss. It ends with the process.
     thread::spawn(move || {
         while let Ok((mut stream, _)) = listener.accept() {
             let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
@@ -242,6 +266,7 @@ fn a_queued_client_stops_asking_at_the_bound_when_every_daemon_queues_it_and_clo
             let queued = Reply::Queued {
                 ahead: 1,
                 held: None,
+                beats: true,
             };
             let _ = write_line(&mut stream, &queued);
         }
@@ -273,12 +298,18 @@ fn ask_returns_a_lease_when_the_daemon_grants_the_job_after_it_waits() {
     let queued = Reply::Queued {
         ahead: 0,
         held: None,
+        beats: false,
     };
-    let (path, received) = granting(vec![queued, Reply::Granted { jobs: 5 }]);
+    let (path, received) = granting(vec![
+        queued,
+        Reply::Granted {
+            threads: Threads::new(5),
+        },
+    ]);
     let Admission::Granted(lease) = ask(&path, &job(), ANSWER_WITHIN, |_, _| {}) else {
         panic!("the daemon's grant was not taken");
     };
-    assert_eq!(lease.jobs(), 5);
+    assert_eq!(lease.threads(), Threads::new(5));
     lease.end(Some(4));
     assert_eq!(
         received.recv().expect("the ask arrives"),
@@ -354,6 +385,9 @@ fn empty_timeline() -> Timeline {
         held: None,
         busiest: None,
         unreadable: false,
+        reclaimers: Vec::new(),
+        plan: None,
+        next_reclaim: None,
     }
 }
 
@@ -417,7 +451,9 @@ fn timeline_from_a_daemon_that_sends_garbage_says_garbled() {
 
 #[test]
 fn timeline_refuses_a_reply_of_the_wrong_kind() {
-    let (path, _received) = scripted(vec![Reply::Granted { jobs: 1 }]);
+    let (path, _received) = scripted(vec![Reply::Granted {
+        threads: Threads::new(1),
+    }]);
     assert!(matches!(
         timeline(&path, ANSWER_WITHIN),
         Err(Unasked::Garbled { .. })
@@ -427,7 +463,9 @@ fn timeline_refuses_a_reply_of_the_wrong_kind() {
 #[test]
 fn a_lease_reports_an_exit_code_from_the_status_it_ends_with() {
     use std::os::unix::process::ExitStatusExt;
-    let (path, received) = granting(vec![Reply::Granted { jobs: 1 }]);
+    let (path, received) = granting(vec![Reply::Granted {
+        threads: Threads::new(1),
+    }]);
     let Admission::Granted(lease) = ask(&path, &job(), ANSWER_WITHIN, |_, _| {}) else {
         panic!("the daemon granted the job");
     };
@@ -446,7 +484,9 @@ fn a_lease_reports_an_exit_code_from_the_status_it_ends_with() {
 #[test]
 fn a_lease_reports_the_signal_that_ended_the_job() {
     use std::os::unix::process::ExitStatusExt;
-    let (path, received) = granting(vec![Reply::Granted { jobs: 1 }]);
+    let (path, received) = granting(vec![Reply::Granted {
+        threads: Threads::new(1),
+    }]);
     let Admission::Granted(lease) = ask(&path, &job(), ANSWER_WITHIN, |_, _| {}) else {
         panic!("the daemon granted the job");
     };
@@ -532,14 +572,15 @@ fn next_connection(listener: &UnixListener, within: Duration) -> Option<Peer> {
     Some(Peer { stream, reader })
 }
 
-/// Grants a job with `jobs` threads to a client that asks on `path`, and
-/// returns its lease and the daemon's end of the connection.
-fn lease_on(listener: &UnixListener, path: &Path, jobs: usize) -> (Lease, Peer) {
+/// Grants a job with `threads` threads to a client that asks on `path`,
+/// and returns its lease and the daemon's end of the connection.
+fn lease_on(listener: &UnixListener, path: &Path, threads: usize) -> (Lease, Peer) {
     let asked = path.to_path_buf();
     let asking = thread::spawn(move || ask(&asked, &job(), ANSWER_WITHIN, |_, _| {}));
     let mut peer = next_connection(listener, ANSWER_WITHIN).expect("the client connects");
     assert_eq!(peer.request(), Request::Ask(job()));
-    write_line(&mut peer.stream, &Reply::Granted { jobs }).expect("the grant writes");
+    let threads = Threads::new(threads);
+    write_line(&mut peer.stream, &Reply::Granted { threads }).expect("the grant writes");
     let Admission::Granted(lease) = asking.join().expect("the ask ends") else {
         panic!("the daemon granted the job");
     };
@@ -562,17 +603,17 @@ fn a_lease_seats_again_with_its_job_and_threads_after_the_connection_closes() {
     let mut next = next_connection(&listener, ANSWER_WITHIN).expect("the lease connects again");
     let Request::Seat {
         job: seated,
-        jobs,
-        ran_ms,
+        threads,
+        ran,
     } = next.request()
     else {
         panic!("the lease did not send a seat");
     };
     assert_eq!(seated, job());
-    assert_eq!(jobs, 5);
+    assert_eq!(threads, Threads::new(5));
     // The lease waits 100 ms after the connection closes, and the job has
     // run at least that long.
-    assert!(ran_ms >= 100, "{ran_ms}");
+    assert!(ran.as_millis() >= 100, "{ran:?}");
 }
 
 #[test]
@@ -604,7 +645,7 @@ fn a_lease_opens_no_second_connection_while_the_first_stays_open() {
     client
         .set_read_timeout(Some(READ_TIMEOUT))
         .expect("the timeout sets");
-    let _lease = Lease::watched(client, 5, &path, &job(), None);
+    let _lease = Lease::watched(client, Threads::new(5), &path, &job(), None);
     // The wait outlasts the read timeout several times. A slow machine
     // can only make this check pass without proving anything, never fail.
     assert!(next_connection(&listener, READ_TIMEOUT * 4).is_none());
@@ -692,8 +733,8 @@ fn a_connection_that_opens_after_the_job_ended_is_closed() {
     seat.end(None);
     let request = Request::Seat {
         job: job(),
-        jobs: 1,
-        ran_ms: 0,
+        threads: Threads::new(1),
+        ran: Ago::from_millis(0),
     };
     assert!(!seat.install(late, &request));
     assert_eq!(
@@ -715,7 +756,13 @@ fn noticing(lines: Vec<String>) -> (TestSocket, mpsc::Sender<()>, mpsc::Receiver
         let (mut stream, _) = listener.accept().expect("the client connects");
         let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
         let _ = read_line::<Request>(&mut reader);
-        write_line(&mut stream, &Reply::Granted { jobs: 2 }).expect("the grant writes");
+        write_line(
+            &mut stream,
+            &Reply::Granted {
+                threads: Threads::new(2),
+            },
+        )
+        .expect("the grant writes");
         go.recv().expect("the test says go");
         for line in lines {
             std::io::Write::write_all(&mut stream, line.as_bytes()).expect("the line writes");
@@ -802,7 +849,9 @@ fn a_line_the_lease_cannot_read_is_ignored_and_the_lease_is_held() {
 #[test]
 fn a_reply_with_no_line_for_the_caller_is_ignored() {
     let (path, go, _connections) = noticing(vec![
-        reply_line(&Reply::Granted { jobs: 1 }),
+        reply_line(&Reply::Granted {
+            threads: Threads::new(1),
+        }),
         reply_line(&Reply::Active {
             quiet: Ago::from_millis(60_000),
         }),

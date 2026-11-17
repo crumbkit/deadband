@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{MAX_LINE, OutsideJobs};
+use super::{Ahead, MAX_LINE, OutsideJobs, ReclaimPlan, ReclaimerRow};
 use crate::admit::{Hold, Lane};
 
 /// The most bytes that a [`Label`] holds.
@@ -118,6 +118,12 @@ impl Ago {
     #[must_use]
     pub const fn duration(self) -> Duration {
         Duration::from_millis(self.0)
+    }
+
+    /// Returns the age in whole milliseconds.
+    #[must_use]
+    pub const fn as_millis(self) -> u64 {
+        self.0
     }
 }
 
@@ -230,8 +236,9 @@ impl Timeline {
     ///
     /// A row holds at most about 800 bytes of JSON, so 100 rows fit unless
     /// most of their labels and workspaces are long and full of characters
-    /// that JSON escapes. Only then does a row leave, and each one costs a
-    /// new serialization of the reply.
+    /// that JSON escapes. The reclaim data takes up to about 30 KB of the
+    /// line in the worst case, so rows leave sooner then. Each row that
+    /// leaves costs a new serialization of the reply.
     #[must_use]
     pub fn fit(mut self) -> Self {
         // The reply wraps the timeline as `{"timeline":...}`, and its line
@@ -269,4 +276,16 @@ pub struct Timeline {
     /// Whether the daemon's latest read of a job's processes failed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unreadable: bool,
+    /// Each configured reclaimer with its runs of the last 10 minutes, or
+    /// nothing when no reclaim ran in that time and none runs now.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reclaimers: Vec<ReclaimerRow>,
+    /// The plan of the reclaim that runs now, or `null` when none runs or
+    /// its reclaimer gave none yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<ReclaimPlan>,
+    /// How long until the daemon starts its next reclaim, or `null` when
+    /// none is due or one runs now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_reclaim: Option<Ahead>,
 }

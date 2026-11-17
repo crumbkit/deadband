@@ -1,4 +1,5 @@
-//! The grant and queued replies that the daemon writes to jobs' clients.
+//! The grant, queued and beat replies that the daemon writes to jobs'
+//! clients.
 //! A thread decides each reply under the queue lock and collects it in
 //! [`Replies`], and [`deliver`] writes the replies after the thread has
 //! released the lock, so a client that does not read never holds the lock.
@@ -41,17 +42,27 @@ impl State {
             if started.is_empty() {
                 return replies;
             }
-            for (id, jobs) in started {
+            for (id, threads) in started {
                 self.count_started(id);
                 let stream = self
                     .queue
                     .running_job(id)
                     .map(|job| Arc::clone(&job.stream));
                 match stream {
-                    Some(stream) => replies.grant(id, stream, Reply::Granted { jobs }),
+                    Some(stream) => replies.grant(id, stream, Reply::Granted { threads }),
                     None => self.record(id, None, None),
                 }
             }
+        }
+    }
+
+    /// Adds a [`Reply::Beat`] to `replies` for each waiting job whose client
+    /// asked for beats, which tells the client that the daemon still serves
+    /// its queue. A beat that cannot be written is handled as a queued reply
+    /// is.
+    pub(super) fn beat(&self, replies: &mut Replies) {
+        for waiter in self.queue.waiting().filter(|waiter| waiter.job.beats) {
+            replies.tell(Arc::clone(&waiter.stream), Reply::Beat);
         }
     }
 }

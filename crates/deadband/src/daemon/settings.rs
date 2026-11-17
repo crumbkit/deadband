@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use super::{FIRST_LINE_WITHIN, SAMPLE_EVERY};
 use crate::history::MACHINE_EVERY;
-use crate::job::busiest::PS_COMMAND;
+use crate::job::CommandLine;
+use crate::job::busiest::ps_command;
 use crate::reclaim;
 
 /// How the daemon admits jobs.
@@ -43,7 +44,7 @@ pub struct Watching {
     /// How often the daemon reads the process tree of each watched job.
     pub every: Duration,
     /// The command that lists every process.
-    pub census: Vec<String>,
+    pub census: CommandLine,
     /// How long the daemon waits for that command.
     pub census_within: Duration,
     /// How often that command runs while a job stays stuck.
@@ -57,7 +58,7 @@ impl Default for Watching {
     fn default() -> Self {
         Self {
             every: Duration::from_secs(15),
-            census: PS_COMMAND.map(str::to_owned).to_vec(),
+            census: ps_command(),
             census_within: Duration::from_secs(5),
             census_every: Duration::from_secs(60),
             on_stuck_within: Duration::from_secs(60),

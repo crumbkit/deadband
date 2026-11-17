@@ -13,14 +13,18 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use super::{Log, Settings, Unbound, bind, default_max_jobs, lock_path, serve};
-use crate::admit::{GIB, Hold, Lane};
+use crate::admit::{GIB, Hold, JobId, Lane, Threads};
 use crate::history::FILE;
 use crate::history::tests::{Scratch, handled, lines_of, write_file};
 use crate::probe::{ChildUsage, Disk, Pressure, Probe, Sample, Unreadable};
-use crate::protocol::{Job, JobState, Jobs, Reply, Request, Short, read_line, write_line};
+use crate::protocol::{
+    Ago, Job, JobState, Jobs, Label, Reply, Request, Short, read_line, write_line,
+};
 use crate::testing::{TestSocket, socket_path};
 
 mod alive;
+mod private;
+mod reclaims;
 mod reply;
 mod shown;
 mod timeline;
@@ -189,7 +193,7 @@ impl Client {
 
 fn job(label: &str) -> Job {
     Job {
-        label: label.to_owned(),
+        label: Label::new(label),
         pid: 7,
         command: format!("make {label}"),
         lane: Lane::Normal,
@@ -197,14 +201,17 @@ fn job(label: &str) -> Job {
         cwd: None,
         workspace: None,
         short: None,
+        id: None,
+        beats: false,
     }
 }
 
 /// Returns `job(label)` as the daemon lists it, with the short command that
-/// it computes from `make <label>`.
-fn shown_job(label: &str) -> Job {
+/// it computes from `make <label>` and the number `id` that its queue gave.
+fn shown_job(label: &str, id: u64) -> Job {
     Job {
         short: Some(Short::new("make")),
+        id: Some(JobId::new(id)),
         ..job(label)
     }
 }
@@ -224,13 +231,14 @@ fn queued(ahead: usize, max_jobs: usize) -> Reply {
     Reply::Queued {
         ahead,
         held: Some(Hold::Full { max_jobs }),
+        beats: false,
     }
 }
 
 /// The grant of a normal-lane job on a daemon of `max_jobs` jobs.
 fn granted(max_jobs: usize) -> Reply {
     Reply::Granted {
-        jobs: CORES / max_jobs,
+        threads: Threads::new(CORES / max_jobs),
     }
 }
 
@@ -239,8 +247,8 @@ fn seat(path: &Path, label: &str, claimed: usize, ran_ms: u64) -> Client {
     let mut client = Client::connect(path);
     client.send(&Request::Seat {
         job: job(label),
-        jobs: claimed,
-        ran_ms,
+        threads: Threads::new(claimed),
+        ran: Ago::from_millis(ran_ms),
     });
     client
 }
@@ -283,7 +291,7 @@ fn a_seated_job_shows_in_status_and_a_new_job_waits_behind_it() {
     let (path, _) = start(1, &Dial::new(Pressure::Normal));
     let _seated = seat(&path, "a", 16, 0);
     let listed = until_running(&path, 1);
-    assert_eq!(listed.running, [shown_job("a")]);
+    assert_eq!(listed.running, [shown_job("a", 0)]);
     assert_eq!(Client::ask(&path, "b").reply(), queued(0, 1));
 }
 
@@ -380,8 +388,8 @@ fn status_lists_the_running_and_the_waiting_jobs() {
         jobs(&path),
         Jobs {
             max_jobs: 1,
-            running: vec![shown_job("a")],
-            waiting: vec![shown_job("b")],
+            running: vec![shown_job("a", 0)],
+            waiting: vec![shown_job("b", 1)],
             held: Some(Hold::Full { max_jobs: 1 }),
             reclaim: None,
             reclaiming: None,
@@ -402,7 +410,14 @@ fn a_job_waits_under_warn_pressure_and_starts_when_pressure_falls_to_normal() {
     let held = Some(Hold::Memory {
         pressure: Pressure::Warn,
     });
-    assert_eq!(second.reply(), Reply::Queued { ahead: 0, held });
+    assert_eq!(
+        second.reply(),
+        Reply::Queued {
+            ahead: 0,
+            held,
+            beats: false
+        }
+    );
     dial.set(Pressure::Normal);
     assert_eq!(second.reply(), granted(2));
 }
@@ -421,7 +436,8 @@ fn status_reports_the_hold_that_follows_the_machine_and_none_once_the_queue_drai
         second.reply(),
         Reply::Queued {
             ahead: 0,
-            held: Some(memory)
+            held: Some(memory),
+            beats: false
         }
     );
     assert_eq!(jobs(&path).held, Some(memory));
@@ -452,7 +468,8 @@ fn a_job_waits_while_free_disk_is_critically_low_even_when_nothing_runs_and_star
             first.reply(),
             Reply::Queued {
                 ahead: 0,
-                held: Some(Hold::Disk { .. })
+                held: Some(Hold::Disk { .. }),
+                ..
             }
         ),
         "the low disk holds the first job"
@@ -474,7 +491,9 @@ fn a_fast_job_gets_one_more_thread_than_a_normal_job() {
     let (path, _) = start(2, &Dial::new(Pressure::Normal));
     assert_eq!(
         Client::ask_in(&path, "a", Lane::Fast).reply(),
-        Reply::Granted { jobs: 9 }
+        Reply::Granted {
+            threads: Threads::new(9)
+        }
     );
 }
 
@@ -508,11 +527,17 @@ fn with_an_active_priority_file_a_fast_job_takes_the_place_that_normal_jobs_leav
         second.reply(),
         Reply::Queued {
             ahead: 0,
-            held: Some(Hold::Lane { places: 1 })
+            held: Some(Hold::Lane { places: 1 }),
+            beats: false
         }
     );
     let mut fast = Client::ask_in(&path, "fast", Lane::Fast);
-    assert_eq!(fast.reply(), Reply::Granted { jobs: 9 });
+    assert_eq!(
+        fast.reply(),
+        Reply::Granted {
+            threads: Threads::new(9)
+        }
+    );
     let _ = std::fs::remove_file(&file);
 }
 
@@ -530,7 +555,12 @@ fn a_waiting_fast_job_starts_before_a_normal_job_that_waited_longer() {
         signal: None,
         usage: None,
     });
-    assert_eq!(fast.reply(), Reply::Granted { jobs: 17 });
+    assert_eq!(
+        fast.reply(),
+        Reply::Granted {
+            threads: Threads::new(17)
+        }
+    );
     fast.send(&Request::Done {
         exit_code: Some(0),
         signal: None,
@@ -623,7 +653,7 @@ fn a_waiting_client_that_disconnects_leaves_the_queue_and_the_next_moves_up() {
         // observable round trip.
         listed = jobs(&path);
     }
-    assert_eq!(listed.waiting, vec![shown_job("c")]);
+    assert_eq!(listed.waiting, vec![shown_job("c", 2)]);
     first.send(&Request::Done {
         exit_code: Some(0),
         signal: None,

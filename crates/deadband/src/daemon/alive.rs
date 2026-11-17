@@ -6,7 +6,8 @@
 //! replaced no longer keeps a second daemon off its socket, so it stops for
 //! the same reason. A daemon whose sampler panicked, or that the operating
 //! system refuses a thread it needs, grants nobody, so it stops too. A
-//! client whose daemon stops starts its job at once.
+//! client whose daemon stops starts its job at once. The watchdog here also
+//! beats to the waiting clients that asked for beats.
 
 use std::io;
 use std::os::unix::net::UnixListener;
@@ -18,7 +19,7 @@ use std::time::{Duration, Instant};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 
-use super::reply::deliver;
+use super::reply::{Replies, deliver};
 use super::{Log, Shared, State, lock, lock_path, note};
 use crate::admit::Reading;
 use crate::file_id::FileId;
@@ -37,31 +38,35 @@ impl State {
     }
 }
 
-/// Runs while the sampler may be stalled, until `stopped` receives or
-/// disconnects. Each time the reading is stale it checks the socket file
-/// with `ending`, starts the waiting jobs that a stale reading lets start,
-/// and writes one log line when the reading first goes stale.
+/// Runs while the daemon serves, until `stopped` receives or disconnects.
+/// Once per [`stale_after`] it sends a beat to each waiting job whose
+/// client asked for beats, so a client stops hearing them when the daemon
+/// stops, or when a thread blocks or deadlocks while it holds the queue
+/// lock. Each time the reading is stale it also checks the socket file with
+/// `ending`, starts the waiting jobs that a stale reading lets start, and
+/// writes one log line when the reading first goes stale.
 pub(super) fn age(shared: &Shared, stopped: &Receiver<()>, log: &Log, ending: Ending) {
     let every = stale_after(lock(shared).settings.sample_every);
     while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(every) {
         let mut state = lock(shared);
-        if !state.stale(Instant::now()) {
-            continue;
+        let mut replies = Replies::default();
+        if state.stale(Instant::now()) {
+            if ending.check() {
+                return;
+            }
+            if !state.stale_noted {
+                state.stale_noted = true;
+                note(
+                    log,
+                    format_args!(
+                        "the probe has not read the machine for over {}, so each job starts once a place is free until it reads again",
+                        humantime::format_duration(every)
+                    ),
+                );
+            }
+            replies = state.grant();
         }
-        if ending.check() {
-            return;
-        }
-        if !state.stale_noted {
-            state.stale_noted = true;
-            note(
-                log,
-                format_args!(
-                    "the probe has not read the machine for over {}, so each job starts once a place is free until it reads again",
-                    humantime::format_duration(every)
-                ),
-            );
-        }
-        let replies = state.grant();
+        state.beat(&mut replies);
         drop(state);
         deliver(shared, replies);
     }

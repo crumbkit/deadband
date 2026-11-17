@@ -19,8 +19,11 @@ use crumbkit::{Age, Document};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use self::file::{File, age, size};
+use crate::job::CommandLine;
 use crate::stuck;
 
+mod file;
 mod lock;
 pub(crate) mod program;
 #[cfg(test)]
@@ -60,15 +63,14 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// One reclaimer: a name for the log and `deadband status`, and the command
 /// that the daemon runs with `--need` added.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reclaimer {
     /// The name that the daemon's log and `deadband status` show for the
     /// reclaimer.
     pub name: String,
     /// The program, as an absolute path, and its first arguments. The
     /// daemon adds `--need` and, for a dry run, `--dry-run`.
-    pub command: Vec<String>,
+    pub command: CommandLine,
 }
 
 /// What the daemon reads from its config file.
@@ -110,70 +112,6 @@ impl Default for Config {
     }
 }
 
-/// The config file as it is written. Every key is optional.
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct File {
-    /// How long memory stays short before a reclaim, and the wait between
-    /// reclaims, as an age such as "60s". It is at least 10s, and 60s when
-    /// the file leaves it out.
-    reclaim_after: Option<String>,
-    /// How long the daemon waits for one run of a reclaimer, as an age such
-    /// as "5m". It is more than 0, and 5m when the file leaves it out.
-    reclaim_timeout: Option<String>,
-    /// The memory each reclaim asks for, as a whole number with an optional
-    /// K, M, G or T, such as "4G". It is 4G when the file leaves it out.
-    reclaim_memory: Option<String>,
-    /// The disk each reclaim asks for, as a whole number with an optional
-    /// K, M, G or T, such as "20G". It is 20G when the file leaves it out.
-    reclaim_disk: Option<String>,
-    /// The reclaimers, which the daemon asks in this order. Without one,
-    /// the daemon never reclaims.
-    #[serde(default)]
-    reclaim: Vec<Reclaimer>,
-    /// How long a job's process tree shows no activity before the job
-    /// counts as stuck, as an age of at least 1m such as "5m", or "off" to
-    /// turn detection off. It is 5m when the file leaves it out.
-    stuck_after: Option<String>,
-    /// Regular expressions. A job whose command line matches any of them is
-    /// not watched for being stuck.
-    #[serde(default)]
-    stuck_ignore: Vec<String>,
-    /// The program, as an absolute path, and its arguments, which the
-    /// daemon runs once each time a job becomes stuck.
-    on_stuck: Option<Vec<String>>,
-    /// Directories, relative to a job's checkout, such as "target". The
-    /// job history marks a job as warm when one of them has an entry under
-    /// the job's checkout when the job asks.
-    #[serde(default)]
-    warm_dirs: Vec<String>,
-    /// Program file names, such as "cargo". The job history's kind of a
-    /// job whose program is listed keeps up to two plain lowercase words
-    /// after it, such as "cargo nextest run", and the kind of any other job
-    /// is the program's file name alone.
-    #[serde(default)]
-    kind_tools: Vec<String>,
-}
-
-/// Returns the age that `value` gives, or `default` when it is `None`.
-fn age(value: Option<String>, default: Duration) -> Result<Duration, String> {
-    value.map_or(Ok(default), |value| {
-        humantime::parse_duration(&value)
-            .map_err(|error| format!("{value:?} is not an age such as \"60s\": {error}"))
-    })
-}
-
-/// Returns the size that `value` gives, or `default` when it is `None`.
-fn size(value: Option<String>, default: String) -> Result<String, String> {
-    let value = value.unwrap_or(default);
-    match size_bytes(&value) {
-        Some(_) => Ok(value),
-        None => Err(format!(
-            "{value:?} is not a size such as \"4G\": a whole number with K, M, G or T"
-        )),
-    }
-}
-
 impl Config {
     /// Reads a config file's `text`.
     ///
@@ -186,9 +124,17 @@ impl Config {
     /// [`stuck::Config::parse`] refuses.
     pub fn parse(text: &str) -> Result<Self, String> {
         let file: File = text::from_toml(text)?;
-        if let Some(empty) = file.reclaim.iter().find(|each| each.command.is_empty()) {
-            return Err(format!("the reclaimer {} has an empty command", empty.name));
-        }
+        let reclaimers = file
+            .reclaim
+            .into_iter()
+            .map(|each| match CommandLine::from_words(each.command) {
+                Some(command) => Ok(Reclaimer {
+                    name: each.name,
+                    command,
+                }),
+                None => Err(format!("the reclaimer {} has an empty command", each.name)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let defaults = Self::default();
         let after = age(file.reclaim_after, defaults.after)?;
         if after < MIN_AFTER {
@@ -202,7 +148,7 @@ impl Config {
             return Err("reclaim_timeout is 0, and a reclaimer needs time to run".to_owned());
         }
         Ok(Self {
-            reclaimers: file.reclaim,
+            reclaimers,
             after,
             timeout,
             memory: size(file.reclaim_memory, defaults.memory)?,
@@ -297,6 +243,17 @@ pub struct Report {
     pub freed_bytes: u64,
     /// The `name` of each item whose `freed` is above 0.
     pub items: Vec<String>,
+    /// Each item whose `state` is `kept`, with its `reason`.
+    pub kept: Vec<Kept>,
+}
+
+/// An item that a reclaimer leaves as it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Kept {
+    /// The item's `name`, or empty when it has none.
+    pub name: String,
+    /// The item's `reason`, or empty when it gives none.
+    pub why: String,
 }
 
 /// The fields of a reclaimer's JSON that deadband reads. It ignores every
@@ -315,6 +272,12 @@ struct Item {
     name: Option<String>,
     /// The bytes the item freed, or would free on a dry run.
     freed: u64,
+    /// What the reclaimer did or would do with the item, such as `kept`.
+    #[serde(default)]
+    state: Option<String>,
+    /// Why the reclaimer did that, for a kept item.
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 impl Report {
@@ -331,13 +294,26 @@ impl Report {
             .data
             .iter()
             .fold(0_u64, |sum, item| sum.saturating_add(item.freed));
+        let kept = printed
+            .data
+            .iter()
+            .filter(|item| item.state.as_deref() == Some("kept"))
+            .map(|item| Kept {
+                name: item.name.clone().unwrap_or_default(),
+                why: item.reason.clone().unwrap_or_default(),
+            })
+            .collect();
         let items = printed
             .data
             .into_iter()
             .filter(|item| item.freed > 0)
             .filter_map(|item| item.name)
             .collect();
-        Ok(Self { freed_bytes, items })
+        Ok(Self {
+            freed_bytes,
+            items,
+            kept,
+        })
     }
 }
 
@@ -386,7 +362,7 @@ fn ended_at<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Age, D::Error>
 
 /// A number of bytes, which prints in whole MiB below 1 GiB and in whole
 /// GiB from there.
-struct Bytes(u64);
+pub(crate) struct Bytes(pub(crate) u64);
 
 impl fmt::Display for Bytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

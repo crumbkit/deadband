@@ -56,18 +56,33 @@ shell reports it. When the program is not found, `deadband run` exits with
 127, and when the program is found but cannot start, it exits with 126, as
 `env` and `timeout` do.
 
-When `deadband run` receives a SIGTERM or SIGINT, it passes the same signal
-on to the job unchanged, keeps waiting, and exits with the job's status, so
-a `kill` of `deadband run` ends the job (exit 143 or 130) and the daemon
-records the job as ended. A Ctrl-C at the terminal reaches the job directly
-and through `deadband run`, so the job receives the SIGINT twice; a program
-that stops at once on a second SIGINT takes that path on one Ctrl-C.
-`deadband run` replaces an ignored SIGINT or SIGTERM that its caller passed
-down, such as the ignored SIGINT of a background job in a non-interactive
-shell script, so the job no longer inherits the ignore. If the signals
-cannot be registered, the job runs without forwarding. If only the forwarding
-thread cannot start, the job runs without forwarding and `deadband run` ignores
-SIGTERM and SIGINT until the job ends.
+When `deadband run` receives a SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 or
+SIGUSR2, it passes the same signal on to the job unchanged, keeps waiting,
+and exits with the job's status, so a `kill` of `deadband run` ends the job
+(exit 143 for SIGTERM, 130 for SIGINT, 129 for SIGHUP) and the daemon records
+the job as ended. A job that handles the signal decides for itself how to
+end. SIGKILL and SIGSTOP cannot be caught, so `deadband run` cannot pass them
+on: a SIGKILL sent to `deadband run` alone leaves the job running, and the
+daemon no longer counts it.
+
+A Ctrl-C or a Ctrl-\ at the terminal reaches the job directly and through
+`deadband run`, so the job receives the SIGINT or SIGQUIT twice, and a
+terminal hangup reaches it at least twice. A program that stops at once on
+a second SIGINT takes that path on one Ctrl-C, and a program that prints a
+report on SIGQUIT, as a JVM prints its thread dump, prints it twice. A job
+that sends one of these signals to its own process group, as `kill 0` does,
+or to its parent also receives it back through `deadband run`; under the
+default action of SIGUSR1 or SIGUSR2, that ends the job.
+
+A signal that `deadband run` inherited as ignored is not passed on and stays
+ignored, so the job inherits the ignore. Under `nohup deadband run -- <job>`,
+SIGHUP stays ignored for both, and the job survives a hangup as it would
+under `nohup` alone. The same holds for the ignored SIGINT of a background
+job in a non-interactive shell script. When `deadband run` cannot read a
+signal's disposition, it treats the signal as not ignored and passes it on.
+If the signals cannot be registered, the job runs without forwarding. If
+only the forwarding thread cannot start, the job runs without forwarding and
+`deadband run` ignores the registered signals until the job ends.
 
 The daemon samples memory pressure, the 1-minute load average and the free
 space of the disk that holds `$HOME` once a second. It admits a waiting job
@@ -118,6 +133,20 @@ period in which it showed no activity, also after the job recovers or ends,
 while that period is in the window. The state column reads `stuck 46m`, a red
 `2 STUCK` label sits left of the hold label, and one line above the rule gives
 the count and the busiest process outside the jobs.
+
+Under the jobs, a `reclaims` section holds one row for each configured
+reclaimer. The workspace column names the reclaimer's command, such as
+`mxv reclaim`, and the job column names its config name and need, such as
+`workspaces  memory=4G`. A `━` bar covers each run of the last ten minutes
+and ends in `✓`, or in `✗` when the run failed. The state column reads
+`run 38s`, `freed 1.2G 6m` or `failed 1m`. While a reclaim runs, a line above
+the rule says which items its dry run plans to stop and which it keeps, with
+the reason. When the last run of a reclaimer failed, that line says
+`<command> failed N times` and gives the reason. The header adds
+`RECLAIMING` or `RECLAIM FAILED` after the hold, and the line that says why
+jobs wait says when the next reclaim starts. The daemon remembers the
+reclaim runs of the last ten minutes, at most 64, in memory only, so a
+restart forgets them.
 
 A SIGTERM or SIGKILL sent to `deadband top` leaves the terminal in raw mode.
 Run `reset` to restore it.
@@ -348,16 +377,32 @@ the daemon and without setting its threads or its priority.
 ## When the daemon cannot be asked
 
 `deadband run` does not wait on a daemon that is missing, silent or gone.
-When no daemon listens, when the daemon does not answer within 2 seconds,
-or when it closes the connection, the job starts at once and `deadband run`
-prints one line on standard error that says why. After the daemon has
-queued a job, `deadband run` waits for the grant with no deadline, so a
-daemon that hangs while it keeps the connection open also keeps the job
-waiting. Stopping that daemon closes the connection. The waiting
-`deadband run` then tries to reach a daemon every 100 ms for 5 seconds and
-asks again, so a restarted daemon queues the job once more. The job starts at
+When no daemon listens, when the daemon does not take the request and
+answer it within 2 seconds, or when it closes the connection, the job starts
+at once and `deadband run` prints one line on standard error that says why.
+The 2 seconds cover sending the request and reading the whole answer, so a
+daemon that has stopped reading, or that sends its answer a byte at a time,
+cannot stretch them.
+
+While the job waits, the daemon sends a beat to `deadband run` every five
+sampling intervals, which is every 5 seconds. When no line arrives for
+16 seconds, three beat periods and one sample, `deadband run` closes the
+connection, prints `the daemon queued the job and then sent nothing for
+16000 ms, so the job starts now` and runs the job. That covers a daemon
+that is stopped with SIGSTOP, or one whose threads block or deadlock while
+they hold its queue. A daemon of an earlier release sends no beats and says
+so in its reply, and `deadband run` then waits for the grant with no
+deadline, as before.
+
+When the daemon that queued a job closes the connection, the waiting
+`deadband run` tries to reach a daemon every 100 ms for 5 seconds and asks
+again, so a restarted daemon queues the job once more. The job starts at
 once, with the same line on standard error, only when no daemon answers
-within those 5 seconds. When the probe cannot read the machine, the
+within those 5 seconds. A daemon that queues the job again and sends a beat
+starts the 5 seconds afresh for its own loss, so every restart of a daemon
+that served the job gets the full window. A daemon that queues the job and
+closes before it beats does not, so a daemon that fails each time it queues
+the job holds it for at most 5 seconds. When the probe cannot read the machine, the
 daemon admits each job as soon as a place is free, and its log says why.
 The daemon treats a reading that is more than five sampling intervals old
 (at least 250 ms) as a failed probe, so a stalled sampler does not hold jobs
@@ -490,16 +535,18 @@ stops a reclaimer. When one runs past its timeout, the daemon stops
 waiting for it and starts no other reclaim until it exits.
 
 The reclaimer reads nothing on standard input, and the daemon discards its
-standard error. The daemon stops reading the report 250 ms after the
-reclaimer exits, so output that a background process writes after that is
-dropped, and a report that a loaded machine delivers later than that counts
-as failed. It prints one JSON object on standard output. deadband
+standard error. Once the reclaimer exits, the daemon reads what its standard
+output already holds and stops there, so it keeps the whole report however
+loaded the machine is, and output that a background process writes after
+that is dropped. It prints one JSON object on standard output. deadband
 reads only `data`, an array of objects, and two fields of each object:
 
 | Field | Meaning |
 | --- | --- |
 | `freed` | The bytes the item freed, or would free on a dry run, as a whole number. Required. |
 | `name` | The item's name, which the log shows when `freed` is above 0. Optional. |
+| `state` | `kept` marks an item that the reclaimer leaves as it is. `top` lists it in the plan. Optional. |
+| `reason` | Why a `kept` item stays, such as `jobs queued`. Optional. |
 
 deadband adds up `freed` across `data` and ignores every other field. For
 example:
@@ -576,13 +623,12 @@ A short-lived process that exists to run one job may also call
 nice 5 for the rest of its life, and leaves a process that already runs at a
 higher nice value where it is, so a long-lived program does not call it.
 
-`admit` waits until the daemon admits the job. It waits at most 2 seconds for
-the daemon's first answer, and then the job starts without a grant. That
-limit does not cover sending the request, which has no deadline, so a daemon
-that has stopped reading can block `admit` when the command text is longer
-than the socket's send buffer, about 8 KiB on macOS. Once the daemon has
-queued the job, the wait for the grant has no deadline and cannot be
-cancelled. `admit` writes nothing itself; each line it reports goes to the callback: why the job waits, why it starts
+`admit` waits until the daemon admits the job. The daemon has 2 seconds to
+take the request and send its whole first answer, and otherwise the job
+starts without a grant. Once the daemon has queued the job, `admit` asks it
+for beats and waits for the grant for as long as a line arrives at least
+every 16 seconds; a daemon of an earlier release sends none, and `admit`
+then waits with no deadline. The wait cannot be cancelled. `admit` writes nothing itself; each line it reports goes to the callback: why the job waits, why it starts
 without the daemon, and why the priority file could not be read. A job that
 runs inside a granted job, or with `DEADBAND_BYPASS` set, is not asked:
 `admit` reports nothing and returns no lane and no variables. The job's pid
@@ -590,7 +636,7 @@ in `deadband status` is the calling process's pid. A program that holds the
 lease for a child process reports its own pid, not the child's.
 
 To run the daemon, build a `Machine` as the binary's `main.rs` does (the probe, the socket
-path, a log, the cores and the `Environment`), and call `run_daemon` with it
+path, the directory that deadband owns for it, a log, the cores and the `Environment`), and call `run_daemon` with it
 and the most jobs that may run at once, or `None` for the default:
 
 ```rust,ignore
@@ -618,9 +664,26 @@ set and not empty:
 | `DEADBAND_SOCKET_DIR` | `deadband.sock` in that directory |
 | the directory `getconf DARWIN_USER_TEMP_DIR` prints (macOS only, not a variable) | `deadband.sock` in that directory, whatever `TMPDIR` is |
 | `TMPDIR` | `deadband.sock` in that directory |
-| `USER` | `/tmp/deadband-<USER>.sock` |
+| `XDG_RUNTIME_DIR` | `deadband.sock` in its `deadband` subdirectory |
 
-When none is set, the socket is `/tmp/deadband.sock`. The daemon makes the
+When none is set, the socket is `/tmp/deadband-<uid>/deadband.sock`, where
+`<uid>` is your numeric user id. For the `XDG_RUNTIME_DIR` row and for this fallback the daemon makes the
+directory with mode 0700, and refuses to start with
+`deadband::socket::directory` when the directory exists as a symlink, belongs to
+another user or lets others use it; set `XDG_RUNTIME_DIR` or
+`DEADBAND_SOCKET_DIR` to a directory of your own, because only its owner or root
+can remove the directory. A client that finds no daemon there runs its job at once.
+Before `run` or `status` connects, it refuses a socket whose directory belongs
+to a user other than you or root, or that group or other users can write to
+unless it is sticky as `/tmp` is, runs the job at once, and prints one line
+saying so; the connection itself never waits for a listener with a full queue.
+The daemon checks only the directory it makes, so with `TMPDIR=/tmp` another
+user can still plant a lock file in `/tmp`, and the daemon then refuses to
+start with `deadband::socket::unusable`. Before `run` or `status` sends anything, it checks that the process listening
+on the socket belongs to the same user, whatever path names the socket. When it
+does not, the client closes the connection, prints one line saying so, and runs
+the job at once without sending the command line. The daemon opens the lock file
+without following a symlink and refuses one that another user owns. The daemon makes the
 socket readable and writable by its own user only. The daemon holds a lock
 on a file named after the socket with `.lock` added, so a second daemon on
 the same socket refuses to start. A socket file that a stopped daemon left

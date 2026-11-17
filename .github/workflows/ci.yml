@@ -75,11 +75,11 @@ jobs:
       # install-action offers no cargo-crumbkit binary, so cargo builds the
       # pinned release.
       - name: install cargo-crumbkit
-        run: cargo install cargo-crumbkit --version 0.3.1 --locked
+        run: cargo install cargo-crumbkit --version 0.5.0 --locked
       - name: skill check
-        run: cargo crumbkit skill check --bin deadband
+        run: cargo crumbkit tool-skill check --bin deadband
       - name: skill draft
-        run: cargo crumbkit skill draft --bin deadband --check
+        run: cargo crumbkit tool-skill draft --bin deadband --check
 
   # The macOS reader of the probe compiles only on macOS, so this job
   # compiles, lints and tests it (rust-standards.toml, `lanes`).

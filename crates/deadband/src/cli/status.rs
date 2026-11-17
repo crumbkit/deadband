@@ -5,24 +5,24 @@
 //! daemon that sends no short command.
 
 use std::fmt;
-use std::time::Duration;
 
 use crumbkit::{Document, Prose};
 use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::service::{DaemonState, LOG};
-use crate::admit::Lane;
+use crate::admit::{JobId, Lane};
 use crate::name::name;
 use crate::probe::Sample;
-use crate::protocol::{Job, Jobs, Label, Short};
+use crate::protocol::{Job, Jobs, Label, Short, StuckJob};
 use crate::stuck::quiet_text;
 
 /// A job as `deadband status` shows it, which leaves out its command line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ShownJob {
     /// The label that `--label` gave, or the program's name.
-    pub label: String,
+    #[schemars(with = "String")]
+    pub label: Label,
     /// The workspace the job runs in, or absent outside a workspace or from
     /// an older daemon.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -34,6 +34,11 @@ pub struct ShownJob {
     pub short: Option<Short>,
     /// The process ID of the `deadband run` that asked for the job.
     pub pid: u32,
+    /// The job's number in the daemon's queue, or absent from an older
+    /// daemon. A stuck row with the same number belongs to this job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<u64>")]
+    pub id: Option<JobId>,
     /// The lane the job waits in.
     pub lane: Lane,
     /// Whether the daemon watches this job's process tree.
@@ -57,6 +62,7 @@ impl From<Job> for ShownJob {
             workspace: job.workspace,
             short: job.short,
             pid: job.pid,
+            id: job.id,
             lane: job.lane,
             watched: job.watched,
             cwd: job.cwd,
@@ -65,24 +71,45 @@ impl From<Job> for ShownJob {
 }
 
 impl ShownJob {
+    /// Reports whether `stuck` is this job's stuck row: the numbers match,
+    /// or, from an older daemon that sends no number, the process IDs do.
+    fn is(&self, stuck: &StuckJob) -> bool {
+        match (self.id, stuck.id) {
+            (Some(id), Some(stuck)) => id == stuck,
+            _ => self.pid == stuck.pid,
+        }
+    }
+
     /// Returns the job's name: its workspace and its label, joined.
     fn name(&self) -> String {
-        name(
-            self.workspace.as_ref().map(Label::as_str),
-            &self.label,
-            self.short.as_ref().map(Short::as_str),
-        )
+        name(self.workspace.as_ref(), &self.label, self.short.as_ref())
     }
 
     /// Returns the text after the pid: the short command, or the full
-    /// command line from an older daemon, or `None` when the short command
-    /// is empty.
-    fn command(&self) -> Option<&str> {
+    /// command line from an older daemon with each control character
+    /// escaped, or `None` when the short command is empty.
+    fn command(&self) -> Option<String> {
         match &self.short {
-            Some(short) => Some(short.as_str()).filter(|text| !text.is_empty()),
-            None => self.older_command.as_deref(),
+            Some(short) => Some(short.as_str().to_owned()).filter(|text| !text.is_empty()),
+            None => self.older_command.as_deref().map(escaped),
         }
     }
+}
+
+/// Returns `text` with each control character, a line feed and a tab
+/// among them, written as its Rust escape, such as `\n` or `\u{1b}`. The
+/// text of `deadband status` prints a job's command line through it, so
+/// the command line cannot add a line of its own or move the cursor.
+fn escaped(text: &str) -> String {
+    let mut shown = String::with_capacity(text.len());
+    for each in text.chars() {
+        if each.is_control() {
+            shown.extend(each.escape_debug());
+        } else {
+            shown.push(each);
+        }
+    }
+    shown
 }
 
 /// What `deadband status` prints: one sample of the machine, and the
@@ -134,13 +161,13 @@ impl fmt::Display for Status {
             jobs.max_jobs
         )?;
         for stuck in &jobs.stuck {
-            let shown = jobs.running.iter().find(|job| job.pid == stuck.pid);
+            let shown = jobs.running.iter().find(|job| job.is(stuck));
             write!(
                 f,
                 "\nstuck: {} (pid {}): no CPU, new process or disk use for {}",
-                shown.map_or_else(|| stuck.label.clone(), ShownJob::name),
+                shown.map_or_else(|| stuck.label.as_str().to_owned(), ShownJob::name),
                 stuck.pid,
-                quiet_text(Duration::from_secs(stuck.quiet_seconds))
+                quiet_text(stuck.quiet)
             )?;
         }
         if let (false, Some(busiest)) = (jobs.stuck.is_empty(), &jobs.busiest) {
@@ -154,7 +181,7 @@ impl fmt::Display for Status {
         if let (Some(job), Some(hold)) = (jobs.waiting.first(), &jobs.held) {
             write!(f, "\n{} waits because: {hold}", job.name())?;
         }
-        let is_stuck = |job: &&ShownJob| jobs.stuck.iter().any(|stuck| stuck.pid == job.pid);
+        let is_stuck = |job: &&ShownJob| jobs.stuck.iter().any(|stuck| job.is(stuck));
         let (stuck, others): (Vec<_>, Vec<_>) = jobs.running.iter().partition(is_stuck);
         let running = stuck.into_iter().chain(others).map(|job| ("running", job));
         for (state, job) in running.chain(jobs.waiting.iter().map(|job| ("waiting", job))) {

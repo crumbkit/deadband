@@ -1,13 +1,13 @@
-//! Runs a reclaimer that the daemon's config file names. With `run` in
-//! the parent module, it is one of the two operations of the module that
-//! starts processes (PROC-1).
+//! Runs a reclaimer that the daemon's config file names. With the other
+//! operations of the parent module, it is one of the operations of the
+//! module that starts processes (PROC-1).
 //!
 //! The one operation, [`run`], states the five items of PROC-2:
 //!
-//! - Program: the first word of the reclaimer's `command` in the config
-//!   file, which the operating system finds on the daemon's `PATH`. The
-//!   person who runs the daemon writes the config file, so deadband trusts
-//!   the program as much as that person.
+//! - Program: the program of the reclaimer's `command` in the config file,
+//!   which the operating system finds on the daemon's `PATH`. The person
+//!   who runs the daemon writes the config file, so deadband trusts the
+//!   program as much as that person.
 //! - Arguments: the remaining words of `command`, then `--need` with its
 //!   value, then `--dry-run` on a dry run, each passed as a separate value.
 //!   No shell reads them.
@@ -22,51 +22,36 @@
 //!   stops or signals a reclaimer, even past its deadline: a reclaimer
 //!   stopped halfway could leave what it was stopping half stopped.
 //!
-//! `run` reads standard output while the reclaimer runs and stops waiting
-//! for it `DRAIN_GRACE` after the reclaimer exits, so a background process
-//! that holds standard output open does not hold the reclaim. Output that
-//! such a process writes after that is dropped. Soft limit: a background
-//! process that keeps standard output open for good leaves one reading
-//! thread and one pipe in the daemon until it closes the pipe, because
-//! closing the pipe sooner would risk SIGPIPE for that process. A limit on
-//! such threads would replace this if a reclaimer ever does it on every run.
-//! Soft limit: when the operating system refuses the reading thread, the
-//! waiting thread reads standard output to its end before it waits, so in
-//! that case such a background process holds the reclaim until it closes
-//! the pipe.
+//! A reading thread reads standard output while the reclaimer runs. Once
+//! the reclaimer has exited, everything it wrote is in the pipe, so the
+//! reading thread reads what the pipe holds without blocking and hands
+//! over the report, however late the operating system runs it. A
+//! background process that holds standard output open therefore does not
+//! hold the reclaim, and what it writes after the reclaimer exits is
+//! dropped. When the operating system refuses the reading thread, no
+//! reclaimer starts and `run` returns the operating system's error.
+//!
+//! Soft limit: a background process that keeps standard output open for
+//! good leaves one reading thread and one pipe in the daemon until it
+//! closes the pipe, because closing the pipe sooner would risk SIGPIPE for
+//! that process. A limit on such threads would replace this if a reclaimer
+//! ever does it on every run. Soft limit: when `poll` fails, the reading
+//! thread reads standard output to its end, so in that case such a
+//! background process holds the reclaim until it closes the pipe.
 
-use std::io::{self, Read};
-use std::process::{ChildStdout, Command, Stdio};
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::io::{self, PipeReader, PipeWriter, Read};
+use std::process::{ChildStdout, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
+use rustix::event::{PollFd, PollFlags, poll};
+
+use super::CommandLine;
+use super::wait::{self, AfterDeadline, Waited};
 use crate::spawn;
 
 /// The most bytes of a reclaimer's standard output that deadband keeps.
 pub const MAX_OUTPUT: u64 = 1024 * 1024;
-
-/// How long `run` waits for the output to be read after the reclaimer
-/// exits.
-const DRAIN_GRACE: Duration = Duration::from_millis(250);
-
-/// Reads `stdout` to its end, keeping the first [`MAX_OUTPUT`] bytes in
-/// `kept` as they arrive and dropping the rest.
-fn drain_stdout(mut stdout: impl Read, kept: &Mutex<Vec<u8>>) {
-    let mut chunk = [0_u8; 8192];
-    while let Ok(read) = stdout.read(&mut chunk) {
-        if read == 0 {
-            return;
-        }
-        let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
-        let room = usize::try_from(MAX_OUTPUT)
-            .unwrap_or(usize::MAX)
-            .saturating_sub(kept.len());
-        if let Some(bytes) = chunk.get(..read.min(room)) {
-            kept.extend_from_slice(bytes);
-        }
-    }
-}
 
 /// How a reclaimer ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,139 +68,207 @@ pub enum Ended {
     TimedOut,
 }
 
-/// Runs `command`, whose first word is the program, with `args` added,
-/// and waits for it. When `timeout` passes first, it calls `on_timeout`,
-/// waits until the reclaimer exits, and returns [`Ended::TimedOut`].
+/// The first [`MAX_OUTPUT`] bytes of a reclaimer's standard output.
+#[derive(Default)]
+struct Kept(Vec<u8>);
+
+impl Kept {
+    /// Keeps as much of `bytes` as fits under [`MAX_OUTPUT`].
+    fn keep(&mut self, bytes: &[u8]) {
+        let room = usize::try_from(MAX_OUTPUT)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(self.0.len());
+        if let Some(bytes) = bytes.get(..bytes.len().min(room)) {
+            self.0.extend_from_slice(bytes);
+        }
+    }
+}
+
+/// The reading thread, as the waiting thread holds it.
+struct Reader {
+    /// Where the waiting thread sends the reclaimer's standard output.
+    stdout: Sender<ChildStdout>,
+    /// The pipe whose closing tells the reading thread the reclaimer has
+    /// exited.
+    exited: PipeWriter,
+    /// Where the reading thread sends what it kept.
+    report: Receiver<Vec<u8>>,
+}
+
+impl Reader {
+    /// Tells the reading thread the reclaimer has exited, and returns what
+    /// it kept once it has read what the pipe holds.
+    fn collect(self) -> Vec<u8> {
+        let Self {
+            stdout,
+            exited,
+            report,
+        } = self;
+        // A reading thread that never received standard output returns once
+        // `stdout` is gone, so the receive below never waits on it.
+        drop(stdout);
+        drop(exited);
+        report.recv().unwrap_or_default()
+    }
+}
+
+/// Runs `command` with `args` added, and waits for it. When `timeout`
+/// passes first, it calls `on_timeout`, waits until the reclaimer exits,
+/// and returns [`Ended::TimedOut`].
 ///
 /// # Errors
 ///
-/// Returns [`io::ErrorKind::InvalidInput`] for an empty command, and the
-/// error of a program that could not start or be waited for.
+/// Returns the operating system's error when it refuses the reading or the
+/// waiting thread, and the error of a program that could not start or be
+/// waited for.
 pub fn run(
-    command: &[String],
+    command: &CommandLine,
     args: &[&str],
     timeout: Duration,
     on_timeout: impl FnOnce(),
 ) -> io::Result<Ended> {
-    let Some((program, first)) = command.split_first() else {
-        return Err(io::ErrorKind::InvalidInput.into());
-    };
-    // Both threads start before the reclaimer, so a refused thread leaves no
-    // reclaimer unreaped. When the reading thread is refused, the waiting
-    // thread reads standard output itself before it waits.
-    let kept = Arc::new(Mutex::new(Vec::new()));
-    let (drained, drain) = mpsc::channel();
-    let (to_reader, for_reader) = mpsc::channel::<ChildStdout>();
-    let reader_kept = Arc::clone(&kept);
-    let reading = spawn::thread("deadband-reclaimer-read", move || {
-        if let Ok(stdout) = for_reader.recv() {
-            drain_stdout(stdout, &reader_kept);
-            let _ = drained.send(());
-        }
-    })
-    .is_ok();
-    #[expect(
-        clippy::disallowed_types,
-        reason = "crates/deadband/src/job/reclaimer.rs hands the child to its own waiting thread, which reaps it"
-    )]
-    let (start, started) = mpsc::channel::<std::process::Child>();
-    let (sender, ended) = mpsc::channel();
-    spawn::thread("deadband-reclaimer-wait", move || {
-        let Ok(mut child) = started.recv() else {
-            return;
-        };
-        if let Some(stdout) = child.stdout.take() {
-            drain_stdout(stdout, &kept);
-        }
-        let status = child.wait();
-        // The reclaimer has exited. What it wrote is in the pipe already,
-        // so a short wait collects it; a background process that still
-        // holds the pipe open is not waited for, and the reading thread
-        // ends when that process closes it.
-        let _ = drain.recv_timeout(DRAIN_GRACE);
-        let stdout = kept.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let _ = sender.send(status.map(|status| Ended::Exited {
-            code: status.code(),
-            stdout,
-        }));
-    })?;
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "crates/deadband/src/job/reclaimer.rs starts the reclaimer that the daemon's config file names; the module states PROC-2's items"
-    )]
-    let spawned = Command::new(program)
-        .args(first)
+    let mut started = command.command();
+    started
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
-    let mut child = spawned?;
-    if reading && let Some(stdout) = child.stdout.take() {
-        let _ = to_reader.send(stdout);
-    }
-    let _ = start.send(child);
-    match ended.recv_timeout(timeout) {
-        Ok(ended) => ended,
-        Err(RecvTimeoutError::Timeout) => {
+        .stderr(Stdio::null());
+    // The reading thread starts before the reclaimer, so a refused thread
+    // leaves no reclaimer unreaped.
+    let reader = start_reader()?;
+    let waited = wait::start_and_wait(
+        "deadband-reclaimer-wait",
+        started,
+        move |child| {
+            if let Some(stdout) = child.stdout.take() {
+                let _ = reader.stdout.send(stdout);
+            }
+            reader
+        },
+        timeout,
+        || {
             on_timeout();
-            ended
-                .recv()
-                .map_err(io::Error::other)?
-                .map(|_| Ended::TimedOut)
-        }
-        Err(RecvTimeoutError::Disconnected) => Err(io::Error::other(
-            "the thread that waits for the reclaimer stopped",
-        )),
-    }
+            AfterDeadline::KeepWaiting
+        },
+    )?;
+    Ok(match waited {
+        Waited::Exited(status, reader) => Ended::Exited {
+            code: status.code(),
+            stdout: reader.collect(),
+        },
+        Waited::Late => Ended::TimedOut,
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::{Duration, Instant};
+thread_local! {
+    /// How long each reading thread that a test's thread starts waits
+    /// before its first read, as the operating system may run it late on a
+    /// machine short of memory.
+    static READING_DELAY: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
+}
 
-    use super::{Ended, run};
+/// Makes each reading thread that the calling thread starts wait `delay`
+/// before its first read.
+#[cfg(test)]
+pub(super) fn delay_reading(delay: Duration) {
+    READING_DELAY.with(|cell| cell.set(delay));
+}
 
-    #[test]
-    fn a_background_child_that_holds_stdout_does_not_hold_the_reclaim_after_the_reclaimer_exits() {
-        let command = ["sh", "-c", "sleep 4 & echo kept"].map(str::to_owned);
-        let started = Instant::now();
-        let ended = run(&command, &[], Duration::from_secs(30), || {})
-            .expect("the reclaimer starts and is waited for");
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "the reclaim waited {:?} for the background child",
-            started.elapsed()
-        );
-        assert_eq!(
-            ended,
-            Ended::Exited {
-                code: Some(0),
-                stdout: b"kept\n".to_vec()
+/// Starts the reading thread.
+///
+/// # Errors
+///
+/// Returns the operating system's error when it cannot make a pipe or
+/// refuses the thread.
+fn start_reader() -> io::Result<Reader> {
+    // std makes both ends close on exec. On macOS it sets that flag in a
+    // separate step after pipe(), so a helper program that another thread
+    // starts in that window can hold the write end, and the report then
+    // waits until that helper exits. Every helper has a deadline, so the
+    // wait is bounded.
+    let (hears_exit, exited) = io::pipe()?;
+    let (stdout, for_reader) = mpsc::channel::<ChildStdout>();
+    let (to_waiter, report) = mpsc::channel();
+    #[cfg(test)]
+    let delay = READING_DELAY.with(std::cell::Cell::get);
+    spawn::thread("deadband-reclaimer-read", move || {
+        if let Ok(stdout) = for_reader.recv() {
+            #[cfg(test)]
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a test stands in for a reading thread that the operating system runs late"
+            )]
+            std::thread::sleep(delay);
+            read_until_exit(stdout, &hears_exit, &to_waiter);
+        }
+    })?;
+    Ok(Reader {
+        stdout,
+        exited,
+        report,
+    })
+}
+
+/// Reads `stdout` into what it keeps until `exited` closes, then reads
+/// what the pipe holds without blocking, sends what it kept on `report`,
+/// and reads and drops the rest until the pipe closes.
+fn read_until_exit(mut stdout: ChildStdout, exited: &PipeReader, report: &Sender<Vec<u8>>) {
+    let mut kept = Kept::default();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let mut ready = [
+            PollFd::new(&stdout, PollFlags::IN),
+            PollFd::new(exited, PollFlags::IN),
+        ];
+        match poll(&mut ready, None) {
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(_) => {
+                // Without poll the thread cannot tell when the reclaimer
+                // exits, so it reads to the end.
+                read_all(stdout, &mut kept);
+                let _ = report.send(kept.0);
+                return;
             }
-        );
-    }
-
-    #[test]
-    fn a_reclaimer_whose_waiting_thread_cannot_start_reports_the_error() {
-        crate::spawn::refuse("deadband-reclaimer-wait");
-        let ended = run(&["true".to_owned()], &[], Duration::from_secs(30), || {});
-        crate::spawn::allow();
-        assert!(ended.is_err(), "{ended:?}");
-    }
-
-    #[test]
-    fn a_reclaimer_whose_reading_thread_cannot_start_still_has_its_output_kept() {
-        let command = ["sh", "-c", "echo kept"].map(str::to_owned);
-        crate::spawn::refuse("deadband-reclaimer-read");
-        let ended = run(&command, &[], Duration::from_secs(30), || {});
-        crate::spawn::allow();
-        assert_eq!(
-            ended.expect("the reclaimer starts and is waited for"),
-            Ended::Exited {
-                code: Some(0),
-                stdout: b"kept\n".to_vec()
+            Ok(_) => {}
+        }
+        let [output, exit] = ready.map(|each| !each.revents().is_empty());
+        if exit {
+            break;
+        }
+        if output {
+            match stdout.read(&mut chunk) {
+                Ok(0) | Err(_) => {
+                    let _ = report.send(kept.0);
+                    return;
+                }
+                Ok(read) => kept.keep(chunk.get(..read).unwrap_or_default()),
             }
-        );
+        }
+    }
+    // The reclaimer has exited, so everything it wrote is in the pipe.
+    if rustix::io::ioctl_fionbio(&stdout, true).is_ok() {
+        loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => kept.keep(chunk.get(..read).unwrap_or_default()),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        let _ = rustix::io::ioctl_fionbio(&stdout, false);
+    }
+    let _ = report.send(kept.0);
+    let _ = io::copy(&mut stdout, &mut io::sink());
+}
+
+/// Reads `stdout` to its end into `kept`.
+fn read_all(mut stdout: impl Read, kept: &mut Kept) {
+    let mut chunk = [0_u8; 8192];
+    while let Ok(read) = stdout.read(&mut chunk) {
+        if read == 0 {
+            return;
+        }
+        kept.keep(chunk.get(..read).unwrap_or_default());
     }
 }
