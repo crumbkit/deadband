@@ -19,7 +19,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 mod tests;
@@ -80,6 +80,11 @@ pub trait Launchd: fmt::Debug + Send + Sync {
     /// while a booted-out daemon exits, or the next ask of a freshly loaded
     /// daemon's socket.
     fn pause(&self);
+
+    /// Returns the time now. The service commands read it to end each wait
+    /// at its deadline, so a slow poll shortens the wait and does not
+    /// lengthen it.
+    fn now(&self) -> Instant;
 }
 
 /// How long [`Launchd::pause`] waits between two polls.
@@ -118,6 +123,10 @@ impl Launchd for System {
             reason = "launchd sends no event when a booted-out service has exited or a loaded one has bound its socket, so install polls launchctl print and the socket; PAUSE names the wait"
         )]
         std::thread::sleep(PAUSE);
+    }
+
+    fn now(&self) -> Instant {
+        Instant::now()
     }
 }
 

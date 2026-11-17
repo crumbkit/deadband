@@ -95,6 +95,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Each loss of a daemon that queued a job and sent it a beat gets its own
   5-second window to ask again. A second daemon restart more than 5 seconds
   after the first used to start every queued job at once.
+- `commands list` and `docs/commands.md` give `deadband status` its exit 1,
+  with `deadband::job::stuck` and `deadband::job::unreadable`, so an agent
+  can tell a stuck job from a crash. They list exit 3, which says deadband
+  could not read the machine, only for `status`, the one command that exits
+  with it, where they used to list it for every command.
+- The waits of `deadband service install` and `uninstall` end at a time:
+  two seconds for the new daemon to answer, five seconds for launchd to
+  unload the old one and ten seconds for another service command's lock.
+  They used to count polls, so a slow `launchctl print` or a daemon that
+  accepted the connection and never replied stretched a wait, the answer
+  wait to as much as 42 seconds.
 
 ## [0.4.0-alpha.1] - 2026-11-14
 

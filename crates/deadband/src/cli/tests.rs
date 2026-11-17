@@ -1093,6 +1093,59 @@ fn commands_list_lists_each_command_of_deadband() {
     }
 }
 
+/// Returns the exits that `commands list --json --full` gives the command
+/// `path`, such as `deadband status`.
+fn exits_of(path: &str) -> Vec<serde_json::Value> {
+    let (code, out, err) = Test::new(Fixed).run(&["commands", "list", "--json", "--full"]);
+    assert_eq!(code, 0, "{err}");
+    let value: serde_json::Value = serde_json::from_str(&out).expect("JSON");
+    let commands = value["data"].as_array().expect("a list of commands");
+    let command = commands
+        .iter()
+        .find(|command| command["path"] == path)
+        .unwrap_or_else(|| panic!("no {path} in {out}"));
+    command["exits"]
+        .as_array()
+        .expect("a list of exits")
+        .clone()
+}
+
+/// Returns the meaning of exit `code` in `exits`, or `None` when it has none.
+fn meaning(exits: &[serde_json::Value], code: u64) -> Option<String> {
+    exits
+        .iter()
+        .find(|exit| exit["exit"] == code)
+        .map(|exit| exit["meaning"].as_str().expect("a meaning").to_owned())
+}
+
+#[test]
+fn commands_list_gives_status_exit_1_with_the_stuck_and_unreadable_codes() {
+    let status = exits_of("deadband status");
+
+    let one = meaning(&status, 1).expect("status declares exit 1");
+    assert!(one.contains("deadband::job::stuck"), "{one}");
+    assert!(one.contains("deadband::job::unreadable"), "{one}");
+    assert_eq!(meaning(&exits_of("deadband run"), 1), None);
+}
+
+#[test]
+fn commands_list_gives_exit_3_to_status_alone() {
+    assert!(meaning(&exits_of("deadband status"), 3).is_some());
+    for path in [
+        "deadband run",
+        "deadband daemon",
+        "deadband top",
+        "deadband completion print",
+        "deadband commands list",
+        "deadband service install",
+    ] {
+        if path == "deadband top" && !cfg!(feature = "tui") {
+            continue;
+        }
+        assert_eq!(meaning(&exits_of(path), 3), None, "{path}");
+    }
+}
+
 #[test]
 fn commands_list_refuses_a_path_that_names_no_command() {
     let (code, _, err) = Test::new(Fixed).run(&["commands", "list", "no-such-command"]);

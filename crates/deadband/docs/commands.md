@@ -26,10 +26,6 @@ Keep a busy machine usable while many heavy jobs compete for it
 - `--full`: With --json, print every field of every row. The default prints only the fields of the columns. Works after every subcommand.
 - `--no-input`: Fail instead of asking a question. Works after every subcommand.
 
-### Exit codes
-
-- `3`: deadband could not read the machine.
-
 ## `deadband status`
 
 Print the machine's load, memory pressure and swap, and the daemon's jobs
@@ -52,6 +48,7 @@ Effects: read-only, closed-world.
 
 ### Exit codes
 
+- `1`: `status` lists a stuck job (`deadband::job::stuck`), or the daemon could not read the jobs' processes (`deadband::job::unreadable`).
 - `3`: deadband could not read the machine.
 
 ## `deadband run`
@@ -80,7 +77,6 @@ Writes: applies all items or none.
 
 ### Exit codes
 
-- `3`: deadband could not read the machine.
 - `126`: the program given to `run` was found but could not start.
 - `127`: the program given to `run` was not found.
 
@@ -106,7 +102,6 @@ Effects: additive, not idempotent, closed-world.
 
 ### Exit codes
 
-- `3`: deadband could not read the machine.
 - `4`: the daemon could not listen on its socket. When another daemon already serves the socket, `deadband daemon` exits 0 with `deadband::daemon::running`.
 
 ## `deadband service`
@@ -117,10 +112,6 @@ Install or uninstall the launchd agent that runs the daemon at login
 
 - [`deadband service install`](#deadband-service-install): Install the launchd agent that runs the daemon at login and restarts it when it stops
 - [`deadband service uninstall`](#deadband-service-uninstall): Unload the launchd agent and delete its plist. Running jobs keep running
-
-### Exit codes
-
-- `3`: deadband could not read the machine.
 
 ## `deadband service install`
 
@@ -150,7 +141,6 @@ Effects: additive, idempotent, closed-world.
 
 ### Exit codes
 
-- `3`: deadband could not read the machine.
 - `6`: deadband could not install or uninstall its launchd agent.
 
 ## `deadband service uninstall`
@@ -174,7 +164,6 @@ Effects: destructive, idempotent, closed-world.
 
 ### Exit codes
 
-- `3`: deadband could not read the machine.
 - `6`: deadband could not install or uninstall its launchd agent.
 
 ## `deadband top`
@@ -193,7 +182,6 @@ Effects: read-only, closed-world.
 
 ### Exit codes
 
-- `3`: deadband could not read the machine.
 - `5`: `top` has no terminal to draw on, or lost it.
 - `130`: the person pressed Ctrl-C in `top`.
 
@@ -204,10 +192,6 @@ Explore deadband's commands
 ### Commands
 
 - [`deadband commands list`](#deadband-commands-list): List deadband's commands with their arguments, examples and columns
-
-### Exit codes
-
-- `3`: deadband could not read the machine.
 
 ## `deadband commands list`
 
@@ -240,10 +224,6 @@ deadband commands list run
 
 Effects: read-only, closed-world.
 
-### Exit codes
-
-- `3`: deadband could not read the machine.
-
 ## `deadband schemas`
 
 Explore the JSON documents that deadband prints and the files it reads
@@ -252,10 +232,6 @@ Explore the JSON documents that deadband prints and the files it reads
 
 - [`deadband schemas list`](#deadband-schemas-list): List the JSON documents that deadband prints and the files it reads
 - [`deadband schemas show`](#deadband-schemas-show): Print the JSON Schema of each document or file format
-
-### Exit codes
-
-- `3`: deadband could not read the machine.
 
 ## `deadband schemas list`
 
@@ -287,10 +263,6 @@ deadband schemas list
 
 Effects: read-only, closed-world.
 
-### Exit codes
-
-- `3`: deadband could not read the machine.
-
 ## `deadband schemas show`
 
 Print the JSON Schema of each document or file format
@@ -314,10 +286,6 @@ deadband schemas show deadband/config/v1
 
 Effects: read-only, closed-world.
 
-### Exit codes
-
-- `3`: deadband could not read the machine.
-
 ## `deadband skills`
 
 Give coding agents deadband's skill
@@ -327,10 +295,6 @@ Give coding agents deadband's skill
 - [`deadband skills install`](#deadband-skills-install): Install this tool's skills into each agent skills directory that exists
 - [`deadband skills check`](#deadband-skills-check): Check that each installed copy of this tool's skills matches this build
 - [`deadband skills print`](#deadband-skills-print): Print this tool's skill
-
-### Exit codes
-
-- `3`: deadband could not read the machine.
 
 ## `deadband skills install`
 
@@ -368,10 +332,6 @@ deadband skills install --force
 
 Effects: additive, idempotent, closed-world.
 
-### Exit codes
-
-- `3`: deadband could not read the machine.
-
 ## `deadband skills check`
 
 Check that each installed copy of this tool's skills matches this build
@@ -401,10 +361,6 @@ deadband skills check
 
 Effects: read-only, closed-world.
 
-### Exit codes
-
-- `3`: deadband could not read the machine.
-
 ## `deadband skills print`
 
 Print this tool's skill
@@ -419,10 +375,6 @@ deadband skills print
 
 Effects: read-only, closed-world.
 
-### Exit codes
-
-- `3`: deadband could not read the machine.
-
 ## `deadband completion`
 
 Set up deadband's completion in a shell
@@ -432,10 +384,6 @@ Set up deadband's completion in a shell
 - [`deadband completion install`](#deadband-completion-install): Install deadband's completion where the shell loads it
 - [`deadband completion check`](#deadband-completion-check): Check that deadband's installed completion file matches this deadband
 - [`deadband completion print`](#deadband-completion-print): Print deadband's completion registration script for a shell
-
-### Exit codes
-
-- `3`: deadband could not read the machine.
 
 ## `deadband completion install`
 
@@ -469,10 +417,6 @@ deadband completion install --shell zsh --force
 
 Effects: additive, idempotent, closed-world.
 
-### Exit codes
-
-- `3`: deadband could not read the machine.
-
 ## `deadband completion check`
 
 Check that deadband's installed completion file matches this deadband
@@ -498,10 +442,6 @@ deadband completion check --shell zsh
 
 Effects: read-only, closed-world.
 
-### Exit codes
-
-- `3`: deadband could not read the machine.
-
 ## `deadband completion print`
 
 Print deadband's completion registration script for a shell
@@ -519,7 +459,3 @@ deadband completion print --shell fish
 ```
 
 Effects: read-only, closed-world.
-
-### Exit codes
-
-- `3`: deadband could not read the machine.

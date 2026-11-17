@@ -5,10 +5,11 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crumbkit::Failure as _;
 
-use super::lock::{LOCK_FILE, LOCK_POLLS, hold};
+use super::lock::{LOCK_FILE, LOCK_WITHIN, hold};
 use super::plist::{THROTTLE_SECONDS, binary_path, render};
 use super::{
     Counts, DaemonState, Install, LaunchAgent, SERVICE_LOCKED, ServiceFailed, Step, install, state,
@@ -829,6 +830,93 @@ fn a_reload_whose_old_daemon_outlasts_the_polls_fails_at_bootstrap_after_fifty_p
     assert_eq!(pauses, 50, "{calls:?}");
 }
 
+#[test]
+fn a_reload_whose_launchctl_print_is_slow_stops_waiting_for_the_unload_after_five_seconds() {
+    let home = TestHome::new();
+    write_plist(&home, OLD);
+    let launchd = Arc::new(FakeLaunchd {
+        linger: 60,
+        slow: Duration::from_secs(1),
+        ..FakeLaunchd::new(true)
+    });
+
+    let refused = install(Some(&agent(&home, &launchd)), &PLAIN, |_| {
+        Some(Counts::default())
+    });
+
+    assert!(
+        matches!(refused, Err(ServiceFailed::Launchctl(_))),
+        "{refused:?}"
+    );
+    // Each print takes 1 s and each pause 0.1 s, so the prints after the
+    // bootout end at 1, 2.1, 3.2, 4.3 and 5.4 seconds, and the fifth is past
+    // the five-second deadline.
+    assert_eq!(pauses(&launchd), 4);
+}
+
+#[test]
+fn a_reload_whose_slow_unload_ends_early_stops_waiting_at_once() {
+    let home = TestHome::new();
+    write_plist(&home, OLD);
+    let launchd = Arc::new(FakeLaunchd {
+        linger: 2,
+        slow: Duration::from_secs(1),
+        ..FakeLaunchd::new(true)
+    });
+
+    install(Some(&agent(&home, &launchd)), &PLAIN, |_| {
+        Some(Counts::default())
+    })
+    .expect("installs");
+
+    assert_eq!(pauses(&launchd), 2);
+}
+
+#[test]
+fn an_install_whose_daemon_answers_slowly_stops_asking_after_two_seconds() {
+    let home = TestHome::new();
+    let launchd = Arc::new(FakeLaunchd::new(false));
+    let mut asks = 0;
+
+    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| {
+        asks += 1;
+        launchd.advance(Duration::from_secs(1));
+        None
+    })
+    .expect("installs");
+
+    assert!(
+        text(&report).contains("daemon does not answer"),
+        "{}",
+        text(&report)
+    );
+    // One ask before the bootstrap, then asks that end at 1 and 2.1
+    // seconds, and the second is past the two-second deadline.
+    assert_eq!(asks, 3);
+}
+
+#[test]
+fn an_install_whose_slow_daemon_answers_early_stops_asking_at_once() {
+    let home = TestHome::new();
+    let launchd = Arc::new(FakeLaunchd::new(false));
+    let mut asks = 0;
+
+    let report = install(Some(&agent(&home, &launchd)), &PLAIN, |_| {
+        asks += 1;
+        launchd.advance(Duration::from_secs(1));
+        (asks == 3).then(Counts::default)
+    })
+    .expect("installs");
+
+    assert!(
+        text(&report).ends_with("daemon answers"),
+        "{}",
+        text(&report)
+    );
+    assert_eq!(asks, 3);
+    assert_eq!(pauses(&launchd), 1);
+}
+
 /// Makes the plist's directory read-only, or writable again.
 fn set_read_only(home: &Path, read_only: bool) {
     use std::os::unix::fs::PermissionsExt as _;
@@ -965,7 +1053,7 @@ fn install_refuses_while_another_service_command_holds_the_lock_and_changes_noth
     let calls = launchd.calls.lock().expect("the calls lock").clone();
     assert_eq!(
         calls,
-        vec!["pause"; LOCK_POLLS as usize],
+        vec!["pause"; (LOCK_WITHIN.as_millis() / crate::job::launchd::PAUSE.as_millis()) as usize],
         "install did something other than wait for the lock"
     );
 }
@@ -989,12 +1077,37 @@ fn uninstall_refuses_while_another_service_command_holds_the_lock_and_keeps_the_
 }
 
 #[test]
+fn a_service_command_whose_pauses_are_slow_refuses_the_held_lock_after_ten_seconds() {
+    let home = TestHome::new();
+    let _held = hold_lock(&home);
+    let clock = FakeLaunchd::new(false);
+    let mut waited = 0;
+
+    let refused = hold(
+        &state_dir(&home),
+        || crate::job::launchd::Launchd::now(&clock),
+        || {
+            waited += 1;
+            clock.advance(Duration::from_secs(3));
+        },
+    );
+
+    assert!(
+        matches!(refused, Err(ServiceFailed::Locked { .. })),
+        "{refused:?}"
+    );
+    // The looks come at 0, 3, 6, 9 and 12 seconds, and the last is past
+    // the ten-second deadline.
+    assert_eq!(waited, 4);
+}
+
+#[test]
 fn a_service_command_waits_for_the_lock_and_takes_it_once_the_holder_finishes() {
     let home = TestHome::new();
     let mut held = Some(hold_lock(&home));
     let mut waited = 0;
 
-    let lock = hold(&state_dir(&home), || {
+    let lock = hold(&state_dir(&home), Instant::now, || {
         waited += 1;
         if waited == 3 {
             held = None;
@@ -1015,7 +1128,7 @@ fn a_service_command_makes_an_open_state_directory_private() {
     std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o755))
         .expect("the mode changes");
 
-    let lock = hold(&state, || {});
+    let lock = hold(&state, Instant::now, || {});
 
     assert!(lock.is_ok(), "{lock:?}");
     let mode = std::fs::metadata(&state)

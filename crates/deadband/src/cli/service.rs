@@ -331,9 +331,11 @@ pub fn uninstall(
 /// `XDG_STATE_HOME`, so two commands with one home always share a lock.
 fn locked(agent: &LaunchAgent) -> Result<lock::ServiceLock, ServiceFailed> {
     let home = located(agent.home.as_deref(), "the home directory")?;
-    lock::hold(&home.join(".local/state/deadband"), || {
-        agent.launchd.pause()
-    })
+    lock::hold(
+        &home.join(".local/state/deadband"),
+        || agent.launchd.now(),
+        || agent.launchd.pause(),
+    )
 }
 
 /// Returns `found`, or the refusal that names `what` when it is `None`.

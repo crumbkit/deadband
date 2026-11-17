@@ -23,6 +23,11 @@ const ALLOW: &[Allow] = &[
         "run",
         "run exits with 126 when the job's program is found but cannot start and with 127 when it is not found, the meanings that env and timeout give these codes",
     ),
+    Allow::new(
+        Rule::SharedExit,
+        "status",
+        "status already exits 1 with deadband::job::stuck when it lists a stuck job and with deadband::job::unreadable when the daemon could not read the jobs' processes, a contract that docs/running.md and docs/architecture.md document, so moving them to a code of their own would break callers. The tool record declares both so an agent can tell them from a crash.",
+    ),
     Allow::root_verbs(
         &["status", "run", "daemon", "top"],
         "People type `deadband status`, `deadband run`, `deadband daemon` and `deadband top` as one verb, and deadband has no resource to put them under.",
