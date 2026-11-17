@@ -1,4 +1,4 @@
-Print the machine's load, memory pressure and swap, and the daemon's jobs
+Print the machine's load, free disk space, memory pressure and swap, and the daemon's jobs
 
 Usage: deadband status [OPTIONS]
 

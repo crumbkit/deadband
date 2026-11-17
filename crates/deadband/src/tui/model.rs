@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::admit::Hold;
 use crate::client::Unasked;
+use crate::probe::Disk;
 use crate::protocol::{OutsideJobs, ReclaimPlan, Timeline};
 
 mod reclaims;
@@ -143,6 +144,8 @@ pub(super) struct Model {
     last_up: Option<Duration>,
     /// Whether a restart was seen less than a window ago.
     restarted: bool,
+    /// The home directory's disk at the latest poll, or `None` unread.
+    disk: Option<Disk>,
 }
 
 impl Model {
@@ -155,6 +158,7 @@ impl Model {
             failed: None,
             last_up: None,
             restarted: false,
+            disk: None,
         }
     }
 
@@ -335,6 +339,16 @@ impl Model {
             .flatten()
             .min_by_key(|sample| age_of(sample).abs_diff(age))
             .filter(|sample| age_of(sample).abs_diff(age) <= NEAREST)
+    }
+
+    /// Takes in the disk the latest poll read, or `None` when it failed.
+    pub(super) const fn note_disk(&mut self, disk: Option<Disk>) {
+        self.disk = disk;
+    }
+
+    /// Returns the disk of the latest poll.
+    pub(super) const fn disk(&self) -> Option<Disk> {
+        self.disk
     }
 
     /// Returns the load of the latest poll.

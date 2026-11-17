@@ -8,12 +8,12 @@ use std::fmt;
 
 use crumbkit::{Document, Prose};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 use super::service::{DaemonState, LOG};
-use crate::admit::{JobId, Lane};
+use crate::admit::{GIB, JobId, Lane};
 use crate::name::name;
-use crate::probe::Sample;
+use crate::probe::{Disk, Sample};
 use crate::protocol::{Job, Jobs, Label, Short, StuckJob};
 use crate::stuck::quiet_text;
 
@@ -112,13 +112,18 @@ fn escaped(text: &str) -> String {
     shown
 }
 
-/// What `deadband status` prints: one sample of the machine, and the
-/// daemon's jobs.
+/// What `deadband status` prints: one sample of the machine, the free
+/// space of the disk that holds the home directory, and the daemon's jobs.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct Status {
     /// One sample of the machine.
     #[serde(flatten)]
     pub sample: Sample,
+    /// The free and total space of the disk that holds the home directory,
+    /// or `null` when it could not be read. The text gives the reason.
+    #[serde(serialize_with = "read_disk")]
+    #[schemars(with = "Option<Disk>")]
+    pub disk: Result<Disk, String>,
     /// The daemon's running and waiting jobs, or `null` when no daemon
     /// answers.
     pub daemon: Option<Jobs<ShownJob>>,
@@ -130,9 +135,36 @@ pub struct Status {
     pub daemon_state: Option<DaemonState>,
 }
 
+/// Writes the disk of a status as its object, or `null` when it could not
+/// be read.
+fn read_disk<S: Serializer>(disk: &Result<Disk, String>, serializer: S) -> Result<S::Ok, S::Error> {
+    disk.as_ref().ok().serialize(serializer)
+}
+
+/// The number of bytes in a mebibyte, which the text output counts swap in.
+const MEBIBYTE: u64 = 1_048_576;
+
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", self.sample)?;
+        let sample = &self.sample;
+        writeln!(f, "load: {:.2} (1-minute average)", sample.load_1m)?;
+        match &self.disk {
+            Ok(disk) => writeln!(
+                f,
+                "disk: {} GiB free of {} GiB ({}%)",
+                disk.free_bytes / GIB,
+                disk.total_bytes / GIB,
+                disk.free_percent()
+            )?,
+            Err(why) => writeln!(f, "disk: could not be read ({why})")?,
+        }
+        writeln!(f, "memory pressure: {}", sample.memory_pressure)?;
+        writeln!(
+            f,
+            "swap: {} MiB used of {} MiB",
+            sample.swap_used_bytes / MEBIBYTE,
+            sample.swap_total_bytes / MEBIBYTE
+        )?;
         let Some(jobs) = &self.daemon else {
             return f.write_str(match self.daemon_state {
                 Some(DaemonState::NotInstalled) => {
@@ -205,5 +237,5 @@ pub const STATUS: Document<Prose<Status>> = Document::new(
     "deadband",
     "status",
     2,
-    "One sample of the machine's 1-minute load average, memory pressure and swap, and the daemon's running and waiting jobs, each with its workspace and short command.",
+    "One sample of the machine's 1-minute load average, free disk space, memory pressure and swap, and the daemon's running and waiting jobs, each with its workspace and short command.",
 );

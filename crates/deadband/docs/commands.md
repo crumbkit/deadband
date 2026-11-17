@@ -8,7 +8,7 @@ Keep a busy machine usable while many heavy jobs compete for it
 
 ### Commands
 
-- [`deadband status`](#deadband-status): Print the machine's load, memory pressure and swap, and the daemon's jobs
+- [`deadband status`](#deadband-status): Print the machine's load, free disk space, memory pressure and swap, and the daemon's jobs
 - [`deadband run`](#deadband-run): Wait until the daemon admits a job, then run it
 - [`deadband daemon`](#deadband-daemon): Run the daemon that admits jobs, in the foreground
 - [`deadband service`](#deadband-service): Install or uninstall the launchd agent that runs the daemon at login
@@ -28,11 +28,11 @@ Keep a busy machine usable while many heavy jobs compete for it
 
 ## `deadband status`
 
-Print the machine's load, memory pressure and swap, and the daemon's jobs
+Print the machine's load, free disk space, memory pressure and swap, and the daemon's jobs
 
 ### Examples
 
-Print the machine's load, memory pressure and swap.
+Print the machine's load, free disk space, memory pressure and swap.
 
 ```sh
 deadband status

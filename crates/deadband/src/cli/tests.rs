@@ -67,6 +67,20 @@ impl Probe for Broken {
     }
 }
 
+/// A probe that reads the machine and fails to read the disk.
+#[derive(Clone)]
+struct NoDisk;
+
+impl Probe for NoDisk {
+    fn sample(&self) -> Result<Sample, Unreadable> {
+        Fixed.sample()
+    }
+
+    fn disk(&self, _path: &Path) -> std::io::Result<Disk> {
+        Err(std::io::Error::other("the disk went away"))
+    }
+}
+
 /// A machine with `probe`, a socket that no daemon listens on yet, and a
 /// log that the test reads.
 struct Test<P> {
@@ -87,7 +101,10 @@ impl<P: Probe + Clone + Send + 'static> Test<P> {
             socket_directory: None,
             log: shared,
             cores: NonZeroUsize::new(4),
-            environment: Environment::default(),
+            environment: Environment {
+                home: Some(PathBuf::from("/Users/test")),
+                ..Environment::default()
+            },
             service: None,
         };
         Self {
@@ -163,12 +180,13 @@ fn ask(socket: &Path, label: &str) -> (UnixStream, Reply) {
 }
 
 #[test]
-fn status_prints_load_memory_pressure_swap_and_that_the_daemon_is_not_running() {
+fn status_prints_load_disk_memory_pressure_swap_and_that_the_daemon_is_not_running() {
     let (code, out, err) = Test::new(Fixed).run(&["status"]);
     assert_eq!(code, 0, "{err}");
     assert_eq!(
         out,
         "load: 4.25 (1-minute average)\n\
+         disk: 500 GiB free of 1000 GiB (50%)\n\
          memory pressure: normal\n\
          swap: 11605 MiB used of 13312 MiB\n\
          daemon: not running\n"
@@ -295,6 +313,44 @@ fn status_with_json_prints_the_sample_and_the_daemon_in_the_status_document() {
     assert!(out.contains(r#""swap_used_bytes":12168724480"#), "{out}");
     assert!(out.contains(r#""swap_total_bytes":13958643712"#), "{out}");
     assert!(out.contains(r#""daemon":null"#), "{out}");
+    assert!(
+        out.contains(r#""disk":{"free_bytes":536870912000,"total_bytes":1073741824000}"#),
+        "{out}"
+    );
+}
+
+#[test]
+fn status_says_the_disk_could_not_be_read_and_carries_on() {
+    let (code, out, err) = Test::new(NoDisk).run(&["status"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        out,
+        "load: 4.25 (1-minute average)\n\
+         disk: could not be read (the disk went away)\n\
+         memory pressure: normal\n\
+         swap: 11605 MiB used of 13312 MiB\n\
+         daemon: not running\n"
+    );
+}
+
+#[test]
+fn status_with_json_gives_a_null_disk_when_the_disk_could_not_be_read() {
+    let (code, out, err) = Test::new(NoDisk).run(&["status", "--json"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains(r#""disk":null"#), "{out}");
+    assert!(out.contains(r#""load_1m":4.25"#), "{out}");
+}
+
+#[test]
+fn status_says_the_disk_could_not_be_read_when_the_home_directory_is_unknown() {
+    let mut test = Test::new(Fixed);
+    test.machine.environment.home = None;
+    let (code, out, err) = test.run(&["status"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains("\ndisk: could not be read (the home directory is unknown)\n"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -906,8 +962,7 @@ fn running_jobs() -> Jobs {
     }
 }
 
-const STATUS_TOP: &str =
-    "load: 4.25 (1-minute average)\nmemory pressure: normal\nswap: 11605 MiB used of 13312 MiB\n";
+const STATUS_TOP: &str = "load: 4.25 (1-minute average)\ndisk: 500 GiB free of 1000 GiB (50%)\nmemory pressure: normal\nswap: 11605 MiB used of 13312 MiB\n";
 
 #[test]
 fn status_lists_a_stuck_job_first_and_exits_1() {

@@ -20,6 +20,7 @@ use ratatui::style::Modifier;
 use super::{BG, draw};
 use crate::admit::{GIB, Hold, Lane};
 use crate::client::Unasked;
+use crate::probe::Disk;
 use crate::protocol::{
     Ago, Ahead, Exit, JobRecord, JobState, KeptItem, Label, OutsideJobs, ReclaimPlan, ReclaimRun,
     ReclaimRunState, ReclaimerRow, Short, StuckPeriod, Timeline,
@@ -27,6 +28,12 @@ use crate::protocol::{
 use crate::tui::model::Model;
 
 const CORES: usize = 14;
+
+/// The disk of the mockup, well above the hold level.
+const SPACIOUS: Disk = Disk {
+    free_bytes: 212 * GIB,
+    total_bytes: 994 * GIB,
+};
 
 fn ago(seconds: u64) -> Ago {
     Ago::from_millis(seconds * 1000)
@@ -132,6 +139,7 @@ fn open_model(jobs: Vec<JobRecord>) -> (Model, Instant) {
         };
         model.observe(now - secs(age), Ok(reply), Some(6.4));
     }
+    model.note_disk(Some(SPACIOUS));
     (model, now)
 }
 
@@ -368,6 +376,16 @@ fn model_with(
         next_reclaim: None,
     };
     model.observe(now, Ok(reply), Some(history.load(0)));
+    model.note_disk(Some(match history.held {
+        Some(Hold::Disk {
+            free_bytes,
+            total_bytes,
+        }) => Disk {
+            free_bytes,
+            total_bytes,
+        },
+        _ => SPACIOUS,
+    }));
     (model, now)
 }
 
@@ -1094,4 +1112,71 @@ fn the_legend_keeps_no_activity_whole_at_80_columns_beside_the_reclaims() {
         .find(|line| line.contains("running"))
         .expect("a legend");
     assert!(legend.ends_with("no activity"), "{screen}");
+}
+
+/// Returns the line of the disk row in a 120 by 28 drawing of `model`,
+/// the line under the cores row.
+fn disk_line(model: &Model, now: Instant) -> (Buffer, u16) {
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 120, 28));
+    draw(&mut buffer, model, now);
+    let cores = (0..28)
+        .find(|&y| buffer[(1, y)].symbol() == "c" && buffer[(2, y)].symbol() == "o")
+        .expect("the cores row is drawn");
+    (buffer, cores + 1)
+}
+
+/// Returns the text of line `y` of `buffer` from column 0 to 20.
+fn left(buffer: &Buffer, y: u16) -> String {
+    (0..20)
+        .map(|x| buffer[(x, y)].symbol())
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
+}
+
+#[test]
+fn the_disk_row_under_cores_shows_the_free_space_in_whole_gib() {
+    let (model, now) = model_of(&load_history(599), 5000, all(load_jobs()));
+    let (buffer, y) = disk_line(&model, now);
+    assert_eq!(left(&buffer, y), " disk   212 GiB");
+    assert_eq!(buffer[(8, y)].fg, super::HI);
+}
+
+#[test]
+fn the_disk_value_is_red_below_the_hold_level_and_plain_at_it() {
+    let shown = |disk: Disk| {
+        let (mut model, now) = model_of(&load_history(599), 5000, all(load_jobs()));
+        model.note_disk(Some(disk));
+        let (buffer, y) = disk_line(&model, now);
+        (left(&buffer, y), buffer[(8, y)].fg)
+    };
+    let under_bytes = Disk {
+        free_bytes: 19 * GIB,
+        total_bytes: 100 * GIB,
+    };
+    assert_eq!(
+        shown(under_bytes),
+        (" disk   19 GiB".to_owned(), super::RED)
+    );
+    let under_percent = Disk {
+        free_bytes: 29 * GIB,
+        total_bytes: 1000 * GIB,
+    };
+    assert_eq!(
+        shown(under_percent),
+        (" disk   29 GiB".to_owned(), super::RED)
+    );
+    let at_level = Disk {
+        free_bytes: 30 * GIB,
+        total_bytes: 1000 * GIB,
+    };
+    assert_eq!(shown(at_level), (" disk   30 GiB".to_owned(), super::HI));
+}
+
+#[test]
+fn an_unread_disk_shows_a_dash_on_the_disk_row() {
+    let (mut model, now) = model_of(&load_history(599), 5000, all(load_jobs()));
+    model.note_disk(None);
+    let (buffer, y) = disk_line(&model, now);
+    assert_eq!(left(&buffer, y), " disk   -");
 }

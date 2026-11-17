@@ -63,7 +63,10 @@ pub const TOOL: Tool = Tool::new()
             .leaves(&[
                 Leaf::new(&["status"])
                     .examples(&[
-                        Example::new(&[], "Print the machine's load, memory pressure and swap"),
+                        Example::new(
+                            &[],
+                            "Print the machine's load, free disk space, memory pressure and swap",
+                        ),
                         Example::new(&["--json"], "Print the same sample as a JSON document"),
                     ])
                     .effects(Effects::read_only())

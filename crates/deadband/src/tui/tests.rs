@@ -15,6 +15,7 @@ use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use super::guard::{Guard, Modes};
 use super::model::{Model, Phase};
 use super::{TOP_NOT_A_TERMINAL, opens, quits, tick};
+use crate::admit::GIB;
 use crate::probe::{Disk, Pressure, Probe, Sample, Unreadable};
 use crate::protocol::{Ago, Reply, Timeline, write_line};
 use crate::testing::{TestSocket, socket_path};
@@ -134,6 +135,25 @@ impl Probe for Fixed {
     }
 }
 
+/// A probe that returns one load and one disk.
+struct WithDisk;
+
+/// The disk that [`WithDisk`] reads.
+const DISK: Disk = Disk {
+    free_bytes: 212 * GIB,
+    total_bytes: 994 * GIB,
+};
+
+impl Probe for WithDisk {
+    fn sample(&self) -> Result<Sample, Unreadable> {
+        Fixed.sample()
+    }
+
+    fn disk(&self, _path: &Path) -> io::Result<Disk> {
+        Ok(DISK)
+    }
+}
+
 /// A probe that cannot read the machine.
 struct Broken;
 
@@ -197,9 +217,9 @@ fn model() -> Model {
 fn a_tick_against_a_daemon_that_sends_garbage_keeps_the_last_model() {
     let path = fake(vec![reply_line(5), b"not json\n".to_vec()]);
     let mut model = model();
-    tick(&mut model, &path, &Fixed, ANSWER);
+    tick(&mut model, &path, None, &Fixed, ANSWER);
     assert_eq!(phase(&model), Phase::Live);
-    tick(&mut model, &path, &Fixed, ANSWER);
+    tick(&mut model, &path, None, &Fixed, ANSWER);
     assert!(
         matches!(phase(&model), Phase::Stale { .. }),
         "{:?}",
@@ -211,9 +231,39 @@ fn a_tick_against_a_daemon_that_sends_garbage_keeps_the_last_model() {
 fn a_failed_probe_leaves_a_gap_and_the_poll_still_counts() {
     let path = fake(vec![reply_line(5)]);
     let mut model = model();
-    tick(&mut model, &path, &Broken, ANSWER);
+    tick(&mut model, &path, None, &Broken, ANSWER);
     assert_eq!(phase(&model), Phase::Live);
     assert_eq!(model.latest_load(), None);
+}
+
+#[test]
+fn a_tick_reads_the_disk_of_the_home_directory_with_the_load() {
+    let path = fake(vec![reply_line(5)]);
+    let mut model = model();
+    let home = Path::new("/Users/test");
+    tick(&mut model, &path, Some(home), &WithDisk, ANSWER);
+    assert_eq!(model.disk(), Some(DISK));
+    assert_eq!(model.latest_load(), Some(3.0));
+}
+
+#[test]
+fn a_tick_whose_disk_read_fails_keeps_no_disk_and_still_reads_the_load() {
+    let path = fake(vec![reply_line(5), reply_line(6)]);
+    let mut model = model();
+    let home = Path::new("/Users/test");
+    tick(&mut model, &path, Some(home), &WithDisk, ANSWER);
+    tick(&mut model, &path, Some(home), &Fixed, ANSWER);
+    assert_eq!(model.disk(), None);
+    assert_eq!(model.latest_load(), Some(3.0));
+    assert_eq!(phase(&model), Phase::Live);
+}
+
+#[test]
+fn a_tick_without_a_home_directory_reads_no_disk() {
+    let path = fake(vec![reply_line(5)]);
+    let mut model = model();
+    tick(&mut model, &path, None, &WithDisk, ANSWER);
+    assert_eq!(model.disk(), None);
 }
 
 #[test]

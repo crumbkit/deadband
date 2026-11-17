@@ -1,8 +1,9 @@
 //! `deadband top`: a read-only terminal timeline of the last ten minutes.
 
 //!
-//! The view polls the daemon and the local probe once a second, and keeps
-//! nothing beyond the last reply and 600 samples of the load and the hold.
+//! The view polls the daemon, the local probe and the disk of the home
+//! directory once a second, and keeps nothing beyond the last reply, the
+//! last disk reading and 600 samples of the load and the hold.
 
 use std::fmt;
 use std::io::{self, IsTerminal};
@@ -107,11 +108,20 @@ fn quits(event: &Event) -> Option<u8> {
     }
 }
 
-/// Polls the daemon and samples the machine once, into `model`.
-fn tick(model: &mut Model, socket: &Path, probe: &impl Probe, within: Duration) {
+/// Polls the daemon, samples the machine and reads the disk that holds
+/// `home` once, into `model`. A disk that cannot be read, or an unknown
+/// home, leaves the model with no disk.
+fn tick(
+    model: &mut Model,
+    socket: &Path,
+    home: Option<&Path>,
+    probe: &impl Probe,
+    within: Duration,
+) {
     let polled = client::timeline(socket, within);
     let load = probe.sample().ok().map(|sample| sample.load_1m);
     model.observe(Instant::now(), polled, load);
+    model.note_disk(home.and_then(|home| probe.disk(home).ok()));
 }
 
 /// The real terminal: raw mode and the alternate screen, through ratatui.
@@ -141,7 +151,8 @@ fn watch<P: Probe>(
 ) -> io::Result<u8> {
     loop {
         let next = Instant::now() + POLL_EVERY;
-        tick(model, &machine.socket, &machine.probe, POLL_WITHIN);
+        let home = machine.environment.home.as_deref();
+        tick(model, &machine.socket, home, &machine.probe, POLL_WITHIN);
         screen.draw(|frame| view::draw(frame.buffer_mut(), model, Instant::now()))?;
         loop {
             let wait = next.saturating_duration_since(Instant::now());

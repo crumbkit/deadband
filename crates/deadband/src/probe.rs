@@ -171,12 +171,24 @@ pub const fn child_usage() -> Option<ChildUsage> {
 }
 
 /// The space of one disk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Disk {
     /// The bytes that a user without special privileges may still write.
     pub free_bytes: u64,
     /// The bytes the disk holds in all.
     pub total_bytes: u64,
+}
+
+impl Disk {
+    /// Returns the free space as a whole percentage of the disk, rounded
+    /// down, or 100 for a disk that reports no size.
+    #[must_use]
+    pub fn free_percent(&self) -> u64 {
+        self.free_bytes
+            .saturating_mul(100)
+            .checked_div(self.total_bytes)
+            .unwrap_or(100)
+    }
 }
 
 /// One sample of the machine.
@@ -190,22 +202,6 @@ pub struct Sample {
     pub swap_used_bytes: u64,
     /// The bytes of swap the machine has.
     pub swap_total_bytes: u64,
-}
-
-/// The number of bytes in a mebibyte, which the text output counts swap in.
-const MEBIBYTE: u64 = 1_048_576;
-
-impl fmt::Display for Sample {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "load: {:.2} (1-minute average)", self.load_1m)?;
-        writeln!(f, "memory pressure: {}", self.memory_pressure)?;
-        write!(
-            f,
-            "swap: {} MiB used of {} MiB",
-            self.swap_used_bytes / MEBIBYTE,
-            self.swap_total_bytes / MEBIBYTE
-        )
-    }
 }
 
 /// The kernel's memory pressure level.
