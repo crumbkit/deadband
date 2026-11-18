@@ -1,0 +1,130 @@
+# The environment variables that the deadband command and its daemon read.
+# The catalogs `VARIABLES` in crates/deadband/src/socket.rs and
+# crates/deadband/src/environment.rs list them, and
+# crates/deadband/tests/declarations.rs checks that this file declares exactly
+# the names of those two catalogs. `DEADBAND_SOCKET` is in both.
+#
+# deadband reads no secret. `getconf DARWIN_USER_TEMP_DIR` is a system
+# configuration value that deadband reads with `confstr`, so it is no
+# environment variable and this file leaves it out.
+#
+# The variables that crumbkit reads are not declared here, and no list
+# declares all of them. crumbkit-starmap lists `NO_COLOR`, `CLICOLOR`,
+# `CLICOLOR_FORCE`, `TERM` and `DEADBAND_OUTPUT_BUDGET`, which crumbkit reads
+# in every tool. The deadband binary also reads `COMPLETE` and, in
+# `deadband completion install`, `SHELL`, `XDG_DATA_HOME`, `FPATH` and
+# `BASH_COMPLETION_USER_DIR`, and in `deadband skills install` `CODEX_HOME`
+# and the variables that detect an agent. No list of crumbkit's declares those,
+# so they are undeclared until crumbkit-starmap lists them.
+
+[variables.DEADBAND_SOCKET]
+purpose = "The path of the daemon's socket, which the daemon, `deadband run` and `deadband status` all use. A daemon started with it records no job history and runs no reclaimer and no on_stuck command."
+effect = "When it is unset or empty, deadband reads DEADBAND_SOCKET_DIR."
+type = "path"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.DEADBAND_SOCKET_DIR]
+purpose = "The directory that holds `deadband.sock`, for a daemon and its callers that are not the launchd daemon."
+effect = "When it is unset or empty, deadband on macOS uses the per-user temporary directory that `getconf DARWIN_USER_TEMP_DIR` prints, and when that fails or the system is not macOS it reads TMPDIR."
+type = "path"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.TMPDIR]
+purpose = "The temporary directory that holds `deadband.sock` where there is no per-user directory to ask for, such as on Linux."
+effect = "When it is unset or empty, deadband reads XDG_RUNTIME_DIR."
+type = "path"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.XDG_RUNTIME_DIR]
+purpose = "The runtime directory, in which the daemon makes a `deadband` directory with mode 0700 to hold `deadband.sock`."
+effect = "When it is unset or empty, the daemon makes `/tmp/deadband-<uid>` with mode 0700, where `<uid>` is the numeric id of the user, and `deadband run` and `deadband status` look for the socket in it and refuse a directory that is unsafe. They use `deadband.sock` in it."
+type = "path"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.DEADBAND_HELD]
+purpose = "Marks a job that a granted job started, so it runs at once without asking. `deadband run` sets it to 1 for the job it runs."
+effect = "When it is unset, empty or 0, `deadband run` asks the daemon for a place. Any other value turns it on."
+type = "string"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.DEADBAND_BYPASS]
+purpose = "Skips admission, so the job runs at once without asking the daemon."
+effect = "When it is unset, empty or 0, `deadband run` asks the daemon for a place. Any other value turns it on."
+type = "string"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.HOME]
+purpose = "The home directory, whose disk the daemon reads, and which holds the configuration and state directories when XDG_CONFIG_HOME and XDG_STATE_HOME are unset. `deadband service` takes the launch agent's plist and `service.lock` from `$HOME/.local/state/deadband` whatever XDG_STATE_HOME says."
+effect = "When it is unset, empty or relative, the daemon reads no disk for a job, deadband finds no configuration or state directory unless the XDG variables name one, and `deadband service` finds no home directory."
+type = { path = { absolute = true } }
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.XDG_CONFIG_HOME]
+purpose = "The configuration directory, which holds `deadband/priority` and `deadband/config.toml`."
+effect = "When it is unset or empty, deadband uses `~/.config`."
+type = "path"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.XDG_STATE_HOME]
+purpose = "The state directory, which holds `deadband/jobs.jsonl`."
+effect = "When it is unset or empty, deadband uses `~/.local/state`."
+type = "path"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.CARGO_BUILD_JOBS]
+purpose = "The threads of a cargo build, which `deadband run` leaves as the caller set it."
+effect = "When it is unset or empty, `deadband run` sets it to the job's threads."
+type = "string"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.NEXTEST_TEST_THREADS]
+purpose = "The threads of a nextest run, which `deadband run` leaves as the caller set it."
+effect = "When it is unset or empty, `deadband run` sets it to the job's threads."
+type = "string"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.RUST_TEST_THREADS]
+purpose = "The threads of a libtest run, which `deadband run` leaves as the caller set it."
+effect = "When it is unset or empty, `deadband run` sets it to the job's threads."
+type = "string"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.CMAKE_BUILD_PARALLEL_LEVEL]
+purpose = "The threads of a CMake build, which `deadband run` leaves as the caller set it."
+effect = "When it is unset or empty, `deadband run` sets it to the job's threads."
+type = "string"
+unset = "optional"
+show = "shown"
+source = "inherited"
+
+[variables.MAKEFLAGS]
+purpose = "The flags of make, which `deadband run` leaves as the caller set them."
+effect = "When it is unset or empty, `deadband run` sets it to `-j` followed by the job's threads."
+type = "string"
+unset = "optional"
+show = "shown"
+source = "inherited"
