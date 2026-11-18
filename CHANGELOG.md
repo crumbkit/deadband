@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `starmap.toml` declares the environment variables that deadband reads, and
+  `mxv.toml` declares the daemon as the process `deadband`, on a socket of its
+  own in the checkout, with tasks for the commands of the pull-request lane.
+  A test checks that `starmap.toml` names exactly the variables that the
+  code lists.
+
 ### Changed
 
 - deadband takes its four lock files, the daemon's `<socket>.lock`,

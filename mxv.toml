@@ -1,0 +1,29 @@
+# The daemon is the one process that deadband has. `mxv up` builds the binary
+# through deadband, then starts `deadband daemon` on a socket of its own inside
+# the checkout, so a workspace's daemon never answers for the person's own
+# daemon. A daemon on its own socket records no job history and runs no
+# reclaimer, as the log line it writes says. The daemon listens on a Unix
+# socket, so the file declares no port and no route.
+#
+# The tasks run the commands of the pull-request lane in AGENTS.md that
+# need no environment variable and no tool beyond cargo. The lane's other
+# commands set CARGO_BUILD_WARNINGS or `RUSTDOCFLAGS` or run other tools, which
+# a task cannot do.
+
+[processes.deadband]
+argv = ["target/debug/deadband", "daemon"]
+build = ["cargo", "build", "--locked", "--bin", "deadband"]
+env = { DEADBAND_SOCKET = "target/deadband.sock" }
+ready = { log = "the daemon listens on", timeout_seconds = 30 }
+
+[tasks.fmt]
+argv = ["cargo", "fmt", "--check"]
+
+[tasks.clippy]
+argv = ["cargo", "clippy", "--locked", "--workspace", "--all-targets", "--all-features"]
+
+[tasks.test]
+argv = ["cargo", "nextest", "run", "--locked", "--workspace", "--all-features"]
+
+[tasks.doctest]
+argv = ["cargo", "test", "--locked", "--doc", "--workspace", "--all-features"]
