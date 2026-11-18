@@ -22,6 +22,15 @@ build = ["cargo", "build", "--locked", "--bin", "deadband"]
 env = { DEADBAND_SOCKET = "target/deadband.sock" }
 ready = { log = "the daemon listens on", timeout_seconds = 30 }
 
+# jumpgate reads this table and mxv ignores it. It names the daemon's socket
+# so that another app's need can be bound to it. The unit is the process above
+# and the path is the DEADBAND_SOCKET that process sets.
+
+[provides.deadband-socket]
+kind = "socket"
+unit = "deadband"
+path = "target/deadband.sock"
+
 [tasks.fmt]
 argv = ["cargo", "fmt", "--check"]
 
