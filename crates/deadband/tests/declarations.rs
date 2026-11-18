@@ -190,7 +190,7 @@ fn starmap_toml_marks_every_variable_optional_inherited_and_shown() {
 fn starmap_toml_effect_of_the_switches_says_that_any_other_value_turns_them_on() {
     for name in ["DEADBAND_HELD", "DEADBAND_BYPASS"] {
         let effect = text(&variable(name), "effect").to_owned();
-        assert!(effect.contains("any other value"), "{name}: {effect}");
+        assert!(effect.contains("Any other value"), "{name}: {effect}");
     }
 }
 
