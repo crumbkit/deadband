@@ -210,10 +210,28 @@ fn starmap_toml_says_that_only_the_daemon_makes_the_fallback_directory() {
 fn mxv_toml_declares_only_the_tables_that_deadband_uses() {
     let file = declaration("mxv.toml");
     let tables: BTreeSet<&str> = file.keys().map(String::as_str).collect();
-    assert_eq!(tables, BTreeSet::from(["processes", "tasks"]));
+    assert_eq!(tables, BTreeSet::from(["processes", "provides", "tasks"]));
     let process = daemon();
     let keys: BTreeSet<&str> = process.keys().map(String::as_str).collect();
     assert_eq!(keys, BTreeSet::from(["argv", "build", "env", "ready"]));
+}
+
+#[test]
+fn mxv_toml_provides_the_daemon_socket_at_the_path_that_the_daemon_gets() {
+    let mut file = declaration("mxv.toml");
+    let Some(toml::Value::Table(mut provides)) = file.remove("provides") else {
+        panic!("mxv.toml declares no [provides] table");
+    };
+    let Some(toml::Value::Table(provide)) = provides.remove("deadband-socket") else {
+        panic!("mxv.toml provides no deadband-socket");
+    };
+    let keys: BTreeSet<&str> = provide.keys().map(String::as_str).collect();
+    assert_eq!(keys, BTreeSet::from(["kind", "path", "unit"]));
+    assert_eq!(provide["kind"].as_str(), Some("socket"));
+    assert_eq!(provide["unit"].as_str(), Some("deadband"));
+    let daemon = daemon();
+    let env = daemon["env"].as_table().expect("the daemon sets env");
+    assert_eq!(provide["path"], env["DEADBAND_SOCKET"]);
 }
 
 #[test]
