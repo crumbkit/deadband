@@ -211,6 +211,22 @@ fn a_seat_line_whose_label_holds_a_newline_is_refused_as_malformed() {
 }
 
 #[test]
+fn an_ask_whose_job_is_an_array_with_a_newline_in_its_label_is_refused_as_malformed() {
+    let text = "{\"ask\":[\"x\\nrunning: forged (pid 1)\",42,\"make\"]}\n";
+    let error = read_line::<Request>(&mut BufReader::new(text.as_bytes()))
+        .expect_err("the line is refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidData);
+}
+
+#[test]
+fn a_seat_whose_job_is_an_array_with_a_newline_in_its_label_is_refused_as_malformed() {
+    let text = "{\"seat\":{\"job\":[\"x\\nrunning: forged (pid 1)\",42,\"make\"],\"jobs\":3,\"ran_ms\":1500}}\n";
+    let error = read_line::<Request>(&mut BufReader::new(text.as_bytes()))
+        .expect_err("the line is refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidData);
+}
+
+#[test]
 fn a_jobs_reply_from_an_older_daemon_whose_label_holds_a_newline_lists_the_job_with_a_space() {
     let text = "{\"jobs\":{\"max_jobs\":2,\"running\":[{\"label\":\"a\\nb\",\"pid\":42,\"command\":\"make\"}],\"waiting\":[{\"label\":\"c\\u001b[2J\",\"pid\":43,\"command\":\"make\"}]}}\n";
     let Some(Reply::Jobs(jobs)) =

@@ -112,9 +112,8 @@ fn a_run_whose_label_holds_a_line_feed_is_admitted_and_status_lists_it_as_one_ro
     // asking says why in one line.
     assert_eq!(String::from_utf8_lossy(&ended.stderr), "");
 
-    // `status` lists the jobs only where it can read the machine, which is
-    // macOS. Elsewhere it prints no rows, and the test checks the admission
-    // above alone.
+    // Off macOS, `status` fails because it cannot read the machine, and it
+    // prints no job rows, so the test checks the admission above alone.
     if !cfg!(target_os = "macos") {
         return;
     }

@@ -778,26 +778,21 @@ fn a_job_that_ends_before_the_limit_is_not_flagged_and_keeps_its_exit_code() {
 
 /// Listens on `test`'s socket and answers one status request with `jobs`.
 fn answer_status<P>(test: &Test<P>, jobs: Jobs) {
-    let listener =
-        std::os::unix::net::UnixListener::bind(&test.machine.socket).expect("the socket binds");
-    thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("the client connects");
-        let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
-        let _ = read_line::<Request>(&mut reader);
-        write_line(&mut stream, &Reply::Jobs(jobs)).expect("the reply writes");
-    });
+    let mut line = Vec::new();
+    write_line(&mut line, &Reply::Jobs(jobs)).expect("the reply writes");
+    answer_status_line(test, line);
 }
 
 /// Listens on `test`'s socket and answers one status request with `line`,
 /// as an older daemon wrote it.
-fn answer_status_line<P>(test: &Test<P>, line: &'static [u8]) {
+fn answer_status_line<P>(test: &Test<P>, line: impl AsRef<[u8]> + Send + 'static) {
     let listener =
         std::os::unix::net::UnixListener::bind(&test.machine.socket).expect("the socket binds");
     thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("the client connects");
         let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
         let _ = read_line::<Request>(&mut reader);
-        stream.write_all(line).expect("the reply writes");
+        stream.write_all(line.as_ref()).expect("the reply writes");
     });
 }
 
