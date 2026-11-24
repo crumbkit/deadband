@@ -47,23 +47,32 @@ pub use self::timeline::{
 /// line in memory.
 pub const MAX_LINE: u64 = 64 * 1024;
 
-/// Reads a job's label, and refuses one that holds a control character, so
-/// the line that carries it is malformed. A daemon closes the connection of
-/// a malformed first line, and the client then starts its job at once.
-fn checked_label<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Label, D::Error> {
-    let text = String::deserialize(deserializer)?;
-    if text.chars().any(char::is_control) {
+/// Reads the job of a [`Request`], and refuses one that is not a JSON
+/// object or whose label holds a control character, so the line that
+/// carries it is malformed. A job written as an array is refused because
+/// its label has no name to check. A daemon
+/// closes the connection of a malformed first line, and the client then
+/// starts its job at once. A [`Reply::Jobs`] reads each job's label with
+/// [`Label::new`], which replaces each control character with a space, so
+/// a client still lists the jobs of an older daemon that accepted one.
+fn checked_job<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Job, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if !value.is_object() {
+        return Err(D::Error::custom("a job is not a JSON object"));
+    }
+    let label = value.get("label").and_then(serde_json::Value::as_str);
+    if label.is_some_and(|text| text.chars().any(char::is_control)) {
         return Err(D::Error::custom("a job's label holds a control character"));
     }
-    Ok(Label::new(&text))
+    Job::deserialize(value).map_err(D::Error::custom)
 }
 
 /// A job, as a client describes it and the daemon lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Job {
-    /// The label that `--label` gave, or the program's name. A line whose
-    /// label holds a control character, such as a line feed, is refused.
-    #[serde(deserialize_with = "checked_label")]
+    /// The label that `--label` gave, or the program's name. A request whose
+    /// label holds a control character, such as a line feed, is refused,
+    /// and a listed label has each control character replaced by a space.
     #[schemars(with = "String")]
     pub label: Label,
     /// The process ID of the `deadband run` that asked for the job.
@@ -167,7 +176,7 @@ pub fn job_cwd(path: &Path) -> String {
 #[serde(rename_all = "snake_case")]
 pub enum Request {
     /// Asks to start a job, and waits for [`Reply::Granted`].
-    Ask(Job),
+    Ask(#[serde(deserialize_with = "checked_job")] Job),
     /// Asks for the running and waiting jobs.
     Status,
     /// Says that the granted job ended.
@@ -191,6 +200,7 @@ pub enum Request {
     /// behaves as a granted job's.
     Seat {
         /// The job as its client described it.
+        #[serde(deserialize_with = "checked_job")]
         job: Job,
         /// The threads of the job's grant.
         #[serde(rename = "jobs")]
