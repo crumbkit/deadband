@@ -203,6 +203,31 @@ fn a_job_line_whose_label_holds_a_newline_is_refused_as_malformed() {
 }
 
 #[test]
+fn a_seat_line_whose_label_holds_a_newline_is_refused_as_malformed() {
+    let text = "{\"seat\":{\"job\":{\"label\":\"x\\nrunning: forged (pid 1)\",\"pid\":42,\"command\":\"make\"},\"jobs\":3,\"ran_ms\":1500}}\n";
+    let error = read_line::<Request>(&mut BufReader::new(text.as_bytes()))
+        .expect_err("the line is refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidData);
+}
+
+#[test]
+fn a_jobs_reply_from_an_older_daemon_whose_label_holds_a_newline_lists_the_job_with_a_space() {
+    let text = "{\"jobs\":{\"max_jobs\":2,\"running\":[{\"label\":\"a\\nb\",\"pid\":42,\"command\":\"make\"}],\"waiting\":[{\"label\":\"c\\u001b[2J\",\"pid\":43,\"command\":\"make\"}]}}\n";
+    let Some(Reply::Jobs(jobs)) =
+        read_line::<Reply>(&mut BufReader::new(text.as_bytes())).expect("the line reads")
+    else {
+        panic!("the line is a jobs reply");
+    };
+    let labels = |each: &[Job]| {
+        each.iter()
+            .map(|job| job.label.as_str().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(labels(&jobs.running), ["a b"]);
+    assert_eq!(labels(&jobs.waiting), ["c [2J"]);
+}
+
+#[test]
 fn a_job_line_whose_label_holds_a_space_and_a_dash_is_read() {
     let text = "{\"ask\":{\"label\":\"api tests - fast\",\"pid\":42,\"command\":\"make\"}}\n";
     let Some(Request::Ask(job)) =

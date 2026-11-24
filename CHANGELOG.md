@@ -25,6 +25,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `deadband status` and every program that reads a daemon's list of jobs
+  now read a list from an older daemon that holds a job whose label has a
+  control character, such as a line feed. Each control character in such a
+  label shows as a space. Before, `status` could not read the list and showed no jobs. A daemon
+  still refuses a request whose label holds a control character.
 - A daemon whose lock file was replaced after it locked the file and before
   it started serving now stops at its next alive check. Before, it recorded
   the new file as its own and kept serving while a second daemon could lock

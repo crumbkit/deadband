@@ -88,8 +88,10 @@ impl From<String> for Short {
     }
 }
 
-/// How long before the reply something happened, in whole milliseconds, on
-/// the daemon's monotonic clock.
+/// How long before its message was written something happened, in whole
+/// milliseconds, on the monotonic clock of the side that writes the message.
+/// The daemon measures the ages in its replies, and a client measures
+/// [`Request::Seat`](super::Request::Seat)'s `ran` on its own clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Ago(u64);

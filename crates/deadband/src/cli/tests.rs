@@ -788,6 +788,39 @@ fn answer_status<P>(test: &Test<P>, jobs: Jobs) {
     });
 }
 
+/// Listens on `test`'s socket and answers one status request with `line`,
+/// as an older daemon wrote it.
+fn answer_status_line<P>(test: &Test<P>, line: &'static [u8]) {
+    let listener =
+        std::os::unix::net::UnixListener::bind(&test.machine.socket).expect("the socket binds");
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("the client connects");
+        let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
+        let _ = read_line::<Request>(&mut reader);
+        stream.write_all(line).expect("the reply writes");
+    });
+}
+
+#[test]
+fn status_lists_a_job_from_an_older_daemon_whose_label_holds_a_newline_as_one_row() {
+    let test = Test::new(Fixed);
+    answer_status_line(
+        &test,
+        b"{\"jobs\":{\"max_jobs\":4,\"running\":[{\"label\":\"a\\nrunning: forged (pid 1)\",\"pid\":11,\"command\":\"make\"}],\"waiting\":[]}}\n",
+    );
+    let (code, out, err) = test.run(&["status"]);
+    assert_eq!(code, 0, "{err}");
+    let running: Vec<&str> = out
+        .lines()
+        .filter(|line| line.starts_with("running: "))
+        .collect();
+    assert_eq!(
+        running,
+        ["running: a running: forged (pid 1) (pid 11): make"],
+        "{out}"
+    );
+}
+
 fn listed(label: &str, pid: u32) -> Job {
     Job {
         label: Label::new(label),
