@@ -23,6 +23,12 @@ const SILENCE: Duration = Duration::from_millis(300);
 /// it.
 const REASK: Duration = Duration::from_millis(300);
 
+/// How long the test of a daemon that never reads lets the client take to
+/// send its line. A debug build takes tens of milliseconds to serialise the
+/// 4 MiB line, and this deadline is long enough that the client reaches the
+/// socket and its write blocks before the deadline passes.
+const WRITE_WAIT: Duration = Duration::from_secs(1);
+
 /// Asks for `job` on `path` with `waits` on a thread of its own, and
 /// returns the receiver of its admission.
 fn asking(path: &Path, job: Job, waits: Waits) -> mpsc::Receiver<Admission> {
@@ -137,7 +143,7 @@ fn a_daemon_that_queues_the_job_again_and_beats_gives_its_next_loss_a_window_of_
 }
 
 #[test]
-fn an_ask_that_the_daemon_never_reads_gives_up_when_the_first_answer_is_due() {
+fn an_ask_to_a_daemon_that_never_reads_starts_the_job_at_the_answer_deadline() {
     let path = socket_path();
     let listener = UnixListener::bind(&path).expect("the test socket binds");
     let (held, hold) = mpsc::channel::<()>();
@@ -155,15 +161,19 @@ fn an_ask_that_the_daemon_never_reads_gives_up_when_the_first_answer_is_due() {
     let (sender, finished) = mpsc::channel();
     let asked = path.to_path_buf();
     thread::spawn(move || {
-        let _ = sender.send(ask(&asked, &long, SHORT_WAIT, |_, _| {}));
+        let _ = sender.send(ask(&asked, &long, WRITE_WAIT, |_, _| {}));
     });
     let admission = finished
         .recv_timeout(ANSWER_WITHIN)
-        .expect("the deadline ends the write");
+        .expect("the client's write deadline ends a write that the daemon never reads");
     drop(held);
-    assert!(
-        matches!(admission, Admission::Open(Unasked::Silent { .. })),
-        "{admission:?}"
+    let Admission::Open(unasked) = admission else {
+        panic!("a daemon that never reads granted the job");
+    };
+    assert!(matches!(unasked, Unasked::Silent { .. }), "{unasked:?}");
+    assert_eq!(
+        unasked.to_string(),
+        "the daemon did not answer within 1000 ms"
     );
 }
 
